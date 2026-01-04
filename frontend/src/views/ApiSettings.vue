@@ -52,7 +52,9 @@
         <!-- API 地址 -->
         <div class="config-section">
           <label>API 地址 <span class="hint">完成: {{ selectedProvider.baseUrl }}/v1/chat/completions</span></label>
-          <input :value="selectedProvider.baseUrl" readonly class="input-field">
+          <div class="input-group">
+            <input :value="selectedProvider.baseUrl" readonly class="input-field">
+          </div>
         </div>
         
         <!-- 模型配置 -->
