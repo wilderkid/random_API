@@ -51,9 +51,10 @@
             📷 上传图片
             <input type="file" accept="image/*" @change="handleImageUpload" style="display: none;" ref="imageInput">
           </label>
-          <label class="toggle">
-            <input type="checkbox" v-model="pollingEnabled">
+          <label class="toggle" :class="{ disabled: !canEnablePolling }">
+            <input type="checkbox" v-model="pollingEnabled" :disabled="!canEnablePolling">
             <span>轮询模式</span>
+            <span v-if="!canEnablePolling" class="polling-disabled-hint">（当前模型无重复提供商）</span>
           </label>
           <input v-model.number="frequency" type="number" placeholder="频率限制" class="input-freq">
         </div>
@@ -488,6 +489,22 @@
   background-color: #0056b3;
   border-color: #0056b3;
 }
+
+/* 轮询开关禁用状态样式 */
+.toggle.disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.toggle.disabled input {
+  cursor: not-allowed;
+}
+
+.polling-disabled-hint {
+  font-size: 12px;
+  color: #6c757d;
+  margin-left: 8px;
+}
 </style>
 
 <script setup>
@@ -505,6 +522,7 @@ const searchQuery = ref('')
 const currentModel = ref('')
 const allModels = shallowRef([])
 const pollingEnabled = ref(false)
+const userSettings = ref({})
 const frequency = ref(10)
 const showParams = ref(false)
 const params = ref({ temperature: 0.7, max_tokens: 2000, top_p: 1 })
@@ -567,6 +585,36 @@ const filteredConversations = computed(() => {
   
   return result
 })
+
+// 计算当前模型是否可以启用轮询
+const canEnablePolling = computed(() => {
+  if (!currentModel.value || !userSettings.value.pollingConfig) {
+    return false
+  }
+  
+  // 提取模型名称
+  const modelName = extractModelName(currentModel.value)
+  
+  // 检查是否在可用池中且有多个提供商
+  const availableProviders = userSettings.value.pollingConfig.available?.[modelName] || []
+  const isExcluded = userSettings.value.pollingConfig.excluded?.[modelName]
+  
+  return availableProviders.length > 1 && !isExcluded
+})
+
+// 提取模型名称的辅助函数
+function extractModelName(modelId) {
+  if (!modelId) return ''
+  
+  // 如果是轮询模式的格式 (providerId::modelId)，提取modelId部分
+  if (modelId.includes('::')) {
+    const [, actualModelId] = modelId.split('::')
+    return actualModelId.includes('/') ? actualModelId.split('/').pop() : actualModelId
+  }
+  
+  // 普通格式
+  return modelId.includes('/') ? modelId.split('/').pop() : modelId
+}
 
 async function loadConversations() {
   try {
@@ -638,6 +686,7 @@ async function loadSettings() {
     const res = await axios.get('/api/settings')
     frequency.value = res.data.globalFrequency || 10
     params.value = res.data.defaultParams || { temperature: 0.7, max_tokens: 2000, top_p: 1 }
+    userSettings.value = res.data
   } catch (error) {
     console.error('Error loading settings:', error)
   }
