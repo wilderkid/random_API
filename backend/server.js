@@ -8,7 +8,8 @@ const app = express();
 const PORT = 3000;
 
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '50mb' })); // 增加请求体大小限制
+app.use(express.urlencoded({ limit: '50mb', extended: true })); // 增加URL编码请求体大小限制
 app.use(express.static(path.join(__dirname, '../frontend/dist')));
 
 const DATA_DIR = path.join(__dirname, '../data');
@@ -245,7 +246,7 @@ function calculateDelay(modelRequests, maxRequestsPerMinute, now) {
 }
 
 app.post('/api/chat', async (req, res) => {
-  const { messages, model, params, polling } = req.body;
+  const { messages, model, params, polling, images } = req.body;
   const settings = await getApiSettings();
   const userSettings = await getUserSettings();
   
@@ -311,7 +312,7 @@ app.post('/api/chat', async (req, res) => {
       
       console.log(`Using model ID: ${modelId} from provider ${selectedProvider.name}`);
       
-      await streamChat(selectedProvider, messages, params, res, modelId);
+      await streamChat(selectedProvider, messages, params, res, modelId, images);
       
       // 如果成功，重置失败计数并保存轮询状态
       if (selectedProvider.failCount > 0) {
@@ -348,7 +349,7 @@ app.post('/api/chat', async (req, res) => {
     }
     
     try {
-      await streamChat(provider, messages, params, res, modelId);
+      await streamChat(provider, messages, params, res, modelId, images);
     } catch (error) {
       console.error(`Chat error:`, error.message);
       res.write(`data: ${JSON.stringify({ error: error.message })}\n\n`);
@@ -558,16 +559,52 @@ async function getProviderModelId(provider, modelName) {
   }
 }
 
-async function streamChat(provider, messages, params, res, modelId) {
+async function streamChat(provider, messages, params, res, modelId, images) {
   const url = buildApiUrl(provider.baseUrl, 'chat/completions');
   
+  // 如果有图片，需要处理消息格式
+  let processedMessages = messages;
+  if (images && images.length > 0) {
+    // 找到最后一条用户消息并添加图片
+    processedMessages = [...messages];
+    const lastUserMessageIndex = processedMessages.length - 1;
+    if (lastUserMessageIndex >= 0 && processedMessages[lastUserMessageIndex].role === 'user') {
+      const content = [
+        { type: 'text', text: processedMessages[lastUserMessageIndex].content }
+      ];
+      
+      // 添加图片内容
+      images.forEach((image, index) => {
+        // 检查dataUrl格式
+        if (!image.dataUrl || !image.dataUrl.includes('base64,')) {
+          console.error(`Invalid dataUrl format for image ${index + 1}`);
+          return;
+        }
+        
+        content.push({
+          type: 'image_url',
+          image_url: {
+            url: image.dataUrl
+          }
+        });
+      });
+      
+      processedMessages[lastUserMessageIndex] = {
+        ...processedMessages[lastUserMessageIndex],
+        content: content
+      };
+    }
+  }
+  
   try {
-    const response = await axios.post(url, {
+    const requestBody = {
       model: modelId || provider.defaultModel,
-      messages,
+      messages: processedMessages,
       stream: true,
       ...params
-    }, {
+    };
+    
+    const response = await axios.post(url, requestBody, {
       headers: {
         'Authorization': `Bearer ${provider.apiKey}`,
         'Content-Type': 'application/json'

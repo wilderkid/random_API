@@ -26,6 +26,9 @@
       
       <div class="messages" ref="messagesContainer">
         <div v-for="(msg, i) in messages" :key="i" :class="['message', msg.role, { 'error': msg.error, 'streaming': msg.streaming }]">
+          <div v-if="msg.images && msg.images.length > 0" class="message-images">
+            <img v-for="(img, idx) in msg.images" :key="idx" :src="img.dataUrl" :alt="img.name" class="message-image">
+          </div>
           <div class="message-content" v-html="getRenderedContent(msg, i)"></div>
           <div v-if="msg.error && msg.errorDetails" class="error-details-btn" @click="showErrorDetails(msg.errorDetails)">
             <span class="details-icon">🔍</span>
@@ -44,11 +47,24 @@
         
         <div class="toolbar">
           <button @click="showParams = !showParams" class="btn-tool">参数配置</button>
+          <label class="btn-tool" style="cursor: pointer;">
+            📷 上传图片
+            <input type="file" accept="image/*" @change="handleImageUpload" style="display: none;" ref="imageInput">
+          </label>
           <label class="toggle">
             <input type="checkbox" v-model="pollingEnabled">
             <span>轮询模式</span>
           </label>
           <input v-model.number="frequency" type="number" placeholder="频率限制" class="input-freq">
+        </div>
+        
+        <!-- 图片预览区域 -->
+        <div v-if="uploadedImages.length > 0" class="image-preview-container">
+          <div v-for="(img, index) in uploadedImages" :key="index" class="image-preview-item">
+            <img :src="img.dataUrl" :alt="img.name" class="preview-image">
+            <button @click="removeImage(index)" class="btn-remove-image">×</button>
+            <span class="image-name">{{ img.name }}</span>
+          </div>
         </div>
         <textarea v-model="inputText" @keydown="handleKeydown"
                   placeholder="输入消息... (Enter 发送, Shift+Enter 换行)" class="input-box"></textarea>
@@ -147,6 +163,86 @@
 </template>
 
 <style scoped>
+/* 图片预览容器样式 */
+.image-preview-container {
+  display: flex;
+  gap: 12px;
+  padding: 12px;
+  background-color: #f8f9fa;
+  border-radius: 8px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+.image-preview-item {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.preview-image {
+  width: 100px;
+  height: 100px;
+  object-fit: cover;
+  border-radius: 8px;
+  border: 2px solid #dee2e6;
+}
+
+.btn-remove-image {
+  position: absolute;
+  top: -8px;
+  right: -8px;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background-color: #dc3545;
+  color: white;
+  border: none;
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color 0.2s;
+}
+
+.btn-remove-image:hover {
+  background-color: #c82333;
+}
+
+.image-name {
+  font-size: 12px;
+  color: #6c757d;
+  max-width: 100px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 消息中的图片样式 */
+.message-images {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+
+.message-image {
+  max-width: 200px;
+  max-height: 200px;
+  border-radius: 8px;
+  border: 1px solid #dee2e6;
+  cursor: pointer;
+  transition: transform 0.2s;
+}
+
+.message-image:hover {
+  transform: scale(1.05);
+}
+
 .rate-limit-warning {
   display: flex;
   align-items: center;
@@ -413,6 +509,8 @@ const frequency = ref(10)
 const showParams = ref(false)
 const params = ref({ temperature: 0.7, max_tokens: 2000, top_p: 1 })
 const messagesContainer = ref(null)
+const imageInput = ref(null)
+const uploadedImages = ref([])
 
 // 速率限制状态
 const rateLimitInfo = ref({
@@ -600,7 +698,20 @@ async function sendMessage() {
     await createConversation()
   }
   
-  const userMsg = { role: 'user', content: inputText.value }
+  // 构建用户消息，包含文本和图片
+  const userMsg = {
+    role: 'user',
+    content: inputText.value
+  }
+  
+  // 如果有上传的图片，添加到消息中
+  if (uploadedImages.value.length > 0) {
+    userMsg.images = uploadedImages.value.map(img => ({
+      name: img.name,
+      dataUrl: img.dataUrl
+    }))
+  }
+  
   messages.value.push(userMsg)
   
   if (!currentConv.value.title) {
@@ -609,6 +720,11 @@ async function sendMessage() {
   
   const messageText = inputText.value
   inputText.value = ''
+  
+  // 清空已上传的图片
+  const sentImages = [...uploadedImages.value]
+  uploadedImages.value = []
+  
   throttledScrollToBottom()
   
   const assistantMsg = { role: 'assistant', content: '', streaming: true }
@@ -622,7 +738,8 @@ async function sendMessage() {
         messages: messages.value.slice(0, -1),
         model: currentModel.value,
         params: params.value,
-        polling: pollingEnabled.value
+        polling: pollingEnabled.value,
+        images: sentImages.length > 0 ? sentImages : undefined
       })
     })
     
@@ -1137,6 +1254,95 @@ ${details.suggestions.map((s, i) => `${i + 1}. ${s}`).join('\n')}
   }).catch(err => {
     console.error('复制失败:', err)
   })
+}
+
+// 处理图片上传
+function handleImageUpload(event) {
+  const files = event.target.files
+  if (!files || files.length === 0) return
+  
+  Array.from(files).forEach(file => {
+    if (!file.type.startsWith('image/')) {
+      alert('请选择图片文件')
+      return
+    }
+    
+    // 检查文件大小，限制为5MB
+    const maxSize = 5 * 1024 * 1024 // 5MB
+    if (file.size > maxSize) {
+      alert(`图片文件过大，请选择小于5MB的图片。当前文件大小：${(file.size / 1024 / 1024).toFixed(2)}MB`)
+      return
+    }
+    
+    const reader = new FileReader()
+    reader.onload = (e) => {
+      // 压缩图片
+      compressImage(e.target.result, file.name, (compressedDataUrl) => {
+        uploadedImages.value.push({
+          name: file.name,
+          dataUrl: compressedDataUrl,
+          file: file
+        })
+      })
+    }
+    reader.readAsDataURL(file)
+  })
+  
+  // 清空input，允许重复选择同一文件
+  event.target.value = ''
+}
+
+// 图片压缩函数
+function compressImage(dataUrl, fileName, callback) {
+  const img = new Image()
+  img.onload = () => {
+    const canvas = document.createElement('canvas')
+    const ctx = canvas.getContext('2d')
+    
+    // 计算压缩后的尺寸，最大宽度或高度为512px（进一步减小）
+    const maxSize = 512
+    let { width, height } = img
+    
+    if (width > height) {
+      if (width > maxSize) {
+        height = (height * maxSize) / width
+        width = maxSize
+      }
+    } else {
+      if (height > maxSize) {
+        width = (width * maxSize) / height
+        height = maxSize
+      }
+    }
+    
+    canvas.width = width
+    canvas.height = height
+    
+    // 绘制压缩后的图片
+    ctx.drawImage(img, 0, 0, width, height)
+    
+    // 多级压缩策略
+    let quality = 0.7
+    let compressedDataUrl = canvas.toDataURL('image/jpeg', quality)
+    let compressedSize = compressedDataUrl.length * 0.75 // 估算字节大小
+    
+    // 如果图片还是太大，继续降低质量
+    while (compressedSize > 1 * 1024 * 1024 && quality > 0.1) { // 限制在1MB以内
+      quality -= 0.1
+      compressedDataUrl = canvas.toDataURL('image/jpeg', quality)
+      compressedSize = compressedDataUrl.length * 0.75
+    }
+    
+    console.log(`图片压缩完成: ${fileName}, 原始尺寸: ${img.width}x${img.height}, 压缩后尺寸: ${width}x${height}, 质量: ${quality}, 估算大小: ${(compressedSize / 1024 / 1024).toFixed(2)}MB`)
+    
+    callback(compressedDataUrl)
+  }
+  img.src = dataUrl
+}
+
+// 删除图片
+function removeImage(index) {
+  uploadedImages.value.splice(index, 1)
 }
 
 function handleKeydown(e) {
