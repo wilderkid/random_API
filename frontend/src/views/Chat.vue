@@ -29,6 +29,12 @@
           <div v-if="msg.images && msg.images.length > 0" class="message-images">
             <img v-for="(img, idx) in msg.images" :key="idx" :src="img.dataUrl" :alt="img.name" class="message-image">
           </div>
+          <div v-if="msg.files && msg.files.length > 0" class="message-files">
+            <div v-for="(file, idx) in msg.files" :key="idx" class="message-file">
+              <span class="file-icon">📄</span>
+              <span class="file-name">{{ file.name }}</span>
+            </div>
+          </div>
           <div class="message-content" v-html="getRenderedContent(msg, i)"></div>
           <div v-if="msg.error && msg.errorDetails" class="error-details-btn" @click="showErrorDetails(msg.errorDetails)">
             <span class="details-icon">🔍</span>
@@ -49,7 +55,11 @@
           <button @click="showParams = !showParams" class="btn-tool">参数配置</button>
           <label class="btn-tool" style="cursor: pointer;">
             📷 上传图片
-            <input type="file" accept="image/*" @change="handleImageUpload" style="display: none;" ref="imageInput">
+            <input type="file" accept="image/*" @change="handleImageUpload" style="display: none;" ref="imageInput" multiple>
+          </label>
+          <label class="btn-tool" style="cursor: pointer;">
+            📄 上传文件
+            <input type="file" :accept="supportedFileTypes" @change="handleFileUpload" style="display: none;" ref="fileInput" multiple>
           </label>
           <label class="toggle" :class="{ disabled: !canEnablePolling }">
             <input type="checkbox" v-model="pollingEnabled" :disabled="!canEnablePolling">
@@ -65,6 +75,16 @@
             <img :src="img.dataUrl" :alt="img.name" class="preview-image">
             <button @click="removeImage(index)" class="btn-remove-image">×</button>
             <span class="image-name">{{ img.name }}</span>
+          </div>
+        </div>
+        
+        <!-- 文件预览区域 -->
+        <div v-if="uploadedFiles.length > 0" class="file-preview-container">
+          <div v-for="(file, index) in uploadedFiles" :key="index" class="file-preview-item">
+            <span class="file-icon">📄</span>
+            <span class="file-name">{{ file.name }}</span>
+            <span class="file-size">({{ formatFileSize(file.size) }})</span>
+            <button @click="removeFile(index)" class="btn-remove-file">×</button>
           </div>
         </div>
         <textarea v-model="inputText" @keydown="handleKeydown"
@@ -505,6 +525,95 @@
   color: #6c757d;
   margin-left: 8px;
 }
+
+/* 文件预览容器样式 */
+.file-preview-container {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  background-color: #f8f9fa;
+  border-radius: 8px;
+  margin-bottom: 12px;
+}
+
+.file-preview-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background-color: white;
+  border: 1px solid #dee2e6;
+  border-radius: 6px;
+}
+
+.file-preview-item .file-icon {
+  font-size: 20px;
+}
+
+.file-preview-item .file-name {
+  flex: 1;
+  font-size: 14px;
+  color: #495057;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-preview-item .file-size {
+  font-size: 12px;
+  color: #6c757d;
+}
+
+.btn-remove-file {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background-color: #dc3545;
+  color: white;
+  border: none;
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color 0.2s;
+}
+
+.btn-remove-file:hover {
+  background-color: #c82333;
+}
+
+/* 消息中的文件样式 */
+.message-files {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.message-file {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  background-color: #e9ecef;
+  border-radius: 4px;
+  font-size: 13px;
+}
+
+.message-file .file-icon {
+  font-size: 16px;
+}
+
+.message-file .file-name {
+  color: #495057;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 </style>
 
 <script setup>
@@ -528,7 +637,12 @@ const showParams = ref(false)
 const params = ref({ temperature: 0.7, max_tokens: 2000, top_p: 1 })
 const messagesContainer = ref(null)
 const imageInput = ref(null)
+const fileInput = ref(null)
 const uploadedImages = ref([])
+const uploadedFiles = ref([])
+
+// 支持的文件类型
+const supportedFileTypes = '.txt,.md,.json,.js,.ts,.jsx,.tsx,.vue,.py,.java,.c,.cpp,.h,.hpp,.cs,.go,.rs,.rb,.php,.html,.css,.scss,.less,.xml,.yaml,.yml,.toml,.ini,.conf,.sh,.bat,.ps1,.sql,.csv,.log'
 
 // 速率限制状态
 const rateLimitInfo = ref({
@@ -761,6 +875,21 @@ async function sendMessage() {
     }))
   }
   
+  // 如果有上传的文件，添加到消息中，并将文件内容添加到消息文本
+  if (uploadedFiles.value.length > 0) {
+    userMsg.files = uploadedFiles.value.map(f => ({
+      name: f.name,
+      size: f.size
+    }))
+    
+    // 构建包含文件内容的完整消息
+    let fullContent = userMsg.content
+    uploadedFiles.value.forEach(f => {
+      fullContent += `\n\n---\n📄 文件: ${f.name}\n\`\`\`\n${f.content}\n\`\`\`\n---`
+    })
+    userMsg.content = fullContent
+  }
+  
   messages.value.push(userMsg)
   
   if (!currentConv.value.title) {
@@ -770,9 +899,10 @@ async function sendMessage() {
   const messageText = inputText.value
   inputText.value = ''
   
-  // 清空已上传的图片
+  // 清空已上传的图片和文件
   const sentImages = [...uploadedImages.value]
   uploadedImages.value = []
+  uploadedFiles.value = []
   
   throttledScrollToBottom()
   
@@ -1392,6 +1522,70 @@ function compressImage(dataUrl, fileName, callback) {
 // 删除图片
 function removeImage(index) {
   uploadedImages.value.splice(index, 1)
+}
+
+// 处理文件上传
+function handleFileUpload(event) {
+  const files = event.target.files
+  if (!files || files.length === 0) return
+  
+  Array.from(files).forEach(file => {
+    // 检查文件大小，限制为1MB
+    const maxSize = 1 * 1024 * 1024 // 1MB
+    if (file.size > maxSize) {
+      alert(`文件过大，请选择小于1MB的文件。当前文件大小：${formatFileSize(file.size)}`)
+      return
+    }
+    
+    // 检查文件类型是否为文本类型
+    const ext = '.' + file.name.split('.').pop().toLowerCase()
+    if (!supportedFileTypes.includes(ext)) {
+      alert(`不支持的文件类型: ${ext}\n支持的类型: ${supportedFileTypes}`)
+      return
+    }
+    
+    const reader = new FileReader()
+    reader.onload = (e) => {
+      const content = e.target.result
+      
+      // 检查内容是否为有效的文本
+      if (typeof content !== 'string') {
+        alert('无法读取文件内容，请确保文件为文本格式')
+        return
+      }
+      
+      uploadedFiles.value.push({
+        name: file.name,
+        size: file.size,
+        content: content
+      })
+      
+      console.log(`文件上传成功: ${file.name}, 大小: ${formatFileSize(file.size)}`)
+    }
+    
+    reader.onerror = () => {
+      alert(`读取文件失败: ${file.name}`)
+    }
+    
+    reader.readAsText(file)
+  })
+  
+  // 清空input，允许重复选择同一文件
+  event.target.value = ''
+}
+
+// 删除文件
+function removeFile(index) {
+  uploadedFiles.value.splice(index, 1)
+}
+
+// 格式化文件大小
+function formatFileSize(bytes) {
+  if (bytes === 0) return '0 B'
+  const k = 1024
+  const sizes = ['B', 'KB', 'MB', 'GB']
+  const i = Math.floor(Math.log(bytes) / Math.log(k))
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]
 }
 
 function handleKeydown(e) {
