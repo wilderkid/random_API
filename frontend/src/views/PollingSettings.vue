@@ -115,31 +115,27 @@ const excludedModels = computed(() => {
 const disabledItems = computed(() => {
   const disabled = []
   
-  // 从providers中找出被禁用的提供商
-  providers.value.forEach(provider => {
-    if (provider.disabled && provider.failCount >= 3) {
-      // 获取该提供商的所有模型
-      if (provider.models && provider.models.length > 0) {
-        provider.models.forEach(model => {
-          const modelName = model.id.includes('/') ? model.id.split('/').pop() : model.id
-          disabled.push({
-            id: provider.id,
-            providerName: provider.name,
-            modelName: modelName,
-            reason: `连续${provider.failCount}次请求失败`
-          })
-        })
-      } else {
-        // 如果没有模型信息，显示提供商本身
+  // 从用户设置中获取被禁用的模型
+  if (settings.value.disabledModels) {
+    Object.entries(settings.value.disabledModels).forEach(([providerId, modelNames]) => {
+      const provider = providers.value.find(p => p.id === providerId)
+      const providerName = provider?.name || providerId
+      
+      modelNames.forEach(modelName => {
+        // 获取失败次数
+        const failCountKey = `${providerId}:${modelName}`
+        const failCount = settings.value.modelFailCounts?.[failCountKey] || 0
+        
         disabled.push({
-          id: provider.id,
-          providerName: provider.name,
-          modelName: '所有模型',
-          reason: `连续${provider.failCount}次请求失败`
+          id: `${providerId}:${modelName}`,
+          providerId: providerId,
+          providerName: providerName,
+          modelName: modelName,
+          reason: `连续${failCount}次请求失败`
         })
-      }
-    }
-  })
+      })
+    })
+  }
   
   return disabled
 })
@@ -247,24 +243,29 @@ function drop(modelName, targetIndex) {
   saveSettings()
 }
 
-async function reenable(providerId) {
-  // 从禁用状态栏中移除
-  delete settings.value.pollingConfig.disabled[providerId]
+async function reenable(itemId) {
+  // itemId 格式为 "providerId:modelName"
+  const [providerId, modelName] = itemId.split(':')
   
-  // 重置提供商的失败计数和禁用状态
-  const provider = providers.value.find(p => p.id === providerId)
-  if (provider) {
-    await axios.put(`/api/providers/${providerId}`, {
-      ...provider,
-      failCount: 0,
-      disabled: false
-    })
+  // 从禁用模型列表中移除
+  if (settings.value.disabledModels && settings.value.disabledModels[providerId]) {
+    const index = settings.value.disabledModels[providerId].indexOf(modelName)
+    if (index > -1) {
+      settings.value.disabledModels[providerId].splice(index, 1)
+      // 如果该提供商没有其他禁用模型，删除整个条目
+      if (settings.value.disabledModels[providerId].length === 0) {
+        delete settings.value.disabledModels[providerId]
+      }
+    }
+  }
+  
+  // 重置模型失败计数
+  const failCountKey = `${providerId}:${modelName}`
+  if (settings.value.modelFailCounts && settings.value.modelFailCounts[failCountKey]) {
+    settings.value.modelFailCounts[failCountKey] = 0
   }
   
   await saveSettings()
-  
-  // 重新构建轮询配置，将重新启用的模型加回可用池
-  await buildPollingConfig()
   
   // 重新加载数据
   await loadData()

@@ -61,7 +61,9 @@ async function initDataDir() {
       defaultParams: { temperature: 0.7, max_tokens: 2000, top_p: 1 },
       globalFrequency: 10,
       pollingConfig: { available: {}, excluded: {}, disabled: {} },
-      pollingState: {} // 存储每个模型的轮询状态
+      pollingState: {}, // 存储每个模型的轮询状态
+      modelFailCounts: {}, // 存储每个模型在每个提供商的失败计数
+      proxyApiKey: '' // 代理接口密钥
     }, null, 2));
   }
 }
@@ -101,7 +103,9 @@ async function getUserSettings() {
       defaultParams: { temperature: 0.7, max_tokens: 2000, top_p: 1 },
       globalFrequency: 10,
       pollingConfig: { available: {}, excluded: {}, disabled: {} },
-      pollingState: {} // 存储每个模型的轮询状态
+      pollingState: {}, // 存储每个模型的轮询状态
+      modelFailCounts: {}, // 存储每个模型在每个提供商的失败计数
+      proxyApiKey: '' // 代理接口密钥
     };
   }
 }
@@ -314,10 +318,8 @@ app.post('/api/chat', async (req, res) => {
       
       await streamChat(selectedProvider, messages, params, res, modelId, images);
       
-      // 如果成功，重置失败计数并保存轮询状态
-      if (selectedProvider.failCount > 0) {
-        await resetFailCount(selectedProvider.id);
-      }
+      // 如果成功，重置模型失败计数并保存轮询状态
+      await resetModelFailCount(selectedProvider.id, modelName, userSettings);
       
       // 保存轮询状态
       await savePollingState(userSettings);
@@ -329,8 +331,8 @@ app.post('/api/chat', async (req, res) => {
       console.error(`Provider ${selectedProvider.name} failed:`, error.message);
       console.error(`Error details:`, error);
       
-      // 增加失败计数
-      await incrementFailCount(selectedProvider.id);
+      // 增加模型失败计数
+      await incrementModelFailCount(selectedProvider.id, modelName, userSettings);
       
       // 保存轮询状态（即使失败也要保存，以便下次轮询到其他提供商）
       await savePollingState(userSettings);
@@ -480,13 +482,16 @@ function getNextPollingProvider(providers, modelName, config, userSettings) {
     if (!modelState.usedInCurrentRound.includes(providerId)) {
       const provider = providers.find(p => p.id === providerId);
       
-      if (provider && !provider.disabled) {
+      // 检查该模型在该提供商是否被禁用
+      const isModelDisabled = isModelDisabledForProvider(modelName, providerId, userSettings);
+      
+      if (provider && !provider.disabled && !isModelDisabled) {
         selectedProvider = provider;
         modelState.usedInCurrentRound.push(providerId);
         console.log(`Selected provider: ${provider.name} (ID: ${providerId}) for model ${modelName}`);
         console.log(`Used providers in current round:`, modelState.usedInCurrentRound);
       } else {
-        console.log(`Provider ${providerId} not found or disabled, skipping`);
+        console.log(`Provider ${providerId} not found, disabled, or model ${modelName} is disabled for this provider, skipping`);
       }
     } else {
       console.log(`Provider ${providerId} already used in current round, skipping`);
@@ -512,6 +517,66 @@ async function savePollingState(userSettings) {
   } catch (error) {
     console.error('Error saving polling state:', error);
   }
+}
+
+// 增加模型失败计数
+function incrementModelFailCount(providerId, modelName, userSettings) {
+  if (!userSettings.modelFailCounts) {
+    userSettings.modelFailCounts = {};
+  }
+  
+  const key = `${providerId}:${modelName}`;
+  if (!userSettings.modelFailCounts[key]) {
+    userSettings.modelFailCounts[key] = 0;
+  }
+  
+  userSettings.modelFailCounts[key]++;
+  console.log(`Model ${modelName} on provider ${providerId} fail count: ${userSettings.modelFailCounts[key]}`);
+  
+  // 如果失败次数达到阈值，禁用该模型在该提供商上的使用
+  const threshold = 3; // 失败3次后禁用
+  if (userSettings.modelFailCounts[key] >= threshold) {
+    if (!userSettings.disabledModels) {
+      userSettings.disabledModels = {};
+    }
+    if (!userSettings.disabledModels[providerId]) {
+      userSettings.disabledModels[providerId] = [];
+    }
+    if (!userSettings.disabledModels[providerId].includes(modelName)) {
+      userSettings.disabledModels[providerId].push(modelName);
+      console.log(`Model ${modelName} disabled for provider ${providerId} due to repeated failures`);
+    }
+  }
+}
+
+// 重置模型失败计数
+function resetModelFailCount(providerId, modelName, userSettings) {
+  if (!userSettings.modelFailCounts) {
+    return;
+  }
+  
+  const key = `${providerId}:${modelName}`;
+  if (userSettings.modelFailCounts[key]) {
+    userSettings.modelFailCounts[key] = 0;
+    console.log(`Reset fail count for model ${modelName} on provider ${providerId}`);
+  }
+  
+  // 如果该模型在该提供商被禁用，重新启用
+  if (userSettings.disabledModels && userSettings.disabledModels[providerId]) {
+    const index = userSettings.disabledModels[providerId].indexOf(modelName);
+    if (index > -1) {
+      userSettings.disabledModels[providerId].splice(index, 1);
+      console.log(`Re-enabled model ${modelName} for provider ${providerId}`);
+    }
+  }
+}
+
+// 检查模型在特定提供商是否被禁用
+function isModelDisabledForProvider(modelName, providerId, userSettings) {
+  if (!userSettings.disabledModels || !userSettings.disabledModels[providerId]) {
+    return false;
+  }
+  return userSettings.disabledModels[providerId].includes(modelName);
 }
 
 async function incrementFailCount(providerId) {
@@ -648,8 +713,323 @@ async function streamChat(provider, messages, params, res, modelId, images) {
   }
 }
 
+// ==================== OpenAI API 兼容代理接口 ====================
+
+// 验证代理 API Key 中间件
+async function verifyProxyApiKey(req, res, next) {
+  const userSettings = await getUserSettings();
+  const configuredKey = userSettings.proxyApiKey;
+  
+  // 如果没有配置密钥，允许所有请求
+  if (!configuredKey || configuredKey.trim() === '') {
+    return next();
+  }
+  
+  // 从请求头获取 API Key
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({
+      error: {
+        message: 'Missing or invalid Authorization header. Expected: Bearer <api_key>',
+        type: 'invalid_request_error',
+        code: 'invalid_api_key'
+      }
+    });
+  }
+  
+  const providedKey = authHeader.substring(7); // 去掉 'Bearer ' 前缀
+  
+  if (providedKey !== configuredKey) {
+    return res.status(401).json({
+      error: {
+        message: 'Invalid API key provided',
+        type: 'invalid_request_error',
+        code: 'invalid_api_key'
+      }
+    });
+  }
+  
+  next();
+}
+
+// OpenAI 兼容 - 获取模型列表
+app.get('/v1/models', verifyProxyApiKey, async (req, res) => {
+  try {
+    const userSettings = await getUserSettings();
+    const pollingConfig = userSettings.pollingConfig || { available: {}, excluded: {} };
+    
+    // 获取所有在可用池中的模型
+    const models = [];
+    const availableModels = pollingConfig.available || {};
+    
+    for (const modelName of Object.keys(availableModels)) {
+      const providers = availableModels[modelName] || [];
+      if (providers.length > 0 && !pollingConfig.excluded?.[modelName]) {
+        models.push({
+          id: modelName,
+          object: 'model',
+          created: Date.now(),
+          owned_by: 'equal-ask-proxy',
+          permission: [],
+          root: modelName,
+          parent: null
+        });
+      }
+    }
+    
+    res.json({
+      object: 'list',
+      data: models
+    });
+  } catch (error) {
+    console.error('Error getting models:', error);
+    res.status(500).json({
+      error: {
+        message: error.message,
+        type: 'server_error',
+        code: 'internal_error'
+      }
+    });
+  }
+});
+
+// OpenAI 兼容 - Chat Completions
+app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
+  try {
+    const { messages, model, stream = false, temperature, max_tokens, top_p, ...otherParams } = req.body;
+    
+    console.log(`[Proxy] Received request body:`, JSON.stringify(req.body, null, 2));
+    console.log(`[Proxy] Extracted parameters - temperature: ${temperature}, max_tokens: ${max_tokens}, top_p: ${top_p}`);
+    console.log(`[Proxy] Other parameters:`, JSON.stringify(otherParams, null, 2));
+    console.log(`[Proxy] Request body keys:`, Object.keys(req.body));
+    
+    if (!messages || !Array.isArray(messages)) {
+      return res.status(400).json({
+        error: {
+          message: 'messages is required and must be an array',
+          type: 'invalid_request_error',
+          code: 'invalid_messages'
+        }
+      });
+    }
+    
+    const settings = await getApiSettings();
+    const userSettings = await getUserSettings();
+    const pollingConfig = userSettings.pollingConfig || { available: {}, excluded: {} };
+    
+    // 确定要使用的模型名称
+    let modelName = model;
+    
+    if (!modelName) {
+      return res.status(400).json({
+        error: {
+          message: 'model is required. Please specify a model in the request.',
+          type: 'invalid_request_error',
+          code: 'model_required'
+        }
+      });
+    }
+    
+    // 提取纯模型名称（去掉可能的前缀）
+    const pureModelName = modelName.includes('/') ? modelName.split('/').pop() : modelName;
+    
+    console.log(`[Proxy] Received request for model: ${pureModelName}`);
+    
+    // 检查模型是否在可用池中
+    const availableProviders = pollingConfig.available?.[pureModelName] || [];
+    if (availableProviders.length === 0) {
+      return res.status(400).json({
+        error: {
+          message: `Model '${pureModelName}' is not configured in the available pool. Please configure it in polling settings.`,
+          type: 'invalid_request_error',
+          code: 'model_not_available'
+        }
+      });
+    }
+    
+    // 检查模型是否被排除
+    if (pollingConfig.excluded?.[pureModelName]) {
+      return res.status(400).json({
+        error: {
+          message: `Model '${pureModelName}' is in the excluded pool.`,
+          type: 'invalid_request_error',
+          code: 'model_excluded'
+        }
+      });
+    }
+    
+    // 使用轮询机制选择提供商
+    const selectedProvider = getNextPollingProvider(settings.providers, pureModelName, pollingConfig, userSettings);
+    
+    if (!selectedProvider) {
+      return res.status(503).json({
+        error: {
+          message: `No available provider for model '${pureModelName}'`,
+          type: 'server_error',
+          code: 'no_provider_available'
+        }
+      });
+    }
+    
+    console.log(`[Proxy] Selected provider: ${selectedProvider.name} (ID: ${selectedProvider.id})`);
+    
+    // 获取该提供商的具体模型ID
+    const providerModelId = await getProviderModelId(selectedProvider, pureModelName);
+    if (!providerModelId) {
+      return res.status(503).json({
+        error: {
+          message: `Model '${pureModelName}' not found in provider '${selectedProvider.name}'`,
+          type: 'server_error',
+          code: 'model_not_found_in_provider'
+        }
+      });
+    }
+    
+    console.log(`[Proxy] Using model ID: ${providerModelId} from provider ${selectedProvider.name}`);
+    
+    // 构建请求参数 - 外部参数优先策略
+    // 1. 优先使用外部传入的参数
+    // 2. 其次使用用户设置的默认参数
+    // 3. 最后使用系统默认参数
+    const params = {
+      // 核心参数处理 - 外部参数优先
+      temperature: temperature !== undefined ? temperature : (userSettings.defaultParams?.temperature ?? 0.7),
+      max_tokens: max_tokens !== undefined ? max_tokens : (userSettings.defaultParams?.max_tokens ?? 2000),
+      top_p: top_p !== undefined ? top_p : (userSettings.defaultParams?.top_p ?? 1),
+      // 其他参数直接传递
+      ...otherParams
+    };
+    
+    console.log(`[Proxy] Request parameters - temperature: ${params.temperature}, max_tokens: ${params.max_tokens}, top_p: ${params.top_p}`);
+    console.log(`[Proxy] External params provided - temperature: ${temperature !== undefined}, max_tokens: ${max_tokens !== undefined}, top_p: ${top_p !== undefined}`);
+    
+    // 删除不需要传递的参数
+    delete params.model;
+    delete params.messages;
+    delete params.stream;
+    
+    const url = buildApiUrl(selectedProvider.baseUrl, 'chat/completions');
+    
+    if (stream) {
+      // 流式响应
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('Connection', 'keep-alive');
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      
+      try {
+        const response = await axios.post(url, {
+          model: providerModelId,
+          messages: messages,
+          stream: true,
+          ...params
+        }, {
+          headers: {
+            'Authorization': `Bearer ${selectedProvider.apiKey}`,
+            'Content-Type': 'application/json'
+          },
+          responseType: 'stream',
+          timeout: 120000
+        });
+        
+        response.data.on('data', chunk => {
+          try {
+            res.write(chunk);
+          } catch (error) {
+            console.error('[Proxy] Error writing chunk:', error);
+          }
+        });
+        
+        response.data.on('end', async () => {
+          // 如果成功，重置模型失败计数
+          await resetModelFailCount(selectedProvider.id, pureModelName, userSettings);
+          // 保存轮询状态
+          await savePollingState(userSettings);
+          res.end();
+        });
+        
+        response.data.on('error', async (error) => {
+          console.error('[Proxy] Stream error:', error);
+          await incrementModelFailCount(selectedProvider.id, pureModelName, userSettings);
+          await savePollingState(userSettings);
+          res.write(`data: ${JSON.stringify({ error: { message: error.message } })}\n\n`);
+          res.end();
+        });
+        
+      } catch (error) {
+        console.error('[Proxy] Request error:', error.message);
+        await incrementModelFailCount(selectedProvider.id, pureModelName, userSettings);
+        await savePollingState(userSettings);
+        res.write(`data: ${JSON.stringify({ error: { message: error.message } })}\n\n`);
+        res.end();
+      }
+      
+    } else {
+      // 非流式响应
+      try {
+        const response = await axios.post(url, {
+          model: providerModelId,
+          messages: messages,
+          stream: false,
+          ...params
+        }, {
+          headers: {
+            'Authorization': `Bearer ${selectedProvider.apiKey}`,
+            'Content-Type': 'application/json'
+          },
+          timeout: 120000
+        });
+        
+        // 如果成功，重置模型失败计数
+        await resetModelFailCount(selectedProvider.id, pureModelName, userSettings);
+        // 保存轮询状态
+        await savePollingState(userSettings);
+        
+        // 返回响应
+        res.json(response.data);
+        
+      } catch (error) {
+        console.error('[Proxy] Request error:', error.message);
+        await incrementModelFailCount(selectedProvider.id, pureModelName, userSettings);
+        await savePollingState(userSettings);
+        
+        const statusCode = error.response?.status || 500;
+        const errorData = error.response?.data || {
+          error: {
+            message: error.message,
+            type: 'server_error',
+            code: 'provider_error'
+          }
+        };
+        
+        res.status(statusCode).json(errorData);
+      }
+    }
+    
+  } catch (error) {
+    console.error('[Proxy] Unexpected error:', error);
+    res.status(500).json({
+      error: {
+        message: error.message,
+        type: 'server_error',
+        code: 'internal_error'
+      }
+    });
+  }
+});
+
+// 添加 CORS 预检请求支持
+app.options('/v1/*', (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.setHeader('Access-Control-Max-Age', '86400');
+  res.status(204).end();
+});
+
 initDataDir().then(() => {
   app.listen(PORT, () => {
     console.log(`Server running on http://localhost:${PORT}`);
+    console.log(`OpenAI compatible API available at http://localhost:${PORT}/v1`);
   });
 });

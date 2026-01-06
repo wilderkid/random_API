@@ -17,7 +17,7 @@
     
     <div class="chat-main">
       <div class="chat-header">
-        <select v-model="currentModel" class="model-select">
+        <select v-model="currentModel" class="model-select" @change="onModelChange">
           <option v-for="m in allModels" :key="m.value" :value="m.value">
             {{ m.label }}
           </option>
@@ -62,7 +62,7 @@
             <input type="file" :accept="supportedFileTypes" @change="handleFileUpload" style="display: none;" ref="fileInput" multiple>
           </label>
           <label class="toggle" :class="{ disabled: !canEnablePolling }">
-            <input type="checkbox" v-model="pollingEnabled" :disabled="!canEnablePolling">
+            <input type="checkbox" v-model="pollingEnabled" :disabled="!canEnablePolling" @change="onPollingToggle">
             <span>轮询模式</span>
             <span v-if="!canEnablePolling" class="polling-disabled-hint">（当前模型无重复提供商）</span>
           </label>
@@ -713,7 +713,13 @@ const canEnablePolling = computed(() => {
   const availableProviders = userSettings.value.pollingConfig.available?.[modelName] || []
   const isExcluded = userSettings.value.pollingConfig.excluded?.[modelName]
   
-  return availableProviders.length > 1 && !isExcluded
+  // 只有在可用池中有多个提供商（重复模型）且未被排除时才能启用轮询
+  const hasMultipleProviders = availableProviders.length > 1
+  const notExcluded = !isExcluded
+  
+  console.log(`轮询检查 - 模型: ${modelName}, 可用提供商数量: ${availableProviders.length}, 是否排除: ${isExcluded}, 可启用轮询: ${hasMultipleProviders && notExcluded}`)
+  
+  return hasMultipleProviders && notExcluded
 })
 
 // 提取模型名称的辅助函数
@@ -1586,6 +1592,23 @@ function formatFileSize(bytes) {
   const sizes = ['B', 'KB', 'MB', 'GB']
   const i = Math.floor(Math.log(bytes) / Math.log(k))
   return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]
+}
+
+// 轮询开关切换处理
+function onPollingToggle() {
+  if (!canEnablePolling.value && pollingEnabled.value) {
+    // 如果当前模型不支持轮询但用户尝试启用，强制关闭并提示
+    pollingEnabled.value = false
+    alert('当前模型在可用池中没有重复的提供商，无法启用轮询模式')
+  }
+}
+
+// 监听模型变化，自动关闭不支持轮询的模型的轮询开关
+function onModelChange() {
+  if (!canEnablePolling.value && pollingEnabled.value) {
+    pollingEnabled.value = false
+    console.log('模型切换后自动关闭轮询模式，因为当前模型不支持轮询')
+  }
 }
 
 function handleKeydown(e) {
