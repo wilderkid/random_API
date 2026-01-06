@@ -91,23 +91,12 @@
         
         <div class="settings-form">
           <section class="settings-section">
-            <h3>API 代理密钥</h3>
-            <p class="hint-text">设置一个密钥用于外部软件（如 Cursor、VS Code 等）访问本服务的 OpenAI 兼容接口</p>
-            <label>
-              代理 API Key:
-              <div class="input-with-button">
-                <input
-                  v-model="settings.proxyApiKey"
-                  :type="showProxyKey ? 'text' : 'password'"
-                  class="input-field"
-                  placeholder="输入代理密钥（留空表示无需认证）"
-                >
-                <button @click="showProxyKey = !showProxyKey" class="btn-toggle-visibility">
-                  {{ showProxyKey ? '🙈' : '👁️' }}
-                </button>
-                <button @click="generateProxyKey" class="btn-generate">生成随机密钥</button>
-              </div>
-            </label>
+            <h3>API 密钥管理</h3>
+            <div class="migration-notice">
+              <p class="notice-text">🔄 密钥管理已迁移</p>
+              <p class="hint-text">API 密钥配置已迁移到专门的"代理密钥"页面，支持多密钥管理和参数隔离。</p>
+              <p class="hint-text">请前往左侧菜单的"代理密钥"页面进行配置。</p>
+            </div>
           </section>
           
           <section class="settings-section">
@@ -133,17 +122,16 @@
           </section>
           
           <section class="settings-section">
-            <h3>默认轮询模型</h3>
-            <p class="hint-text">外部请求未指定模型时使用的默认模型（需要在轮询设置中配置可用池）</p>
-            <label>
-              默认模型名称:
-              <input
-                v-model="settings.proxyDefaultModel"
-                type="text"
-                class="input-field"
-                placeholder="例如: gpt-4o-mini"
-              >
-            </label>
+            <h3>使用说明</h3>
+            <div class="usage-info">
+              <p class="hint-text">⚠️ 重要提示：</p>
+              <ul class="usage-list">
+                <li>外部请求必须指定具体的模型名称</li>
+                <li>只有在轮询设置中配置为可用池的模型才能使用</li>
+                <li>系统会自动使用轮询机制选择提供商</li>
+                <li>不支持的模型会返回错误信息</li>
+              </ul>
+            </div>
           </section>
           
           <button @click="saveSettings" class="btn-save">保存设置</button>
@@ -165,14 +153,11 @@ import axios from 'axios'
 const settings = ref({
   defaultParams: { temperature: 0.7, max_tokens: 2000, top_p: 1 },
   globalFrequency: 10,
-  defaultModel: '',
-  proxyApiKey: '',
-  proxyDefaultModel: ''
+  defaultModel: ''
 })
 const saveMessage = ref('')
 const selectedSetting = ref('user')
 const allModels = ref([])
-const showProxyKey = ref(false)
 
 const settingsItems = ref([
   {
@@ -231,16 +216,6 @@ async function saveSettings() {
   await axios.put('/api/settings', settings.value)
   saveMessage.value = '设置已保存'
   setTimeout(() => saveMessage.value = '', 2000)
-}
-
-// 生成随机代理密钥
-function generateProxyKey() {
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'
-  let key = 'sk-'
-  for (let i = 0; i < 32; i++) {
-    key += chars.charAt(Math.floor(Math.random() * chars.length))
-  }
-  settings.value.proxyApiKey = key
 }
 
 // 复制到剪贴板
@@ -429,42 +404,20 @@ onMounted(() => {
   color: #888;
 }
 
-/* 代理设置相关样式 */
-.input-with-button {
-  display: flex;
-  gap: 8px;
-  margin-top: 6px;
-}
-
-.input-with-button .input-field {
-  flex: 1;
-  margin-top: 0;
-}
-
-.btn-toggle-visibility,
-.btn-generate {
-  padding: 10px 16px;
-  border: 1px solid #ddd;
-  border-radius: 6px;
-  background-color: #f5f5f5;
-  cursor: pointer;
-  font-size: 14px;
-  transition: all 0.2s;
-}
-
-.btn-toggle-visibility:hover,
-.btn-generate:hover {
-  background-color: #e0e0e0;
-}
-
-.btn-generate {
+/* 迁移通知样式 */
+.migration-notice {
   background-color: #e3f2fd;
-  border-color: #90caf9;
-  color: #1976d2;
+  border: 1px solid #90caf9;
+  border-radius: 8px;
+  padding: 16px;
+  margin-top: 8px;
 }
 
-.btn-generate:hover {
-  background-color: #bbdefb;
+.notice-text {
+  font-weight: 600;
+  color: #1976d2;
+  margin: 0 0 8px 0;
+  font-size: 14px;
 }
 
 .endpoint-info {
@@ -518,5 +471,25 @@ onMounted(() => {
 .btn-copy:hover {
   background-color: #f0f0f0;
   border-color: #ccc;
+}
+
+/* 使用说明样式 */
+.usage-info {
+  background-color: #fff3cd;
+  border: 1px solid #ffeaa7;
+  border-radius: 6px;
+  padding: 16px;
+  margin-top: 8px;
+}
+
+.usage-list {
+  margin: 8px 0 0 0;
+  padding-left: 20px;
+}
+
+.usage-list li {
+  margin-bottom: 6px;
+  color: #856404;
+  font-size: 13px;
 }
 </style>

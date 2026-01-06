@@ -63,7 +63,8 @@ async function initDataDir() {
       pollingConfig: { available: {}, excluded: {}, disabled: {} },
       pollingState: {}, // 存储每个模型的轮询状态
       modelFailCounts: {}, // 存储每个模型在每个提供商的失败计数
-      proxyApiKey: '' // 代理接口密钥
+      proxyApiKey: '', // 代理接口密钥（向后兼容）
+      proxyApiKeys: {} // 多API密钥管理
     }, null, 2));
   }
 }
@@ -105,7 +106,8 @@ async function getUserSettings() {
       pollingConfig: { available: {}, excluded: {}, disabled: {} },
       pollingState: {}, // 存储每个模型的轮询状态
       modelFailCounts: {}, // 存储每个模型在每个提供商的失败计数
-      proxyApiKey: '' // 代理接口密钥
+      proxyApiKey: '', // 代理接口密钥（向后兼容）
+      proxyApiKeys: {} // 多API密钥管理
     };
   }
 }
@@ -715,15 +717,11 @@ async function streamChat(provider, messages, params, res, modelId, images) {
 
 // ==================== OpenAI API 兼容代理接口 ====================
 
-// 验证代理 API Key 中间件
+// 验证代理 API Key 中间件 - 支持多密钥认证
 async function verifyProxyApiKey(req, res, next) {
   const userSettings = await getUserSettings();
-  const configuredKey = userSettings.proxyApiKey;
-  
-  // 如果没有配置密钥，允许所有请求
-  if (!configuredKey || configuredKey.trim() === '') {
-    return next();
-  }
+  const proxyKeys = userSettings.proxyApiKeys || {};
+  const legacyKey = userSettings.proxyApiKey;
   
   // 从请求头获取 API Key
   const authHeader = req.headers.authorization;
@@ -739,7 +737,36 @@ async function verifyProxyApiKey(req, res, next) {
   
   const providedKey = authHeader.substring(7); // 去掉 'Bearer ' 前缀
   
-  if (providedKey !== configuredKey) {
+  // 检查多密钥系统
+  let validKey = null;
+  for (const keyId in proxyKeys) {
+    const keyData = proxyKeys[keyId];
+    if (keyData.apiKey === providedKey && keyData.enabled) {
+      validKey = { id: keyId, ...keyData };
+      break;
+    }
+  }
+  
+  // 如果多密钥系统中没有找到，检查旧的单一密钥（向后兼容）
+  if (!validKey && legacyKey && legacyKey.trim() !== '' && providedKey === legacyKey) {
+    validKey = {
+      id: 'legacy',
+      name: 'Legacy Key',
+      apiKey: legacyKey,
+      enabled: true,
+      params: userSettings.defaultParams || { temperature: 0.7, max_tokens: 2000, top_p: 1 },
+      allowedModels: [], // 空数组表示允许所有模型
+      rateLimit: { requestsPerMinute: 60, requestsPerHour: 1000 }
+    };
+  }
+  
+  // 如果没有找到有效密钥
+  if (!validKey) {
+    // 如果既没有配置多密钥也没有配置旧密钥，允许所有请求
+    if (Object.keys(proxyKeys).length === 0 && (!legacyKey || legacyKey.trim() === '')) {
+      return next();
+    }
+    
     return res.status(401).json({
       error: {
         message: 'Invalid API key provided',
@@ -749,33 +776,66 @@ async function verifyProxyApiKey(req, res, next) {
     });
   }
   
+  // 将密钥信息附加到请求对象
+  req.apiKeyInfo = validKey;
+  
+  // 更新使用统计
+  if (validKey.id !== 'legacy') {
+    try {
+      userSettings.proxyApiKeys[validKey.id].usageCount = (userSettings.proxyApiKeys[validKey.id].usageCount || 0) + 1;
+      userSettings.proxyApiKeys[validKey.id].lastUsed = new Date().toISOString();
+      await fs.writeFile(USER_SETTINGS_FILE, JSON.stringify(userSettings, null, 2));
+      invalidateUserSettingsCache();
+    } catch (error) {
+      console.error('Error updating key usage stats:', error);
+    }
+  }
+  
   next();
 }
 
-// OpenAI 兼容 - 获取模型列表
+// OpenAI 兼容 - 获取模型列表（根据API密钥权限过滤）
 app.get('/v1/models', verifyProxyApiKey, async (req, res) => {
   try {
     const userSettings = await getUserSettings();
     const pollingConfig = userSettings.pollingConfig || { available: {}, excluded: {} };
     
     // 获取所有在可用池中的模型
-    const models = [];
+    let availableModelNames = [];
     const availableModels = pollingConfig.available || {};
     
     for (const modelName of Object.keys(availableModels)) {
       const providers = availableModels[modelName] || [];
       if (providers.length > 0 && !pollingConfig.excluded?.[modelName]) {
-        models.push({
-          id: modelName,
-          object: 'model',
-          created: Date.now(),
-          owned_by: 'equal-ask-proxy',
-          permission: [],
-          root: modelName,
-          parent: null
-        });
+        availableModelNames.push(modelName);
       }
     }
+    
+    // 根据API密钥权限过滤模型
+    const allowedModels = req.apiKeyInfo?.allowedModels || [];
+    
+    // 如果密钥配置了允许的模型列表，则只返回允许的模型
+    // 如果没有配置（空数组），则返回所有可用的模型
+    let filteredModels = availableModelNames;
+    if (allowedModels.length > 0) {
+      filteredModels = availableModelNames.filter(modelName =>
+        allowedModels.includes(modelName)
+      );
+    }
+    
+    const models = filteredModels.map(modelName => ({
+      id: modelName,
+      object: 'model',
+      created: Date.now(),
+      owned_by: 'equal-ask-proxy',
+      permission: [],
+      root: modelName,
+      parent: null
+    }));
+    
+    console.log(`[Models API] API Key: ${req.apiKeyInfo?.name || 'Legacy'}`);
+    console.log(`[Models API] Allowed models: ${allowedModels.length > 0 ? allowedModels.join(', ') : 'All models'}`);
+    console.log(`[Models API] Returned models: ${filteredModels.join(', ')}`);
     
     res.json({
       object: 'list',
@@ -835,6 +895,18 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
     
     console.log(`[Proxy] Received request for model: ${pureModelName}`);
     
+    // 检查模型权限 - 如果密钥配置了允许的模型列表，则进行权限检查
+    const allowedModels = req.apiKeyInfo?.allowedModels || [];
+    if (allowedModels.length > 0 && !allowedModels.includes(pureModelName)) {
+      return res.status(403).json({
+        error: {
+          message: `Model '${pureModelName}' is not allowed for this API key. Allowed models: ${allowedModels.join(', ')}`,
+          type: 'permission_error',
+          code: 'model_not_allowed'
+        }
+      });
+    }
+    
     // 检查模型是否在可用池中
     const availableProviders = pollingConfig.available?.[pureModelName] || [];
     if (availableProviders.length === 0) {
@@ -887,15 +959,23 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
     
     console.log(`[Proxy] Using model ID: ${providerModelId} from provider ${selectedProvider.name}`);
     
-    // 构建请求参数 - 外部参数优先策略
+    // 构建请求参数 - 参数隔离机制
     // 1. 优先使用外部传入的参数
-    // 2. 其次使用用户设置的默认参数
-    // 3. 最后使用系统默认参数
+    // 2. 其次使用密钥的默认参数
+    // 3. 再次使用用户设置的默认参数
+    // 4. 最后使用系统默认参数
+    const keyParams = req.apiKeyInfo?.params || {};
     const params = {
-      // 核心参数处理 - 外部参数优先
-      temperature: temperature !== undefined ? temperature : (userSettings.defaultParams?.temperature ?? 0.7),
-      max_tokens: max_tokens !== undefined ? max_tokens : (userSettings.defaultParams?.max_tokens ?? 2000),
-      top_p: top_p !== undefined ? top_p : (userSettings.defaultParams?.top_p ?? 1),
+      // 核心参数处理 - 外部参数 > 密钥参数 > 用户默认参数 > 系统默认参数
+      temperature: temperature !== undefined ? temperature :
+                  (keyParams.temperature !== undefined ? keyParams.temperature :
+                  (userSettings.defaultParams?.temperature ?? 0.7)),
+      max_tokens: max_tokens !== undefined ? max_tokens :
+                 (keyParams.max_tokens !== undefined ? keyParams.max_tokens :
+                 (userSettings.defaultParams?.max_tokens ?? 2000)),
+      top_p: top_p !== undefined ? top_p :
+            (keyParams.top_p !== undefined ? keyParams.top_p :
+            (userSettings.defaultParams?.top_p ?? 1)),
       // 其他参数直接传递
       ...otherParams
     };
@@ -1015,6 +1095,159 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
         code: 'internal_error'
       }
     });
+  }
+});
+
+// ==================== 多API密钥管理接口 ====================
+
+// 生成随机API密钥
+function generateApiKey() {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  let result = 'sk-';
+  for (let i = 0; i < 48; i++) {
+    result += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return result;
+}
+
+// 获取所有API密钥
+app.get('/api/proxy-keys', async (req, res) => {
+  try {
+    const userSettings = await getUserSettings();
+    const proxyKeys = userSettings.proxyApiKeys || {};
+    
+    // 转换为数组格式
+    const keys = Object.keys(proxyKeys).map(id => ({
+      id,
+      ...proxyKeys[id]
+    }));
+    
+    res.json(keys);
+  } catch (error) {
+    console.error('Error getting proxy keys:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 创建新的API密钥
+app.post('/api/proxy-keys', async (req, res) => {
+  try {
+    const { name, description } = req.body;
+    
+    if (!name || name.trim() === '') {
+      return res.status(400).json({ error: '密钥名称不能为空' });
+    }
+    
+    const userSettings = await getUserSettings();
+    if (!userSettings.proxyApiKeys) {
+      userSettings.proxyApiKeys = {};
+    }
+    
+    const keyId = Date.now().toString();
+    const apiKey = generateApiKey();
+    
+    const newKey = {
+      name: name.trim(),
+      description: description || '',
+      apiKey: apiKey,
+      enabled: true,
+      createdAt: new Date().toISOString(),
+      lastUsed: null,
+      usageCount: 0,
+      params: {
+        temperature: 0.7,
+        max_tokens: 2000,
+        top_p: 1
+      },
+      allowedModels: [],
+      rateLimit: {
+        requestsPerMinute: 60,
+        requestsPerHour: 1000
+      }
+    };
+    
+    userSettings.proxyApiKeys[keyId] = newKey;
+    
+    await fs.writeFile(USER_SETTINGS_FILE, JSON.stringify(userSettings, null, 2));
+    invalidateUserSettingsCache();
+    
+    res.json({ id: keyId, ...newKey });
+  } catch (error) {
+    console.error('Error creating proxy key:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 更新API密钥
+app.put('/api/proxy-keys/:id', async (req, res) => {
+  try {
+    const keyId = req.params.id;
+    const updates = req.body;
+    
+    const userSettings = await getUserSettings();
+    if (!userSettings.proxyApiKeys || !userSettings.proxyApiKeys[keyId]) {
+      return res.status(404).json({ error: '密钥不存在' });
+    }
+    
+    // 更新密钥信息（不允许更新apiKey和id）
+    const { id, apiKey, ...allowedUpdates } = updates;
+    userSettings.proxyApiKeys[keyId] = {
+      ...userSettings.proxyApiKeys[keyId],
+      ...allowedUpdates
+    };
+    
+    await fs.writeFile(USER_SETTINGS_FILE, JSON.stringify(userSettings, null, 2));
+    invalidateUserSettingsCache();
+    
+    res.json({ id: keyId, ...userSettings.proxyApiKeys[keyId] });
+  } catch (error) {
+    console.error('Error updating proxy key:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 重新生成API密钥
+app.post('/api/proxy-keys/:id/regenerate', async (req, res) => {
+  try {
+    const keyId = req.params.id;
+    
+    const userSettings = await getUserSettings();
+    if (!userSettings.proxyApiKeys || !userSettings.proxyApiKeys[keyId]) {
+      return res.status(404).json({ error: '密钥不存在' });
+    }
+    
+    const newApiKey = generateApiKey();
+    userSettings.proxyApiKeys[keyId].apiKey = newApiKey;
+    
+    await fs.writeFile(USER_SETTINGS_FILE, JSON.stringify(userSettings, null, 2));
+    invalidateUserSettingsCache();
+    
+    res.json({ apiKey: newApiKey });
+  } catch (error) {
+    console.error('Error regenerating proxy key:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 删除API密钥
+app.delete('/api/proxy-keys/:id', async (req, res) => {
+  try {
+    const keyId = req.params.id;
+    
+    const userSettings = await getUserSettings();
+    if (!userSettings.proxyApiKeys || !userSettings.proxyApiKeys[keyId]) {
+      return res.status(404).json({ error: '密钥不存在' });
+    }
+    
+    delete userSettings.proxyApiKeys[keyId];
+    
+    await fs.writeFile(USER_SETTINGS_FILE, JSON.stringify(userSettings, null, 2));
+    invalidateUserSettingsCache();
+    
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error deleting proxy key:', error);
+    res.status(500).json({ error: error.message });
   }
 });
 
