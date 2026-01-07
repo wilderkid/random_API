@@ -640,6 +640,8 @@ const imageInput = ref(null)
 const fileInput = ref(null)
 const uploadedImages = ref([])
 const uploadedFiles = ref([])
+// 存储提供商列表，用于计算重复模型
+const providers = ref([])
 
 // 支持的文件类型
 const supportedFileTypes = '.txt,.md,.json,.js,.ts,.jsx,.tsx,.vue,.py,.java,.c,.cpp,.h,.hpp,.cs,.go,.rs,.rb,.php,.html,.css,.scss,.less,.xml,.yaml,.yml,.toml,.ini,.conf,.sh,.bat,.ps1,.sql,.csv,.log'
@@ -702,24 +704,69 @@ const filteredConversations = computed(() => {
 
 // 计算当前模型是否可以启用轮询
 const canEnablePolling = computed(() => {
-  if (!currentModel.value || !userSettings.value.pollingConfig) {
+  // 基本检查：需要有当前模型
+  if (!currentModel.value) {
+    console.log('轮询检查 - 未选择模型，禁用轮询')
     return false
   }
   
   // 提取模型名称
   const modelName = extractModelName(currentModel.value)
   
-  // 检查是否在可用池中且有多个提供商
-  const availableProviders = userSettings.value.pollingConfig.available?.[modelName] || []
-  const isExcluded = userSettings.value.pollingConfig.excluded?.[modelName]
+  if (!modelName) {
+    console.log('轮询检查 - 无法提取模型名称，禁用轮询')
+    return false
+  }
   
-  // 只有在可用池中有多个提供商（重复模型）且未被排除时才能启用轮询
-  const hasMultipleProviders = availableProviders.length > 1
+  // 从 providers 数据中实时计算该模型有多少个提供商支持
+  const providersWithModel = providers.value.filter(provider => {
+    // 跳过禁用的提供商
+    if (provider.disabled) return false
+    
+    // 检查提供商是否有该模型
+    if (!provider.models || provider.models.length === 0) return false
+    
+    return provider.models.some(m => {
+      if (m.visible === false) return false // 跳过不可见的模型
+      const extractedName = m.id.includes('/') ? m.id.split('/').pop() : m.id
+      return extractedName === modelName
+    })
+  })
+  
+  // 检查是否在可用池中且未被排除
+  const pollingConfig = userSettings.value?.pollingConfig || { available: {}, excluded: {} }
+  const availablePool = pollingConfig.available || {}
+  const excludedPool = pollingConfig.excluded || {}
+  
+  // 检查是否在排除池中
+  const isExcluded = !!excludedPool[modelName]
+  
+  // 检查是否在可用池中（如果可用池有配置的话）
+  const isInAvailablePool = modelName in availablePool
+  const availableProviderCount = availablePool[modelName]?.length || 0
+  
+  // 轮询的核心条件：
+  // 1. 模型在可用池中配置了至少2个提供商，或者
+  // 2. 实际有至少2个提供商支持该模型（当可用池未配置时）
+  // 3. 模型不能在排除池中
+  const hasMultipleProvidersInPool = isInAvailablePool && availableProviderCount >= 2
+  const hasMultipleProvidersActual = providersWithModel.length >= 2
+  
+  // 如果可用池有配置，优先使用可用池的判断；否则使用实际提供商数量
+  const hasMultipleProviders = isInAvailablePool ? hasMultipleProvidersInPool : hasMultipleProvidersActual
   const notExcluded = !isExcluded
   
-  console.log(`轮询检查 - 模型: ${modelName}, 可用提供商数量: ${availableProviders.length}, 是否排除: ${isExcluded}, 可启用轮询: ${hasMultipleProviders && notExcluded}`)
+  const canEnable = hasMultipleProviders && notExcluded
   
-  return hasMultipleProviders && notExcluded
+  console.log(`轮询检查 - 模型: ${modelName}`)
+  console.log(`  - 实际支持该模型的提供商: ${providersWithModel.map(p => p.name).join(', ')} (${providersWithModel.length}个)`)
+  console.log(`  - 是否在可用池中: ${isInAvailablePool}`)
+  console.log(`  - 可用池中的提供商数量: ${availableProviderCount}`)
+  console.log(`  - 是否有多个提供商: ${hasMultipleProviders}`)
+  console.log(`  - 是否被排除: ${isExcluded}`)
+  console.log(`  - 可启用轮询: ${canEnable}`)
+  
+  return canEnable
 })
 
 // 提取模型名称的辅助函数
@@ -760,6 +807,9 @@ async function loadConversations() {
 async function loadProviders() {
   try {
     const res = await axios.get('/api/providers')
+    // 保存提供商列表，用于计算重复模型
+    providers.value = res.data
+    
     const models = []
     for (const provider of res.data) {
       if (provider.disabled) continue
@@ -797,6 +847,7 @@ async function loadProviders() {
     }
   } catch (error) {
     console.error('Error loading providers:', error)
+    providers.value = []
     allModels.value = []
   }
 }

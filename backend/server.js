@@ -581,6 +581,105 @@ function isModelDisabledForProvider(modelName, providerId, userSettings) {
   return userSettings.disabledModels[providerId].includes(modelName);
 }
 
+// 获取所有可用于故障转移的提供商列表（不使用 usedInCurrentRound 机制）
+function getFailoverProviders(providers, modelName, config, userSettings, excludeProviderIds = []) {
+  console.log(`[Failover] Getting failover providers for model: ${modelName}`);
+  console.log(`[Failover] Excluding providers: ${excludeProviderIds.join(', ')}`);
+  
+  // 检查模型是否在排除池中
+  if (config.excluded && config.excluded[modelName]) {
+    console.log(`[Failover] Model ${modelName} is in excluded pool`);
+    return [];
+  }
+  
+  const available = config.available[modelName] || [];
+  console.log(`[Failover] Available provider IDs for ${modelName}:`, available);
+  
+  if (available.length === 0) {
+    console.log(`[Failover] No available providers for model ${modelName}`);
+    return [];
+  }
+  
+  // 获取轮询状态，确定起始位置
+  const pollingState = userSettings.pollingState || {};
+  if (!pollingState[modelName]) {
+    pollingState[modelName] = {
+      currentIndex: 0,
+      usedInCurrentRound: []
+    };
+  }
+  userSettings.pollingState = pollingState;
+  
+  const modelState = pollingState[modelName];
+  const startIndex = modelState.currentIndex || 0;
+  
+  // 收集所有可用的提供商，按轮询顺序排列
+  const failoverProviders = [];
+  
+  for (let i = 0; i < available.length; i++) {
+    const index = (startIndex + i) % available.length;
+    const providerId = available[index];
+    
+    // 跳过已排除的提供商
+    if (excludeProviderIds.includes(providerId)) {
+      console.log(`[Failover] Provider ${providerId} already tried, skipping`);
+      continue;
+    }
+    
+    const provider = providers.find(p => p.id === providerId);
+    if (!provider) {
+      console.log(`[Failover] Provider ${providerId} not found`);
+      continue;
+    }
+    
+    if (provider.disabled) {
+      console.log(`[Failover] Provider ${provider.name} is disabled globally`);
+      continue;
+    }
+    
+    // 注意：在故障转移模式下，我们忽略 disabledModels 检查
+    // 因为 disabledModels 是基于历史失败计数的，但当前请求应该尝试所有可用提供商
+    
+    failoverProviders.push(provider);
+    console.log(`[Failover] Added provider ${provider.name} (ID: ${providerId}) to failover list`);
+  }
+  
+  console.log(`[Failover] Total failover providers: ${failoverProviders.length}`);
+  return failoverProviders;
+}
+
+// 更新轮询状态（在故障转移成功后调用）
+function updatePollingStateAfterSuccess(modelName, successfulProviderId, config, userSettings) {
+  const available = config.available[modelName] || [];
+  const successIndex = available.indexOf(successfulProviderId);
+  
+  if (successIndex !== -1) {
+    const pollingState = userSettings.pollingState || {};
+    if (!pollingState[modelName]) {
+      pollingState[modelName] = { currentIndex: 0, usedInCurrentRound: [] };
+    }
+    
+    // 设置下一个轮询位置为成功提供商的下一个
+    pollingState[modelName].currentIndex = (successIndex + 1) % available.length;
+    
+    // 标记成功的提供商为已使用
+    if (!Array.isArray(pollingState[modelName].usedInCurrentRound)) {
+      pollingState[modelName].usedInCurrentRound = [];
+    }
+    if (!pollingState[modelName].usedInCurrentRound.includes(successfulProviderId)) {
+      pollingState[modelName].usedInCurrentRound.push(successfulProviderId);
+    }
+    
+    // 如果所有提供商都已使用，重置
+    if (pollingState[modelName].usedInCurrentRound.length >= available.length) {
+      pollingState[modelName].usedInCurrentRound = [];
+    }
+    
+    userSettings.pollingState = pollingState;
+    console.log(`[Failover] Updated polling state for ${modelName}: nextIndex=${pollingState[modelName].currentIndex}`);
+  }
+}
+
 async function incrementFailCount(providerId) {
   const data = await getApiSettings();
   const provider = data.providers.find(p => p.id === providerId);
@@ -800,13 +899,14 @@ app.get('/v1/models', verifyProxyApiKey, async (req, res) => {
     const userSettings = await getUserSettings();
     const pollingConfig = userSettings.pollingConfig || { available: {}, excluded: {} };
     
-    // 获取所有在可用池中的模型
+    // 获取所有在可用池中的模型（必须有至少2个提供商才是轮询模型）
     let availableModelNames = [];
     const availableModels = pollingConfig.available || {};
     
     for (const modelName of Object.keys(availableModels)) {
       const providers = availableModels[modelName] || [];
-      if (providers.length > 0 && !pollingConfig.excluded?.[modelName]) {
+      // 只有拥有至少2个提供商的模型才能被外部使用（与前台逻辑一致）
+      if (providers.length >= 2 && !pollingConfig.excluded?.[modelName]) {
         availableModelNames.push(modelName);
       }
     }
@@ -853,15 +953,12 @@ app.get('/v1/models', verifyProxyApiKey, async (req, res) => {
   }
 });
 
-// OpenAI 兼容 - Chat Completions
+// OpenAI 兼容 - Chat Completions（支持自动故障转移）
 app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
   try {
     const { messages, model, stream = false, temperature, max_tokens, top_p, ...otherParams } = req.body;
     
-    console.log(`[Proxy] Received request body:`, JSON.stringify(req.body, null, 2));
-    console.log(`[Proxy] Extracted parameters - temperature: ${temperature}, max_tokens: ${max_tokens}, top_p: ${top_p}`);
-    console.log(`[Proxy] Other parameters:`, JSON.stringify(otherParams, null, 2));
-    console.log(`[Proxy] Request body keys:`, Object.keys(req.body));
+    console.log(`[Proxy] Received request for model: ${model}, stream: ${stream}`);
     
     if (!messages || !Array.isArray(messages)) {
       return res.status(400).json({
@@ -893,7 +990,7 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
     // 提取纯模型名称（去掉可能的前缀）
     const pureModelName = modelName.includes('/') ? modelName.split('/').pop() : modelName;
     
-    console.log(`[Proxy] Received request for model: ${pureModelName}`);
+    console.log(`[Proxy] Pure model name: ${pureModelName}`);
     
     // 检查模型权限 - 如果密钥配置了允许的模型列表，则进行权限检查
     const allowedModels = req.apiKeyInfo?.allowedModels || [];
@@ -907,14 +1004,14 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
       });
     }
     
-    // 检查模型是否在可用池中
-    const availableProviders = pollingConfig.available?.[pureModelName] || [];
-    if (availableProviders.length === 0) {
+    // 检查模型是否在可用池中，且必须有至少2个提供商（与前台轮询逻辑一致）
+    const availableProviderIds = pollingConfig.available?.[pureModelName] || [];
+    if (availableProviderIds.length < 2) {
       return res.status(400).json({
         error: {
-          message: `Model '${pureModelName}' is not configured in the available pool. Please configure it in polling settings.`,
+          message: `Model '${pureModelName}' requires at least 2 providers for polling. Current providers: ${availableProviderIds.length}. Please configure more providers in polling settings.`,
           type: 'invalid_request_error',
-          code: 'model_not_available'
+          code: 'insufficient_providers'
         }
       });
     }
@@ -930,43 +1027,9 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
       });
     }
     
-    // 使用轮询机制选择提供商
-    const selectedProvider = getNextPollingProvider(settings.providers, pureModelName, pollingConfig, userSettings);
-    
-    if (!selectedProvider) {
-      return res.status(503).json({
-        error: {
-          message: `No available provider for model '${pureModelName}'`,
-          type: 'server_error',
-          code: 'no_provider_available'
-        }
-      });
-    }
-    
-    console.log(`[Proxy] Selected provider: ${selectedProvider.name} (ID: ${selectedProvider.id})`);
-    
-    // 获取该提供商的具体模型ID
-    const providerModelId = await getProviderModelId(selectedProvider, pureModelName);
-    if (!providerModelId) {
-      return res.status(503).json({
-        error: {
-          message: `Model '${pureModelName}' not found in provider '${selectedProvider.name}'`,
-          type: 'server_error',
-          code: 'model_not_found_in_provider'
-        }
-      });
-    }
-    
-    console.log(`[Proxy] Using model ID: ${providerModelId} from provider ${selectedProvider.name}`);
-    
     // 构建请求参数 - 参数隔离机制
-    // 1. 优先使用外部传入的参数
-    // 2. 其次使用密钥的默认参数
-    // 3. 再次使用用户设置的默认参数
-    // 4. 最后使用系统默认参数
     const keyParams = req.apiKeyInfo?.params || {};
     const params = {
-      // 核心参数处理 - 外部参数 > 密钥参数 > 用户默认参数 > 系统默认参数
       temperature: temperature !== undefined ? temperature :
                   (keyParams.temperature !== undefined ? keyParams.temperature :
                   (userSettings.defaultParams?.temperature ?? 0.7)),
@@ -976,114 +1039,189 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
       top_p: top_p !== undefined ? top_p :
             (keyParams.top_p !== undefined ? keyParams.top_p :
             (userSettings.defaultParams?.top_p ?? 1)),
-      // 其他参数直接传递
       ...otherParams
     };
-    
-    console.log(`[Proxy] Request parameters - temperature: ${params.temperature}, max_tokens: ${params.max_tokens}, top_p: ${params.top_p}`);
-    console.log(`[Proxy] External params provided - temperature: ${temperature !== undefined}, max_tokens: ${max_tokens !== undefined}, top_p: ${top_p !== undefined}`);
     
     // 删除不需要传递的参数
     delete params.model;
     delete params.messages;
     delete params.stream;
     
-    const url = buildApiUrl(selectedProvider.baseUrl, 'chat/completions');
+    console.log(`[Proxy] Request parameters - temperature: ${params.temperature}, max_tokens: ${params.max_tokens}, top_p: ${params.top_p}`);
+    
+    // ==================== 自动故障转移逻辑 ====================
+    const errors = []; // 收集所有失败的错误信息
+    const triedProviderIds = []; // 记录已尝试的提供商ID
+    
+    // 获取所有可用于故障转移的提供商
+    const failoverProviders = getFailoverProviders(settings.providers, pureModelName, pollingConfig, userSettings, []);
+    
+    if (failoverProviders.length === 0) {
+      console.log(`[Proxy] No available providers for model ${pureModelName}`);
+      return res.status(503).json({
+        error: {
+          message: `No available providers for model '${pureModelName}'`,
+          type: 'server_error',
+          code: 'no_providers_available'
+        }
+      });
+    }
+    
+    console.log(`[Proxy] Found ${failoverProviders.length} providers for failover`);
+    
+    for (let attempt = 0; attempt < failoverProviders.length; attempt++) {
+      const selectedProvider = failoverProviders[attempt];
+      
+      triedProviderIds.push(selectedProvider.id);
+      console.log(`[Proxy] Attempt ${attempt + 1}/${failoverProviders.length}: Trying provider ${selectedProvider.name} (ID: ${selectedProvider.id})`);
+      
+      // 获取该提供商的具体模型ID
+      const providerModelId = await getProviderModelId(selectedProvider, pureModelName);
+      if (!providerModelId) {
+        console.log(`[Proxy] Model ${pureModelName} not found in provider ${selectedProvider.name}, trying next...`);
+        errors.push({
+          provider: selectedProvider.name,
+          error: `Model not found in provider`
+        });
+        await incrementModelFailCount(selectedProvider.id, pureModelName, userSettings);
+        continue;
+      }
+      
+      console.log(`[Proxy] Using model ID: ${providerModelId} from provider ${selectedProvider.name}`);
+      
+      const url = buildApiUrl(selectedProvider.baseUrl, 'chat/completions');
+      
+      if (stream) {
+        // ==================== 流式响应（带故障转移） ====================
+        try {
+          const response = await axios.post(url, {
+            model: providerModelId,
+            messages: messages,
+            stream: true,
+            ...params
+          }, {
+            headers: {
+              'Authorization': `Bearer ${selectedProvider.apiKey}`,
+              'Content-Type': 'application/json'
+            },
+            responseType: 'stream',
+            timeout: 120000
+          });
+          
+          // 流式请求成功建立连接
+          res.setHeader('Content-Type', 'text/event-stream');
+          res.setHeader('Cache-Control', 'no-cache');
+          res.setHeader('Connection', 'keep-alive');
+          res.setHeader('Access-Control-Allow-Origin', '*');
+          
+          response.data.on('data', chunk => {
+            try {
+              res.write(chunk);
+            } catch (error) {
+              console.error('[Proxy] Error writing chunk:', error);
+            }
+          });
+          
+          response.data.on('end', async () => {
+            await resetModelFailCount(selectedProvider.id, pureModelName, userSettings);
+            updatePollingStateAfterSuccess(pureModelName, selectedProvider.id, pollingConfig, userSettings);
+            await savePollingState(userSettings);
+            console.log(`[Proxy] Stream completed successfully using provider ${selectedProvider.name}`);
+            res.end();
+          });
+          
+          response.data.on('error', async (error) => {
+            console.error('[Proxy] Stream error:', error);
+            await incrementModelFailCount(selectedProvider.id, pureModelName, userSettings);
+            await savePollingState(userSettings);
+            res.write(`data: ${JSON.stringify({ error: { message: error.message } })}\n\n`);
+            res.end();
+          });
+          
+          // 流式请求成功启动，退出循环
+          return;
+          
+        } catch (error) {
+          console.error(`[Proxy] Provider ${selectedProvider.name} failed:`, error.message);
+          errors.push({
+            provider: selectedProvider.name,
+            error: error.message
+          });
+          await incrementModelFailCount(selectedProvider.id, pureModelName, userSettings);
+          // 继续尝试下一个提供商
+        }
+        
+      } else {
+        // ==================== 非流式响应（带故障转移） ====================
+        try {
+          const response = await axios.post(url, {
+            model: providerModelId,
+            messages: messages,
+            stream: false,
+            ...params
+          }, {
+            headers: {
+              'Authorization': `Bearer ${selectedProvider.apiKey}`,
+              'Content-Type': 'application/json'
+            },
+            timeout: 120000
+          });
+          
+          // 成功！重置失败计数并返回响应
+          await resetModelFailCount(selectedProvider.id, pureModelName, userSettings);
+          updatePollingStateAfterSuccess(pureModelName, selectedProvider.id, pollingConfig, userSettings);
+          await savePollingState(userSettings);
+          
+          console.log(`[Proxy] Request completed successfully using provider ${selectedProvider.name}`);
+          return res.json(response.data);
+          
+        } catch (error) {
+          console.error(`[Proxy] Provider ${selectedProvider.name} failed:`, error.message);
+          errors.push({
+            provider: selectedProvider.name,
+            error: error.response?.data?.error?.message || error.message,
+            status: error.response?.status
+          });
+          await incrementModelFailCount(selectedProvider.id, pureModelName, userSettings);
+          // 继续尝试下一个提供商
+        }
+      }
+    }
+    
+    // 所有提供商都失败了
+    await savePollingState(userSettings);
+    
+    console.log(`[Proxy] All ${triedProviderIds.length} providers failed for model ${pureModelName}`);
+    
+    // 构建详细的错误信息
+    const errorDetails = errors.map(e => `${e.provider}: ${e.error}`).join('; ');
     
     if (stream) {
-      // 流式响应
-      res.setHeader('Content-Type', 'text/event-stream');
-      res.setHeader('Cache-Control', 'no-cache');
-      res.setHeader('Connection', 'keep-alive');
-      res.setHeader('Access-Control-Allow-Origin', '*');
-      
-      try {
-        const response = await axios.post(url, {
-          model: providerModelId,
-          messages: messages,
-          stream: true,
-          ...params
-        }, {
-          headers: {
-            'Authorization': `Bearer ${selectedProvider.apiKey}`,
-            'Content-Type': 'application/json'
-          },
-          responseType: 'stream',
-          timeout: 120000
-        });
-        
-        response.data.on('data', chunk => {
-          try {
-            res.write(chunk);
-          } catch (error) {
-            console.error('[Proxy] Error writing chunk:', error);
-          }
-        });
-        
-        response.data.on('end', async () => {
-          // 如果成功，重置模型失败计数
-          await resetModelFailCount(selectedProvider.id, pureModelName, userSettings);
-          // 保存轮询状态
-          await savePollingState(userSettings);
-          res.end();
-        });
-        
-        response.data.on('error', async (error) => {
-          console.error('[Proxy] Stream error:', error);
-          await incrementModelFailCount(selectedProvider.id, pureModelName, userSettings);
-          await savePollingState(userSettings);
-          res.write(`data: ${JSON.stringify({ error: { message: error.message } })}\n\n`);
-          res.end();
-        });
-        
-      } catch (error) {
-        console.error('[Proxy] Request error:', error.message);
-        await incrementModelFailCount(selectedProvider.id, pureModelName, userSettings);
-        await savePollingState(userSettings);
-        res.write(`data: ${JSON.stringify({ error: { message: error.message } })}\n\n`);
-        res.end();
+      // 流式响应：如果还没有发送过响应头
+      if (!res.headersSent) {
+        res.setHeader('Content-Type', 'text/event-stream');
+        res.setHeader('Cache-Control', 'no-cache');
+        res.setHeader('Connection', 'keep-alive');
+        res.setHeader('Access-Control-Allow-Origin', '*');
       }
-      
+      res.write(`data: ${JSON.stringify({
+        error: {
+          message: `All providers failed for model '${pureModelName}'. Tried ${triedProviderIds.length} providers. Details: ${errorDetails}`,
+          type: 'server_error',
+          code: 'all_providers_failed'
+        }
+      })}\n\n`);
+      res.end();
     } else {
       // 非流式响应
-      try {
-        const response = await axios.post(url, {
-          model: providerModelId,
-          messages: messages,
-          stream: false,
-          ...params
-        }, {
-          headers: {
-            'Authorization': `Bearer ${selectedProvider.apiKey}`,
-            'Content-Type': 'application/json'
-          },
-          timeout: 120000
-        });
-        
-        // 如果成功，重置模型失败计数
-        await resetModelFailCount(selectedProvider.id, pureModelName, userSettings);
-        // 保存轮询状态
-        await savePollingState(userSettings);
-        
-        // 返回响应
-        res.json(response.data);
-        
-      } catch (error) {
-        console.error('[Proxy] Request error:', error.message);
-        await incrementModelFailCount(selectedProvider.id, pureModelName, userSettings);
-        await savePollingState(userSettings);
-        
-        const statusCode = error.response?.status || 500;
-        const errorData = error.response?.data || {
-          error: {
-            message: error.message,
-            type: 'server_error',
-            code: 'provider_error'
-          }
-        };
-        
-        res.status(statusCode).json(errorData);
-      }
+      res.status(503).json({
+        error: {
+          message: `All providers failed for model '${pureModelName}'. Tried ${triedProviderIds.length} providers.`,
+          type: 'server_error',
+          code: 'all_providers_failed',
+          details: errors
+        }
+      });
     }
     
   } catch (error) {
@@ -1258,6 +1396,11 @@ app.options('/v1/*', (req, res) => {
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   res.setHeader('Access-Control-Max-Age', '86400');
   res.status(204).end();
+});
+
+// 处理 SPA 路由
+app.get('*', (req, res) => {
+  res.sendFile(path.join(__dirname, '../frontend/dist/index.html'));
 });
 
 initDataDir().then(() => {

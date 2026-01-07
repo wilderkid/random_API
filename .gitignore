@@ -1,7 +1,27 @@
-node_modules/
-dist/
-data/
+# 依赖
+/node_modules
+/frontend/node_modules
+/backend/node_modules
+
+# 构建产物
+/frontend/dist
+
+# 数据文件
+/data/
+
+# 日志
+/logs/
 *.log
+
+# 操作系统生成的文件
 .DS_Store
-.env
+Thumbs.db
+
+# 编辑器和IDE目录
 .vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?

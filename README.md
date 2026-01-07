@@ -68,21 +68,21 @@ npm run dev
 ```
 前端将运行在 http://localhost:5173
 
-### 生产模式
+### 生产模式（一键启动）
 
-1. 构建前端：
+1. **构建应用**（首次运行或前端代码变更后需要执行）：
 ```bash
-cd frontend
+cd backend
 npm run build
 ```
+这个命令会自动完成前端依赖安装和静态文件构建。
 
-2. 启动后端（会自动托管前端静态文件）：
+2. **启动服务**：
 ```bash
 cd backend
 npm start
 ```
-
-访问 http://localhost:3000 即可使用完整应用。
+服务启动后，直接访问 http://localhost:3000 即可使用完整应用，无需再单独启动前端。
 
 ## 使用说明
 
