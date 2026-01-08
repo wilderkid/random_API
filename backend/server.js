@@ -3,6 +3,7 @@ const cors = require('cors');
 const fs = require('fs').promises;
 const path = require('path');
 const axios = require('axios');
+const { logApiCall, logSystemEvent, readLogs, parseLogsForStats, deleteLogs, clearAllLogs } = require('./logger');
 
 const app = express();
 const PORT = 3000;
@@ -779,6 +780,9 @@ async function streamChat(provider, messages, params, res, modelId, images) {
       timeout: 60000 // 增加超时时间到60秒
     });
     
+    // 记录成功的API调用
+    await logApiCall(provider.name, modelId || provider.defaultModel, true);
+    
     // 性能优化：添加错误处理和超时控制
     const timeout = setTimeout(() => {
       response.data.destroy();
@@ -810,6 +814,8 @@ async function streamChat(provider, messages, params, res, modelId, images) {
     
   } catch (error) {
     console.error('StreamChat error:', error.message);
+    // 记录失败的API调用
+    await logApiCall(provider.name, modelId || provider.defaultModel, false, error.message);
     throw error;
   }
 }
@@ -1123,6 +1129,7 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
           });
           
           response.data.on('end', async () => {
+            await logApiCall(selectedProvider.name, pureModelName, true);
             await resetModelFailCount(selectedProvider.id, pureModelName, userSettings);
             updatePollingStateAfterSuccess(pureModelName, selectedProvider.id, pollingConfig, userSettings);
             await savePollingState(userSettings);
@@ -1132,6 +1139,7 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
           
           response.data.on('error', async (error) => {
             console.error('[Proxy] Stream error:', error);
+            await logApiCall(selectedProvider.name, pureModelName, false, error.message);
             await incrementModelFailCount(selectedProvider.id, pureModelName, userSettings);
             await savePollingState(userSettings);
             res.write(`data: ${JSON.stringify({ error: { message: error.message } })}\n\n`);
@@ -1143,6 +1151,7 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
           
         } catch (error) {
           console.error(`[Proxy] Provider ${selectedProvider.name} failed:`, error.message);
+          await logApiCall(selectedProvider.name, pureModelName, false, error.message);
           errors.push({
             provider: selectedProvider.name,
             error: error.message
@@ -1168,6 +1177,7 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
           });
           
           // 成功！重置失败计数并返回响应
+          await logApiCall(selectedProvider.name, pureModelName, true);
           await resetModelFailCount(selectedProvider.id, pureModelName, userSettings);
           updatePollingStateAfterSuccess(pureModelName, selectedProvider.id, pollingConfig, userSettings);
           await savePollingState(userSettings);
@@ -1177,6 +1187,7 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
           
         } catch (error) {
           console.error(`[Proxy] Provider ${selectedProvider.name} failed:`, error.message);
+          await logApiCall(selectedProvider.name, pureModelName, false, error.response?.data?.error?.message || error.message);
           errors.push({
             provider: selectedProvider.name,
             error: error.response?.data?.error?.message || error.message,
@@ -1385,6 +1396,113 @@ app.delete('/api/proxy-keys/:id', async (req, res) => {
     res.json({ success: true });
   } catch (error) {
     console.error('Error deleting proxy key:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ==================== 日志查询接口 ====================
+
+// 获取日志统计数据
+app.get('/api/logs/stats', async (req, res) => {
+  try {
+    const { startDate, endDate } = req.query;
+    
+    // 如果没有提供日期范围，默认查询当天
+    const today = new Date();
+    const start = startDate || today.toISOString().split('T')[0];
+    const end = endDate || today.toISOString().split('T')[0];
+    
+    // 验证日期范围
+    const startDateObj = new Date(start);
+    const endDateObj = new Date(end);
+    const daysDiff = Math.ceil((endDateObj - startDateObj) / (1000 * 60 * 60 * 24));
+    
+    if (daysDiff > 7) {
+      return res.status(400).json({ error: '日期范围不能超过7天' });
+    }
+    
+    // 读取日志内容
+    const logsContent = await readLogs(start, end);
+    
+    // 解析日志生成统计数据
+    const stats = parseLogsForStats(logsContent);
+    
+    res.json({
+      dateRange: { start, end },
+      stats
+    });
+  } catch (error) {
+    console.error('Error getting log stats:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 获取原始日志内容
+app.get('/api/logs/raw', async (req, res) => {
+  try {
+    const { startDate, endDate } = req.query;
+    
+    // 如果没有提供日期范围，默认查询当天
+    const today = new Date();
+    const start = startDate || today.toISOString().split('T')[0];
+    const end = endDate || today.toISOString().split('T')[0];
+    
+    // 验证日期范围
+    const startDateObj = new Date(start);
+    const endDateObj = new Date(end);
+    const daysDiff = Math.ceil((endDateObj - startDateObj) / (1000 * 60 * 60 * 24));
+    
+    if (daysDiff > 7) {
+      return res.status(400).json({ error: '日期范围不能超过7天' });
+    }
+    
+    // 读取日志内容
+    const logsContent = await readLogs(start, end);
+    
+    res.json({
+      dateRange: { start, end },
+      content: logsContent
+    });
+  } catch (error) {
+    console.error('Error getting raw logs:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 删除指定日期范围的日志
+app.delete('/api/logs', async (req, res) => {
+  try {
+    const { startDate, endDate } = req.query;
+    
+    if (!startDate || !endDate) {
+      return res.status(400).json({ error: '必须提供开始日期和结束日期' });
+    }
+    
+    const result = await deleteLogs(startDate, endDate);
+    
+    res.json({
+      success: true,
+      deletedCount: result.deletedCount,
+      errors: result.errors
+    });
+  } catch (error) {
+    console.error('Error deleting logs:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 清空所有日志
+app.delete('/api/logs/all', async (req, res) => {
+  try {
+    const result = await clearAllLogs();
+    
+    res.json({
+      success: true,
+      deletedCount: result.deletedCount,
+      errors: result.errors
+    });
+  } catch (error) {
+    console.error('Error clearing all logs:', error);
     res.status(500).json({ error: error.message });
   }
 });
