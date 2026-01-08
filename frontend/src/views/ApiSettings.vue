@@ -52,7 +52,9 @@
         <!-- API 地址 -->
         <div class="config-section">
           <label>API 地址 <span class="hint">完成: {{ selectedProvider.baseUrl }}/v1/chat/completions</span></label>
-          <input :value="selectedProvider.baseUrl" readonly class="input-field">
+          <div class="input-group">
+            <input :value="selectedProvider.baseUrl" readonly class="input-field">
+          </div>
         </div>
         
         <!-- 模型配置 -->
@@ -61,6 +63,7 @@
             <label>模型 <span class="count">{{ selectedProvider.models?.length || 0 }}</span></label>
             <input v-model="modelSearch" placeholder="搜索模型平台ID..." class="search-input-small">
             <button @click="fetchModels" class="btn-icon" title="刷新">🔄</button>
+            <button @click="showAddModelModal = true" class="btn-icon" title="手动添加模型">➕</button>
             <button v-if="currentAvailableModels" @click="closeModelsList" class="btn-icon" title="关闭">×</button>
           </div>
           
@@ -138,6 +141,26 @@
         </div>
       </div>
     </div>
+    
+    <!-- 手动添加模型弹窗 -->
+    <div v-if="showAddModelModal" class="modal" @click.self="closeAddModelModal">
+      <div class="modal-content">
+        <h3>手动添加模型</h3>
+        <label>
+          模型ID
+          <input v-model="addModelForm.modelId" class="input-field" placeholder="例如: gpt-4o-mini">
+          <small class="hint">请输入完整的模型ID，如 gpt-4o-mini、claude-3-5-sonnet-20241022 等</small>
+        </label>
+        <label>
+          <input type="checkbox" v-model="addModelForm.visible">
+          在对话页面显示此模型
+        </label>
+        <div class="modal-actions">
+          <button @click="addModelManually" class="btn-save" :disabled="!addModelForm.modelId.trim()">添加</button>
+          <button @click="closeAddModelModal" class="btn-cancel">取消</button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -155,6 +178,8 @@ const showAddProvider = ref(false)
 const editingProvider = ref(null)
 const providerForm = ref({ name: '', baseUrl: '', apiKey: '' })
 const showApiKey = ref(false)
+const showAddModelModal = ref(false)
+const addModelForm = ref({ modelId: '', visible: true })
 
 const filteredProviders = computed(() => {
   const query = searchProvider.value.toLowerCase()
@@ -356,5 +381,517 @@ function closeModal() {
   providerForm.value = { name: '', baseUrl: '', apiKey: '' }
 }
 
+function closeAddModelModal() {
+  showAddModelModal.value = false
+  addModelForm.value = { modelId: '', visible: true }
+}
+
+async function addModelManually() {
+  if (!addModelForm.value.modelId.trim()) {
+    alert('请输入模型ID')
+    return
+  }
+  
+  const modelId = addModelForm.value.modelId.trim()
+  
+  // 检查模型是否已存在
+  if (selectedProvider.value.models?.some(m => m.id === modelId)) {
+    alert('该模型已存在')
+    return
+  }
+  
+  // 添加模型到提供商
+  const models = selectedProvider.value.models || []
+  models.push({
+    id: modelId,
+    visible: addModelForm.value.visible
+  })
+  
+  selectedProvider.value.models = models
+  
+  try {
+    await axios.put(`/api/providers/${selectedProvider.value.id}`, selectedProvider.value)
+    await loadProviders()
+    closeAddModelModal()
+    alert('模型添加成功！')
+  } catch (error) {
+    alert('添加模型失败: ' + (error.response?.data?.error || error.message))
+  }
+}
+
 onMounted(loadProviders)
 </script>
+
+<style scoped>
+.api-settings-container {
+  display: flex;
+  height: 100vh;
+  background: #f8f9fa;
+}
+
+.providers-sidebar {
+  width: 300px;
+  background: white;
+  border-right: 1px solid #dee2e6;
+  display: flex;
+  flex-direction: column;
+}
+
+.sidebar-header {
+  padding: 20px;
+  border-bottom: 1px solid #dee2e6;
+}
+
+.search-input {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid #dee2e6;
+  border-radius: 4px;
+  margin-bottom: 12px;
+}
+
+.btn-add-provider {
+  width: 100%;
+  padding: 8px 12px;
+  background: #007bff;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.btn-add-provider:hover {
+  background: #0056b3;
+}
+
+.providers-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px;
+}
+
+.provider-item {
+  display: flex;
+  align-items: center;
+  padding: 12px;
+  margin-bottom: 8px;
+  background: #f8f9fa;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.provider-item:hover {
+  background: #e9ecef;
+}
+
+.provider-item.active {
+  background: #007bff;
+  color: white;
+}
+
+.provider-item-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: #6c757d;
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: bold;
+  margin-right: 12px;
+}
+
+.provider-item.active .provider-item-icon {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.provider-item-info {
+  flex: 1;
+}
+
+.provider-item-name {
+  font-weight: 500;
+  margin-bottom: 4px;
+}
+
+.provider-item-status {
+  font-size: 12px;
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+
+.provider-item-status.active {
+  background: #28a745;
+  color: white;
+}
+
+.provider-item-status.disabled {
+  background: #dc3545;
+  color: white;
+}
+
+.provider-item.active .provider-item-status {
+  background: rgba(255, 255, 255, 0.2);
+  color: white;
+}
+
+.provider-details-panel {
+  flex: 1;
+  padding: 20px;
+  overflow-y: auto;
+}
+
+.details-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 30px;
+}
+
+.details-header h2 {
+  margin: 0;
+  color: #495057;
+}
+
+.header-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.btn-toggle {
+  padding: 6px 12px;
+  border: 1px solid #dee2e6;
+  border-radius: 4px;
+  background: white;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.btn-toggle:hover {
+  background: #e9ecef;
+}
+
+.btn-icon {
+  padding: 6px 8px;
+  border: 1px solid #dee2e6;
+  border-radius: 4px;
+  background: white;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 32px;
+  height: 32px;
+  font-size: 14px;
+}
+
+.btn-icon:hover {
+  background: #e9ecef;
+}
+
+.config-section {
+  margin-bottom: 24px;
+}
+
+.config-section label {
+  display: block;
+  font-weight: 500;
+  margin-bottom: 8px;
+  color: #495057;
+}
+
+.hint {
+  font-size: 12px;
+  color: #6c757d;
+  font-weight: normal;
+}
+
+.input-group {
+  display: flex;
+  gap: 8px;
+}
+
+.input-field {
+  flex: 1;
+  padding: 8px 12px;
+  border: 1px solid #dee2e6;
+  border-radius: 4px;
+  background: #f8f9fa;
+}
+
+.btn-icon-small, .btn-test {
+  padding: 8px 12px;
+  border: 1px solid #dee2e6;
+  border-radius: 4px;
+  background: white;
+  cursor: pointer;
+}
+
+.btn-test {
+  background: #28a745;
+  color: white;
+  border-color: #28a745;
+}
+
+.btn-test:hover {
+  background: #1e7e34;
+}
+
+.models-config {
+  background: white;
+  border: 1px solid #dee2e6;
+  border-radius: 8px;
+  padding: 20px;
+}
+
+.models-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.models-toolbar label {
+  font-weight: 500;
+  color: #495057;
+  margin: 0;
+}
+
+.count {
+  background: #007bff;
+  color: white;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: 12px;
+}
+
+.search-input-small {
+  padding: 6px 10px;
+  border: 1px solid #dee2e6;
+  border-radius: 4px;
+  flex: 1;
+  min-width: 200px;
+}
+
+.available-models-panel {
+  max-height: 400px;
+  overflow-y: auto;
+  border: 1px solid #dee2e6;
+  border-radius: 4px;
+}
+
+.model-group {
+  border-bottom: 1px solid #e9ecef;
+}
+
+.model-group:last-child {
+  border-bottom: none;
+}
+
+.group-header {
+  padding: 12px 16px;
+  background: #f8f9fa;
+  cursor: pointer;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.group-header:hover {
+  background: #e9ecef;
+}
+
+.group-models {
+  padding: 8px 0;
+}
+
+.model-row {
+  display: flex;
+  align-items: center;
+  padding: 8px 16px;
+  gap: 12px;
+}
+
+.model-row:hover {
+  background: #f8f9fa;
+}
+
+.model-icon {
+  font-size: 16px;
+}
+
+.model-name {
+  flex: 1;
+  font-family: monospace;
+  font-size: 13px;
+}
+
+.model-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.icon-btn, .btn-toggle-model {
+  padding: 4px 6px;
+  border: 1px solid #dee2e6;
+  border-radius: 3px;
+  background: white;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.btn-toggle-model {
+  background: #007bff;
+  color: white;
+  border-color: #007bff;
+  font-weight: bold;
+}
+
+.added-models-container {
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.added-model-group {
+  margin-bottom: 20px;
+}
+
+.added-group-header {
+  font-weight: 500;
+  color: #495057;
+  margin-bottom: 8px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid #dee2e6;
+}
+
+.added-models-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 8px;
+}
+
+.added-model-card {
+  display: flex;
+  align-items: center;
+  padding: 8px 12px;
+  background: #f8f9fa;
+  border: 1px solid #dee2e6;
+  border-radius: 4px;
+  gap: 8px;
+}
+
+.added-model-card .model-name {
+  flex: 1;
+  font-family: monospace;
+  font-size: 12px;
+}
+
+.btn-icon-tiny {
+  padding: 2px 4px;
+  border: 1px solid #dee2e6;
+  border-radius: 2px;
+  background: white;
+  cursor: pointer;
+  font-size: 10px;
+}
+
+.empty-state {
+  text-align: center;
+  color: #6c757d;
+  padding: 60px 20px;
+}
+
+.modal {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.modal-content {
+  background: white;
+  padding: 24px;
+  border-radius: 8px;
+  width: 90%;
+  max-width: 500px;
+  max-height: 90vh;
+  overflow-y: auto;
+}
+
+.modal-content h3 {
+  margin: 0 0 20px 0;
+  color: #495057;
+}
+
+.modal-content label {
+  display: block;
+  margin-bottom: 16px;
+  font-weight: 500;
+  color: #495057;
+}
+
+.modal-content .input-field {
+  width: 100%;
+  margin-top: 4px;
+  background: white;
+}
+
+.modal-content small.hint {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+  color: #6c757d;
+}
+
+.modal-content input[type="checkbox"] {
+  margin-right: 8px;
+}
+
+.modal-actions {
+  display: flex;
+  gap: 12px;
+  justify-content: flex-end;
+  margin-top: 24px;
+}
+
+.btn-save, .btn-cancel {
+  padding: 8px 16px;
+  border: 1px solid #dee2e6;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.btn-save {
+  background: #007bff;
+  color: white;
+  border-color: #007bff;
+}
+
+.btn-save:hover:not(:disabled) {
+  background: #0056b3;
+}
+
+.btn-save:disabled {
+  background: #6c757d;
+  cursor: not-allowed;
+}
+
+.btn-cancel {
+  background: white;
+}
+
+.btn-cancel:hover {
+  background: #e9ecef;
+}
+</style>
