@@ -546,26 +546,34 @@ function getPollingProviders(providers, modelName, config) {
   console.log(`Available config:`, config.available);
   console.log(`Excluded config:`, config.excluded);
   
-  // 检查模型是否在排除池中
-  if (config.excluded && config.excluded[modelName]) {
-    console.log(`Model ${modelName} is in excluded pool, skipping polling`);
-    return [];
-  }
-  
   const available = config.available[modelName] || [];
   console.log(`Available provider IDs for ${modelName}:`, available);
+  
+  // 构建排除集合（新格式：数组）
+  const excludedSet = new Set();
+  if (Array.isArray(config.excluded)) {
+    config.excluded.forEach(item => {
+      if (item.modelName === modelName) {
+        excludedSet.add(item.providerId);
+      }
+    });
+  }
+  
+  console.log(`Excluded provider IDs for ${modelName}:`, Array.from(excludedSet));
   
   const pollingProviders = available
     .map(id => {
       const provider = providers.find(p => p.id === id);
       if (!provider) {
         console.log(`Provider with ID ${id} not found`);
+      } else if (excludedSet.has(id)) {
+        console.log(`Provider ${provider.name} (ID: ${id}) is excluded for model ${modelName}`);
       } else {
         console.log(`Found provider: ${provider.name} (ID: ${id}, disabled: ${provider.disabled})`);
       }
       return provider;
     })
-    .filter(p => p && !p.disabled);
+    .filter(p => p && !p.disabled && !excludedSet.has(p.id));
     
   console.log(`Final polling providers count: ${pollingProviders.length}`);
   pollingProviders.forEach(p => console.log(`- ${p.name} (ID: ${p.id})`));
@@ -577,12 +585,6 @@ function getPollingProviders(providers, modelName, config) {
 function getNextPollingProvider(providers, modelName, config, userSettings) {
   console.log(`Getting next polling provider for model: ${modelName}`);
   
-  // 检查模型是否在排除池中
-  if (config.excluded && config.excluded[modelName]) {
-    console.log(`Model ${modelName} is in excluded pool, skipping polling`);
-    return null;
-  }
-  
   const available = config.available[modelName] || [];
   console.log(`Available provider IDs for ${modelName}:`, available);
   
@@ -590,6 +592,18 @@ function getNextPollingProvider(providers, modelName, config, userSettings) {
     console.log(`No available providers for model ${modelName}`);
     return null;
   }
+  
+  // 构建排除集合（新格式：数组）
+  const excludedSet = new Set();
+  if (Array.isArray(config.excluded)) {
+    config.excluded.forEach(item => {
+      if (item.modelName === modelName) {
+        excludedSet.add(item.providerId);
+      }
+    });
+  }
+  
+  console.log(`Excluded provider IDs for ${modelName}:`, Array.from(excludedSet));
   
   // 获取或初始化轮询状态
   const pollingState = userSettings.pollingState || {};
@@ -630,13 +644,16 @@ function getNextPollingProvider(providers, modelName, config, userSettings) {
       // 检查该模型在该提供商是否被禁用
       const isModelDisabled = isModelDisabledForProvider(modelName, providerId, userSettings);
       
-      if (provider && !provider.disabled && !isModelDisabled) {
+      // 检查该提供商是否在排除池中
+      const isExcluded = excludedSet.has(providerId);
+      
+      if (provider && !provider.disabled && !isModelDisabled && !isExcluded) {
         selectedProvider = provider;
         modelState.usedInCurrentRound.push(providerId);
         console.log(`Selected provider: ${provider.name} (ID: ${providerId}) for model ${modelName}`);
         console.log(`Used providers in current round:`, modelState.usedInCurrentRound);
       } else {
-        console.log(`Provider ${providerId} not found, disabled, or model ${modelName} is disabled for this provider, skipping`);
+        console.log(`Provider ${providerId} not found, disabled, excluded, or model ${modelName} is disabled for this provider, skipping`);
       }
     } else {
       console.log(`Provider ${providerId} already used in current round, skipping`);
@@ -729,12 +746,6 @@ function getFailoverProviders(providers, modelName, config, userSettings, exclud
   console.log(`[Failover] Getting failover providers for model: ${modelName}`);
   console.log(`[Failover] Excluding providers: ${excludeProviderIds.join(', ')}`);
   
-  // 检查模型是否在排除池中
-  if (config.excluded && config.excluded[modelName]) {
-    console.log(`[Failover] Model ${modelName} is in excluded pool`);
-    return [];
-  }
-  
   const available = config.available[modelName] || [];
   console.log(`[Failover] Available provider IDs for ${modelName}:`, available);
   
@@ -742,6 +753,18 @@ function getFailoverProviders(providers, modelName, config, userSettings, exclud
     console.log(`[Failover] No available providers for model ${modelName}`);
     return [];
   }
+  
+  // 构建排除集合（新格式：数组）
+  const excludedFromPool = new Set();
+  if (Array.isArray(config.excluded)) {
+    config.excluded.forEach(item => {
+      if (item.modelName === modelName) {
+        excludedFromPool.add(item.providerId);
+      }
+    });
+  }
+  
+  console.log(`[Failover] Providers excluded from pool for ${modelName}:`, Array.from(excludedFromPool));
   
   // 获取轮询状态，确定起始位置
   const pollingState = userSettings.pollingState || {};
@@ -763,9 +786,15 @@ function getFailoverProviders(providers, modelName, config, userSettings, exclud
     const index = (startIndex + i) % available.length;
     const providerId = available[index];
     
-    // 跳过已排除的提供商
+    // 跳过已排除的提供商（从故障转移列表中排除）
     if (excludeProviderIds.includes(providerId)) {
       console.log(`[Failover] Provider ${providerId} already tried, skipping`);
+      continue;
+    }
+    
+    // 跳过在排除池中的提供商
+    if (excludedFromPool.has(providerId)) {
+      console.log(`[Failover] Provider ${providerId} is in excluded pool for model ${modelName}, skipping`);
       continue;
     }
     
@@ -1051,10 +1080,26 @@ app.get('/v1/models', verifyProxyApiKey, async (req, res) => {
     let availableModelNames = [];
     const availableModels = pollingConfig.available || {};
     
+    // 构建排除集合（新格式：数组）
+    const excludedModels = new Map(); // modelName -> Set of excluded providerIds
+    if (Array.isArray(pollingConfig.excluded)) {
+      pollingConfig.excluded.forEach(item => {
+        if (!excludedModels.has(item.modelName)) {
+          excludedModels.set(item.modelName, new Set());
+        }
+        excludedModels.get(item.modelName).add(item.providerId);
+      });
+    }
+    
     for (const modelName of Object.keys(availableModels)) {
-      const providers = availableModels[modelName] || [];
-      // 只有拥有至少2个提供商的模型才能被外部使用（与前台逻辑一致）
-      if (providers.length >= 2 && !pollingConfig.excluded?.[modelName]) {
+      const allProviders = availableModels[modelName] || [];
+      
+      // 过滤掉被排除的提供商
+      const excludedSet = excludedModels.get(modelName) || new Set();
+      const availableProviders = allProviders.filter(id => !excludedSet.has(id));
+      
+      // 只有拥有至少2个可用提供商的模型才能被外部使用
+      if (availableProviders.length >= 2) {
         availableModelNames.push(modelName);
       }
     }
@@ -1181,13 +1226,25 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
       });
     }
     
-    // 检查模型是否被排除
-    if (pollingConfig.excluded?.[pureModelName]) {
+    // 检查模型是否所有提供商都被排除
+    const excludedSet = new Set();
+    if (Array.isArray(pollingConfig.excluded)) {
+      pollingConfig.excluded.forEach(item => {
+        if (item.modelName === pureModelName) {
+          excludedSet.add(item.providerId);
+        }
+      });
+    }
+    
+    // 计算实际可用的提供商数量（排除被排除的）
+    const actualAvailableProviders = availableProviderIds.filter(id => !excludedSet.has(id));
+    
+    if (actualAvailableProviders.length === 0) {
       return res.status(400).json({
         error: {
-          message: `Model '${pureModelName}' is in the excluded pool.`,
+          message: `Model '${pureModelName}' has no available providers (all providers are excluded).`,
           type: 'invalid_request_error',
-          code: 'model_excluded'
+          code: 'all_providers_excluded'
         }
       });
     }
