@@ -133,6 +133,35 @@ app.get('/api/providers', async (req, res) => {
   res.json(data.providers);
 });
 
+app.get('/api/providers/export', async (req, res) => {
+  try {
+    const data = await getApiSettings();
+    const providersToExport = data.providers || [];
+    res.setHeader('Content-Type', 'application/json');
+    res.setHeader('Content-Disposition', 'attachment; filename=equal-ask-providers.json');
+    res.send(JSON.stringify(providersToExport, null, 2));
+  } catch (error) {
+    console.error('Error exporting providers:', error);
+    res.status(500).json({ error: 'Failed to export providers' });
+  }
+});
+
+app.post('/api/providers/import', async (req, res) => {
+  try {
+    const { providers } = req.body;
+    if (!Array.isArray(providers)) {
+      return res.status(400).json({ error: 'Invalid data format. "providers" must be an array.' });
+    }
+    const newSettings = { providers: providers };
+    await fs.writeFile(API_SETTINGS_FILE, JSON.stringify(newSettings, null, 2));
+    invalidateApiSettingsCache();
+    res.json({ success: true, message: `Imported ${providers.length} providers.` });
+  } catch (error) {
+    console.error('Error importing providers:', error);
+    res.status(500).json({ error: 'Failed to import providers' });
+  }
+});
+
 app.post('/api/providers', async (req, res) => {
   const data = await getApiSettings();
   const newProvider = { id: Date.now().toString(), ...req.body, failCount: 0, disabled: false };
