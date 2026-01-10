@@ -3,6 +3,7 @@ const cors = require('cors');
 const fs = require('fs').promises;
 const path = require('path');
 const axios = require('axios');
+const crypto = require('crypto');
 const { logApiCall, logSystemEvent, readLogs, parseLogsForStats, deleteLogs, clearAllLogs } = require('./logger');
 
 const app = express();
@@ -65,7 +66,8 @@ async function initDataDir() {
       pollingState: {}, // 存储每个模型的轮询状态
       modelFailCounts: {}, // 存储每个模型在每个提供商的失败计数
       proxyApiKey: '', // 代理接口密钥（向后兼容）
-      proxyApiKeys: {} // 多API密钥管理
+      proxyApiKeys: {}, // 多API密钥管理
+      conversationProviderMap: {} // 会话-提供商映射（用于对话连续性）
     }, null, 2));
   }
 }
@@ -108,7 +110,8 @@ async function getUserSettings() {
       pollingState: {}, // 存储每个模型的轮询状态
       modelFailCounts: {}, // 存储每个模型在每个提供商的失败计数
       proxyApiKey: '', // 代理接口密钥（向后兼容）
-      proxyApiKeys: {} // 多API密钥管理
+      proxyApiKeys: {}, // 多API密钥管理
+      conversationProviderMap: {} // 会话-提供商映射（用于对话连续性）
     };
   }
 }
@@ -128,6 +131,35 @@ function invalidateUserSettingsCache() {
 app.get('/api/providers', async (req, res) => {
   const data = await getApiSettings();
   res.json(data.providers);
+});
+
+app.get('/api/providers/export', async (req, res) => {
+  try {
+    const data = await getApiSettings();
+    const providersToExport = data.providers || [];
+    res.setHeader('Content-Type', 'application/json');
+    res.setHeader('Content-Disposition', 'attachment; filename=equal-ask-providers.json');
+    res.send(JSON.stringify(providersToExport, null, 2));
+  } catch (error) {
+    console.error('Error exporting providers:', error);
+    res.status(500).json({ error: 'Failed to export providers' });
+  }
+});
+
+app.post('/api/providers/import', async (req, res) => {
+  try {
+    const { providers } = req.body;
+    if (!Array.isArray(providers)) {
+      return res.status(400).json({ error: 'Invalid data format. "providers" must be an array.' });
+    }
+    const newSettings = { providers: providers };
+    await fs.writeFile(API_SETTINGS_FILE, JSON.stringify(newSettings, null, 2));
+    invalidateApiSettingsCache();
+    res.json({ success: true, message: `Imported ${providers.length} providers.` });
+  } catch (error) {
+    console.error('Error importing providers:', error);
+    res.status(500).json({ error: 'Failed to import providers' });
+  }
 });
 
 app.post('/api/providers', async (req, res) => {
@@ -399,31 +431,178 @@ function extractModelName(modelId) {
   return extractedName;
 }
 
+// ==================== 对话连续性：消息指纹识别 ====================
+
+// 生成消息指纹（基于前几条消息的内容）
+function generateMessageFingerprint(messages, modelName) {
+  if (!messages || messages.length === 0) {
+    return null;
+  }
+  
+  // 只使用前3条消息（或全部如果少于3条）来生成指纹
+  const messagesToHash = messages.slice(0, Math.min(3, messages.length));
+  
+  // 提取消息内容
+  const contentParts = messagesToHash.map(msg => {
+    if (typeof msg.content === 'string') {
+      return msg.content;
+    } else if (Array.isArray(msg.content)) {
+      // 处理多模态消息（只提取文本部分）
+      return msg.content
+        .filter(part => part.type === 'text')
+        .map(part => part.text)
+        .join('|');
+    }
+    return '';
+  });
+  
+  const contentString = contentParts.join('||');
+  const hash = crypto.createHash('md5').update(`${modelName}:${contentString}`).digest('hex');
+  
+  console.log(`[Fingerprint] Generated fingerprint for ${messagesToHash.length} messages: ${hash.substring(0, 8)}...`);
+  return hash;
+}
+
+// 提取会话标识（优先使用user字段或X-Session-ID header）
+function extractSessionId(req) {
+  // 1. 尝试从自定义header获取
+  const headerSessionId = req.headers['x-session-id'];
+  if (headerSessionId) {
+    console.log(`[Session] Found session ID in header: ${headerSessionId}`);
+    return headerSessionId;
+  }
+  
+  // 2. 尝试从请求体的user字段获取
+  const userField = req.body?.user;
+  if (userField && typeof userField === 'string') {
+    console.log(`[Session] Found session ID in user field: ${userField}`);
+    return userField;
+  }
+  
+  return null;
+}
+
+// 获取或创建会话的提供商绑定
+function getConversationProvider(sessionIdentifier, modelName, userSettings, providers, pollingConfig) {
+  if (!userSettings.conversationProviderMap) {
+    userSettings.conversationProviderMap = {};
+  }
+  
+  const key = `${modelName}:${sessionIdentifier}`;
+  const mapping = userSettings.conversationProviderMap[key];
+  
+  if (mapping) {
+    // 检查映射的提供商是否仍然可用
+    const provider = providers.find(p => p.id === mapping.providerId);
+    if (provider && !provider.disabled) {
+      // 检查该模型在该提供商是否被禁用
+      const isModelDisabled = isModelDisabledForProvider(modelName, mapping.providerId, userSettings);
+      if (!isModelDisabled) {
+        // 更新最后使用时间和消息计数
+        mapping.lastUsed = new Date().toISOString();
+        mapping.messageCount = (mapping.messageCount || 0) + 1;
+        console.log(`[Session] Using existing provider ${provider.name} for conversation ${key}`);
+        return provider;
+      } else {
+        console.log(`[Session] Model ${modelName} is disabled for provider ${mapping.providerId}, will select new provider`);
+      }
+    } else {
+      console.log(`[Session] Mapped provider ${mapping.providerId} is no longer available, will select new provider`);
+    }
+  }
+  
+  return null;
+}
+
+// 保存会话-提供商映射
+function saveConversationProvider(sessionIdentifier, modelName, providerId, userSettings) {
+  if (!userSettings.conversationProviderMap) {
+    userSettings.conversationProviderMap = {};
+  }
+  
+  const key = `${modelName}:${sessionIdentifier}`;
+  userSettings.conversationProviderMap[key] = {
+    providerId: providerId,
+    modelName: modelName,
+    lastUsed: new Date().toISOString(),
+    messageCount: 1,
+    createdAt: userSettings.conversationProviderMap[key]?.createdAt || new Date().toISOString()
+  };
+  
+  console.log(`[Session] Saved provider ${providerId} for conversation ${key}`);
+}
+
+// 清理过期的会话映射（超过24小时未使用）
+function cleanupExpiredConversations(userSettings) {
+  if (!userSettings.conversationProviderMap) {
+    return 0;
+  }
+  
+  const now = new Date();
+  const expirationTime = 24 * 60 * 60 * 1000; // 24小时
+  let cleanedCount = 0;
+  
+  for (const key in userSettings.conversationProviderMap) {
+    const mapping = userSettings.conversationProviderMap[key];
+    const lastUsed = new Date(mapping.lastUsed);
+    const age = now - lastUsed;
+    
+    if (age > expirationTime) {
+      delete userSettings.conversationProviderMap[key];
+      cleanedCount++;
+    }
+  }
+  
+  // 限制映射表大小（最多保存1000条）
+  const entries = Object.entries(userSettings.conversationProviderMap);
+  if (entries.length > 1000) {
+    // 按最后使用时间排序，删除最旧的
+    entries.sort((a, b) => new Date(b[1].lastUsed) - new Date(a[1].lastUsed));
+    const toKeep = entries.slice(0, 1000);
+    userSettings.conversationProviderMap = Object.fromEntries(toKeep);
+    cleanedCount += entries.length - 1000;
+  }
+  
+  if (cleanedCount > 0) {
+    console.log(`[Session] Cleaned up ${cleanedCount} expired conversation mappings`);
+  }
+  
+  return cleanedCount;
+}
+
 function getPollingProviders(providers, modelName, config) {
   console.log(`Getting polling providers for model: ${modelName}`);
   console.log(`Available config:`, config.available);
   console.log(`Excluded config:`, config.excluded);
   
-  // 检查模型是否在排除池中
-  if (config.excluded && config.excluded[modelName]) {
-    console.log(`Model ${modelName} is in excluded pool, skipping polling`);
-    return [];
-  }
-  
   const available = config.available[modelName] || [];
   console.log(`Available provider IDs for ${modelName}:`, available);
+  
+  // 构建排除集合（新格式：数组）
+  const excludedSet = new Set();
+  if (Array.isArray(config.excluded)) {
+    config.excluded.forEach(item => {
+      if (item.modelName === modelName) {
+        excludedSet.add(item.providerId);
+      }
+    });
+  }
+  
+  console.log(`Excluded provider IDs for ${modelName}:`, Array.from(excludedSet));
   
   const pollingProviders = available
     .map(id => {
       const provider = providers.find(p => p.id === id);
       if (!provider) {
         console.log(`Provider with ID ${id} not found`);
+      } else if (excludedSet.has(id)) {
+        console.log(`Provider ${provider.name} (ID: ${id}) is excluded for model ${modelName}`);
       } else {
         console.log(`Found provider: ${provider.name} (ID: ${id}, disabled: ${provider.disabled})`);
       }
       return provider;
     })
-    .filter(p => p && !p.disabled);
+    .filter(p => p && !p.disabled && !excludedSet.has(p.id));
     
   console.log(`Final polling providers count: ${pollingProviders.length}`);
   pollingProviders.forEach(p => console.log(`- ${p.name} (ID: ${p.id})`));
@@ -435,12 +614,6 @@ function getPollingProviders(providers, modelName, config) {
 function getNextPollingProvider(providers, modelName, config, userSettings) {
   console.log(`Getting next polling provider for model: ${modelName}`);
   
-  // 检查模型是否在排除池中
-  if (config.excluded && config.excluded[modelName]) {
-    console.log(`Model ${modelName} is in excluded pool, skipping polling`);
-    return null;
-  }
-  
   const available = config.available[modelName] || [];
   console.log(`Available provider IDs for ${modelName}:`, available);
   
@@ -448,6 +621,18 @@ function getNextPollingProvider(providers, modelName, config, userSettings) {
     console.log(`No available providers for model ${modelName}`);
     return null;
   }
+  
+  // 构建排除集合（新格式：数组）
+  const excludedSet = new Set();
+  if (Array.isArray(config.excluded)) {
+    config.excluded.forEach(item => {
+      if (item.modelName === modelName) {
+        excludedSet.add(item.providerId);
+      }
+    });
+  }
+  
+  console.log(`Excluded provider IDs for ${modelName}:`, Array.from(excludedSet));
   
   // 获取或初始化轮询状态
   const pollingState = userSettings.pollingState || {};
@@ -488,13 +673,16 @@ function getNextPollingProvider(providers, modelName, config, userSettings) {
       // 检查该模型在该提供商是否被禁用
       const isModelDisabled = isModelDisabledForProvider(modelName, providerId, userSettings);
       
-      if (provider && !provider.disabled && !isModelDisabled) {
+      // 检查该提供商是否在排除池中
+      const isExcluded = excludedSet.has(providerId);
+      
+      if (provider && !provider.disabled && !isModelDisabled && !isExcluded) {
         selectedProvider = provider;
         modelState.usedInCurrentRound.push(providerId);
         console.log(`Selected provider: ${provider.name} (ID: ${providerId}) for model ${modelName}`);
         console.log(`Used providers in current round:`, modelState.usedInCurrentRound);
       } else {
-        console.log(`Provider ${providerId} not found, disabled, or model ${modelName} is disabled for this provider, skipping`);
+        console.log(`Provider ${providerId} not found, disabled, excluded, or model ${modelName} is disabled for this provider, skipping`);
       }
     } else {
       console.log(`Provider ${providerId} already used in current round, skipping`);
@@ -587,12 +775,6 @@ function getFailoverProviders(providers, modelName, config, userSettings, exclud
   console.log(`[Failover] Getting failover providers for model: ${modelName}`);
   console.log(`[Failover] Excluding providers: ${excludeProviderIds.join(', ')}`);
   
-  // 检查模型是否在排除池中
-  if (config.excluded && config.excluded[modelName]) {
-    console.log(`[Failover] Model ${modelName} is in excluded pool`);
-    return [];
-  }
-  
   const available = config.available[modelName] || [];
   console.log(`[Failover] Available provider IDs for ${modelName}:`, available);
   
@@ -600,6 +782,18 @@ function getFailoverProviders(providers, modelName, config, userSettings, exclud
     console.log(`[Failover] No available providers for model ${modelName}`);
     return [];
   }
+  
+  // 构建排除集合（新格式：数组）
+  const excludedFromPool = new Set();
+  if (Array.isArray(config.excluded)) {
+    config.excluded.forEach(item => {
+      if (item.modelName === modelName) {
+        excludedFromPool.add(item.providerId);
+      }
+    });
+  }
+  
+  console.log(`[Failover] Providers excluded from pool for ${modelName}:`, Array.from(excludedFromPool));
   
   // 获取轮询状态，确定起始位置
   const pollingState = userSettings.pollingState || {};
@@ -621,9 +815,15 @@ function getFailoverProviders(providers, modelName, config, userSettings, exclud
     const index = (startIndex + i) % available.length;
     const providerId = available[index];
     
-    // 跳过已排除的提供商
+    // 跳过已排除的提供商（从故障转移列表中排除）
     if (excludeProviderIds.includes(providerId)) {
       console.log(`[Failover] Provider ${providerId} already tried, skipping`);
+      continue;
+    }
+    
+    // 跳过在排除池中的提供商
+    if (excludedFromPool.has(providerId)) {
+      console.log(`[Failover] Provider ${providerId} is in excluded pool for model ${modelName}, skipping`);
       continue;
     }
     
@@ -909,10 +1109,26 @@ app.get('/v1/models', verifyProxyApiKey, async (req, res) => {
     let availableModelNames = [];
     const availableModels = pollingConfig.available || {};
     
+    // 构建排除集合（新格式：数组）
+    const excludedModels = new Map(); // modelName -> Set of excluded providerIds
+    if (Array.isArray(pollingConfig.excluded)) {
+      pollingConfig.excluded.forEach(item => {
+        if (!excludedModels.has(item.modelName)) {
+          excludedModels.set(item.modelName, new Set());
+        }
+        excludedModels.get(item.modelName).add(item.providerId);
+      });
+    }
+    
     for (const modelName of Object.keys(availableModels)) {
-      const providers = availableModels[modelName] || [];
-      // 只有拥有至少2个提供商的模型才能被外部使用（与前台逻辑一致）
-      if (providers.length >= 2 && !pollingConfig.excluded?.[modelName]) {
+      const allProviders = availableModels[modelName] || [];
+      
+      // 过滤掉被排除的提供商
+      const excludedSet = excludedModels.get(modelName) || new Set();
+      const availableProviders = allProviders.filter(id => !excludedSet.has(id));
+      
+      // 只有拥有至少2个可用提供商的模型才能被外部使用
+      if (availableProviders.length >= 2) {
         availableModelNames.push(modelName);
       }
     }
@@ -980,6 +1196,23 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
     const userSettings = await getUserSettings();
     const pollingConfig = userSettings.pollingConfig || { available: {}, excluded: {} };
     
+    // ==================== 会话识别机制（混合模式） ====================
+    // 1. 提取session_id（优先级：X-Session-ID header > user字段）
+    const sessionId = extractSessionId(req);
+    
+    // 2. 生成消息指纹（基于前几条消息内容）
+    const messageFingerprint = generateMessageFingerprint(messages, model);
+    
+    // 3. 确定会话标识符（优先使用session_id，否则使用消息指纹）
+    const sessionIdentifier = sessionId || messageFingerprint;
+    
+    console.log(`[Session] Session ID: ${sessionId || 'none'}`);
+    console.log(`[Session] Message Fingerprint: ${messageFingerprint ? messageFingerprint.substring(0, 8) + '...' : 'none'}`);
+    console.log(`[Session] Using identifier: ${sessionIdentifier ? sessionIdentifier.substring(0, 16) + '...' : 'none'}`);
+    
+    // 定期清理过期的会话映射
+    cleanupExpiredConversations(userSettings);
+    
     // 确定要使用的模型名称
     let modelName = model;
     
@@ -1022,13 +1255,25 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
       });
     }
     
-    // 检查模型是否被排除
-    if (pollingConfig.excluded?.[pureModelName]) {
+    // 检查模型是否所有提供商都被排除
+    const excludedSet = new Set();
+    if (Array.isArray(pollingConfig.excluded)) {
+      pollingConfig.excluded.forEach(item => {
+        if (item.modelName === pureModelName) {
+          excludedSet.add(item.providerId);
+        }
+      });
+    }
+    
+    // 计算实际可用的提供商数量（排除被排除的）
+    const actualAvailableProviders = availableProviderIds.filter(id => !excludedSet.has(id));
+    
+    if (actualAvailableProviders.length === 0) {
       return res.status(400).json({
         error: {
-          message: `Model '${pureModelName}' is in the excluded pool.`,
+          message: `Model '${pureModelName}' has no available providers (all providers are excluded).`,
           type: 'invalid_request_error',
-          code: 'model_excluded'
+          code: 'all_providers_excluded'
         }
       });
     }
@@ -1055,12 +1300,58 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
     
     console.log(`[Proxy] Request parameters - temperature: ${params.temperature}, max_tokens: ${params.max_tokens}, top_p: ${params.top_p}`);
     
+    // ==================== 会话绑定机制：优先使用已绑定的提供商 ====================
+    let selectedProvider = null;
+    const isNewConversation = messages.length === 1 && messages[0].role === 'user';
+
+    // 如果是新对话，则必须忽略之前的绑定，以避免历史记录污染
+    if (isNewConversation && sessionIdentifier) {
+        const key = `${pureModelName}:${sessionIdentifier}`;
+        if (userSettings.conversationProviderMap && userSettings.conversationProviderMap[key]) {
+            console.log(`[Session] New conversation detected. Deleting old provider binding for key: ${key}`);
+            delete userSettings.conversationProviderMap[key];
+        }
+    }
+
+    // 如果有会话标识符且不是新对话，则尝试获取绑定的提供商
+    if (sessionIdentifier && !isNewConversation) {
+      selectedProvider = getConversationProvider(
+        sessionIdentifier,
+        pureModelName,
+        userSettings,
+        settings.providers,
+        pollingConfig
+      );
+      
+      if (selectedProvider) {
+        console.log(`[Session] Found existing provider binding: ${selectedProvider.name} (ID: ${selectedProvider.id})`);
+      } else {
+        console.log(`[Session] No existing provider binding found, will select new provider`);
+      }
+    }
+    
     // ==================== 自动故障转移逻辑 ====================
     const errors = []; // 收集所有失败的错误信息
     const triedProviderIds = []; // 记录已尝试的提供商ID
     
-    // 获取所有可用于故障转移的提供商
-    const failoverProviders = getFailoverProviders(settings.providers, pureModelName, pollingConfig, userSettings, []);
+    // 如果有已绑定的提供商，优先尝试它
+    let failoverProviders = [];
+    if (selectedProvider) {
+      // 将已绑定的提供商放在第一位
+      failoverProviders = [selectedProvider];
+      // 获取其他可用的提供商作为备选
+      const otherProviders = getFailoverProviders(
+        settings.providers,
+        pureModelName,
+        pollingConfig,
+        userSettings,
+        [selectedProvider.id]
+      );
+      failoverProviders = failoverProviders.concat(otherProviders);
+    } else {
+      // 没有绑定的提供商，获取所有可用的提供商
+      failoverProviders = getFailoverProviders(settings.providers, pureModelName, pollingConfig, userSettings, []);
+    }
     
     if (failoverProviders.length === 0) {
       console.log(`[Proxy] No available providers for model ${pureModelName}`);
@@ -1132,6 +1423,13 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
             await logApiCall(selectedProvider.name, pureModelName, true);
             await resetModelFailCount(selectedProvider.id, pureModelName, userSettings);
             updatePollingStateAfterSuccess(pureModelName, selectedProvider.id, pollingConfig, userSettings);
+            
+            // 保存会话-提供商绑定
+            if (sessionIdentifier) {
+              saveConversationProvider(sessionIdentifier, pureModelName, selectedProvider.id, userSettings);
+              console.log(`[Session] Saved provider binding for session`);
+            }
+            
             await savePollingState(userSettings);
             console.log(`[Proxy] Stream completed successfully using provider ${selectedProvider.name}`);
             res.end();
@@ -1180,6 +1478,13 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
           await logApiCall(selectedProvider.name, pureModelName, true);
           await resetModelFailCount(selectedProvider.id, pureModelName, userSettings);
           updatePollingStateAfterSuccess(pureModelName, selectedProvider.id, pollingConfig, userSettings);
+          
+          // 保存会话-提供商绑定
+          if (sessionIdentifier) {
+            saveConversationProvider(sessionIdentifier, pureModelName, selectedProvider.id, userSettings);
+            console.log(`[Session] Saved provider binding for session`);
+          }
+          
           await savePollingState(userSettings);
           
           console.log(`[Proxy] Request completed successfully using provider ${selectedProvider.name}`);

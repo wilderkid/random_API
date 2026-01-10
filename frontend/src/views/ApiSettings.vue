@@ -4,7 +4,11 @@
     <div class="providers-sidebar">
       <div class="sidebar-header">
         <input v-model="searchProvider" placeholder="搜索模型平台名..." class="search-input">
-        <button @click="showAddProvider = true" class="btn-add-provider">+ 添加提供商</button>
+        <div class="button-group">
+          <button @click="showAddProvider = true" class="btn-add-provider">+ 添加</button>
+          <button @click="importProviders" class="btn-import">导入</button>
+          <button @click="exportProviders" class="btn-export">导出</button>
+        </div>
       </div>
       
       <div class="providers-list">
@@ -419,6 +423,50 @@ async function addModelManually() {
   }
 }
 
+async function exportProviders() {
+  try {
+    const response = await axios.get('/api/providers/export', {
+      responseType: 'blob',
+    });
+    const url = window.URL.createObjectURL(new Blob([response.data]));
+    const link = document.createElement('a');
+    const date = new Date().toISOString().slice(0, 10);
+    link.href = url;
+    link.setAttribute('download', `equal-ask-providers-${date}.json`);
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  } catch (error) {
+    alert('导出失败: ' + (error.response?.data?.error || error.message));
+  }
+}
+
+function importProviders() {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.json';
+  input.onchange = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      try {
+        const content = JSON.parse(event.target.result);
+        if (confirm(`确定要导入 ${content.length} 个提供商吗？这将覆盖所有现有提供商。`)) {
+          await axios.post('/api/providers/import', { providers: content });
+          alert('导入成功！');
+          await loadProviders();
+        }
+      } catch (error) {
+        alert('导入失败，请检查文件格式是否正确: ' + error.message);
+      }
+    };
+    reader.readAsText(file);
+  };
+  input.click();
+}
+
 onMounted(loadProviders)
 </script>
 
@@ -450,18 +498,41 @@ onMounted(loadProviders)
   margin-bottom: 12px;
 }
 
-.btn-add-provider {
-  width: 100%;
+.button-group {
+  display: flex;
+  gap: 8px;
+}
+
+.btn-add-provider, .btn-import, .btn-export {
+  flex: 1;
   padding: 8px 12px;
-  background: #007bff;
   color: white;
   border: none;
   border-radius: 4px;
   cursor: pointer;
+  text-align: center;
 }
 
+.btn-add-provider {
+  background: #007bff;
+}
 .btn-add-provider:hover {
   background: #0056b3;
+}
+
+.btn-import {
+  background: #28a745;
+}
+.btn-import:hover {
+  background: #1e7e34;
+}
+
+.btn-export {
+  background: #ffc107;
+  color: #212529;
+}
+.btn-export:hover {
+  background: #e0a800;
 }
 
 .providers-list {

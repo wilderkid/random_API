@@ -6,7 +6,7 @@
       <h4>调试信息</h4>
       <p>提供商数量: {{ providers.length }}</p>
       <p>可用池模型数量: {{ Object.keys(availableGroups).length }}</p>
-      <p>排除池模型数量: {{ excludedModels.length }}</p>
+      <p>排除池项数量: {{ excludedItems.length }}</p>
       <p>禁用项数量: {{ disabledItems.length }}</p>
       <button @click="refreshConfig" class="btn-refresh">刷新配置</button>
     </div>
@@ -22,7 +22,7 @@
         <div v-for="(group, modelName) in availableGroups" :key="modelName" class="model-group">
           <div class="group-header" @click="toggleGroup(modelName)">
             <span>{{ modelName }} ({{ group.length }})</span>
-            <button @click.stop="moveToExcluded(modelName)" class="btn-arrow">→</button>
+            <button @click.stop="moveAllToExcluded(modelName)" class="btn-arrow" title="排除所有">→→</button>
           </div>
           <div v-if="expandedGroups[modelName]" class="group-content">
             <div v-for="(item, idx) in group" :key="item.id"
@@ -34,19 +34,23 @@
                 <div class="provider-name">{{ item.providerName }}</div>
                 <div class="model-id">{{ item.modelId }}</div>
               </div>
+              <button @click="excludeProviderModel(item.id, modelName)" class="btn-exclude" title="排除此项">→</button>
             </div>
           </div>
         </div>
       </div>
       
       <div class="column excluded-pool">
-        <h3>排除池 ({{ excludedModels.length }})</h3>
-        <div v-if="excludedModels.length === 0" class="empty-state">
+        <h3>排除池 ({{ excludedItems.length }})</h3>
+        <div v-if="excludedItems.length === 0" class="empty-state">
           <p>暂无排除的模型</p>
         </div>
-        <div v-for="modelName in excludedModels" :key="modelName" class="excluded-item">
-          <span>{{ modelName }}</span>
-          <button @click="moveToAvailable(modelName)" class="btn-arrow">←</button>
+        <div v-for="item in excludedItems" :key="item.id" class="excluded-item">
+          <div class="excluded-info">
+            <div class="provider-name">{{ item.providerName }}</div>
+            <div class="model-name">{{ item.modelName }}</div>
+          </div>
+          <button @click="moveToAvailable(item.id, item.modelName)" class="btn-arrow">←</button>
         </div>
       </div>
       
@@ -75,7 +79,7 @@
 import { ref, computed, onMounted } from 'vue'
 import axios from 'axios'
 
-const settings = ref({ pollingConfig: { available: {}, excluded: {}, disabled: {} } })
+const settings = ref({ pollingConfig: { available: {}, excluded: [] } })
 const providers = ref([])
 const expandedGroups = ref({})
 const dragData = ref(null)
@@ -83,33 +87,52 @@ const showDebug = ref(false)
 
 const availableGroups = computed(() => {
   const groups = {}
+  const excludedSet = new Set(
+    (settings.value.pollingConfig.excluded || []).map(item => `${item.providerId}:${item.modelName}`)
+  )
+  
   for (const [modelName, providerIds] of Object.entries(settings.value.pollingConfig.available)) {
-    groups[modelName] = providerIds.map(id => {
-      const provider = providers.value.find(p => p.id === id)
-      // 找到该提供商中对应的具体模型ID
-      let actualModelId = modelName
-      if (provider && provider.models) {
-        const matchedModel = provider.models.find(m => {
-          const extractedName = m.id.includes('/') ? m.id.split('/').pop() : m.id
-          return extractedName === modelName
-        })
-        if (matchedModel) {
-          actualModelId = matchedModel.id
-        }
-      }
-      return {
-        id,
-        providerName: provider?.name || id,
-        modelId: actualModelId,
-        displayName: `${provider?.name || id} - ${actualModelId}`
-      }
+    const availableProviders = providerIds.filter(id => {
+      return !excludedSet.has(`${id}:${modelName}`)
     })
+    
+    if (availableProviders.length > 0) {
+      groups[modelName] = availableProviders.map(id => {
+        const provider = providers.value.find(p => p.id === id)
+        // 找到该提供商中对应的具体模型ID
+        let actualModelId = modelName
+        if (provider && provider.models) {
+          const matchedModel = provider.models.find(m => {
+            const extractedName = m.id.includes('/') ? m.id.split('/').pop() : m.id
+            return extractedName === modelName
+          })
+          if (matchedModel) {
+            actualModelId = matchedModel.id
+          }
+        }
+        return {
+          id,
+          providerName: provider?.name || id,
+          modelId: actualModelId,
+          displayName: `${provider?.name || id} - ${actualModelId}`
+        }
+      })
+    }
   }
   return groups
 })
 
-const excludedModels = computed(() => {
-  return Object.keys(settings.value.pollingConfig.excluded)
+const excludedItems = computed(() => {
+  const excluded = settings.value.pollingConfig.excluded || []
+  return excluded.map(item => {
+    const provider = providers.value.find(p => p.id === item.providerId)
+    return {
+      id: `${item.providerId}:${item.modelName}`,
+      providerId: item.providerId,
+      providerName: provider?.name || item.providerId,
+      modelName: item.modelName
+    }
+  })
 })
 
 const disabledItems = computed(() => {
@@ -149,7 +172,17 @@ async function loadData() {
   providers.value = providersRes.data
   
   if (!settings.value.pollingConfig) {
-    settings.value.pollingConfig = { available: {}, excluded: {}, disabled: {} }
+    settings.value.pollingConfig = { available: {}, excluded: [] }
+  }
+  if (!Array.isArray(settings.value.pollingConfig.excluded)) {
+    // 兼容旧格式：将对象格式转换为数组格式
+    const oldExcluded = settings.value.pollingConfig.excluded || {}
+    settings.value.pollingConfig.excluded = []
+    Object.entries(oldExcluded).forEach(([modelName, providerIds]) => {
+      providerIds.forEach(providerId => {
+        settings.value.pollingConfig.excluded.push({ providerId, modelName })
+      })
+    })
   }
   
   // 总是重新构建轮询配置以确保数据是最新的
@@ -174,6 +207,14 @@ async function buildPollingConfig() {
       provider.models.forEach(model => {
         if (model.visible !== false) { // 只统计可见的模型
           const modelName = model.id.includes('/') ? model.id.split('/').pop() : model.id
+          
+          // 检查该模型是否被禁用
+          const isDisabled = settings.value.disabledModels?.[provider.id]?.includes(modelName)
+          if (isDisabled) {
+            console.log(`Skipping disabled model: ${provider.name} - ${modelName}`)
+            return
+          }
+          
           if (!modelMap[modelName]) modelMap[modelName] = []
           // 避免重复添加同一个提供商
           if (!modelMap[modelName].includes(provider.id)) {
@@ -197,11 +238,16 @@ async function buildPollingConfig() {
   
   console.log('Duplicate models:', duplicateModels)
   
-  // 保留现有的排除池配置
-  const existingExcluded = settings.value.pollingConfig.excluded || {}
+  // 保留现有的排除池配置（数组格式）
+  const existingExcluded = settings.value.pollingConfig.excluded || []
+  
+  // 清理排除池中不再存在的模型
+  const validExcluded = existingExcluded.filter(item => {
+    return duplicateModels[item.modelName]?.includes(item.providerId)
+  })
   
   settings.value.pollingConfig.available = duplicateModels
-  settings.value.pollingConfig.excluded = existingExcluded
+  settings.value.pollingConfig.excluded = validExcluded
   
   await saveSettings()
   console.log('Polling config saved')
@@ -211,21 +257,55 @@ function toggleGroup(modelName) {
   expandedGroups.value[modelName] = !expandedGroups.value[modelName]
 }
 
-function moveToExcluded(modelName) {
-  // 将模型从可用池移动到排除池
-  if (settings.value.pollingConfig.available[modelName]) {
-    settings.value.pollingConfig.excluded[modelName] = [...settings.value.pollingConfig.available[modelName]]
-    delete settings.value.pollingConfig.available[modelName]
+function excludeProviderModel(providerId, modelName) {
+  // 将特定提供商的模型添加到排除池
+  if (!settings.value.pollingConfig.excluded) {
+    settings.value.pollingConfig.excluded = []
+  }
+  
+  // 检查是否已存在
+  const exists = settings.value.pollingConfig.excluded.some(
+    item => item.providerId === providerId && item.modelName === modelName
+  )
+  
+  if (!exists) {
+    settings.value.pollingConfig.excluded.push({ providerId, modelName })
     saveSettings()
   }
 }
 
-function moveToAvailable(modelName) {
-  // 将模型从排除池移回可用池
-  if (settings.value.pollingConfig.excluded[modelName]) {
-    settings.value.pollingConfig.available[modelName] = [...settings.value.pollingConfig.excluded[modelName]]
-    delete settings.value.pollingConfig.excluded[modelName]
+function moveAllToExcluded(modelName) {
+  // 将模型的所有提供商移动到排除池
+  if (settings.value.pollingConfig.available[modelName]) {
+    if (!settings.value.pollingConfig.excluded) {
+      settings.value.pollingConfig.excluded = []
+    }
+    
+    settings.value.pollingConfig.available[modelName].forEach(providerId => {
+      const exists = settings.value.pollingConfig.excluded.some(
+        item => item.providerId === providerId && item.modelName === modelName
+      )
+      if (!exists) {
+        settings.value.pollingConfig.excluded.push({ providerId, modelName })
+      }
+    })
+    
     saveSettings()
+  }
+}
+
+function moveToAvailable(itemId, modelName) {
+  // 将模型从排除池移回可用池
+  const [providerId] = itemId.split(':')
+  
+  if (settings.value.pollingConfig.excluded) {
+    const index = settings.value.pollingConfig.excluded.findIndex(
+      item => item.providerId === providerId && item.modelName === modelName
+    )
+    if (index > -1) {
+      settings.value.pollingConfig.excluded.splice(index, 1)
+      saveSettings()
+    }
   }
 }
 
@@ -361,6 +441,9 @@ onMounted(loadData)
 }
 
 .provider-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
   padding: 6px 12px;
   margin: 2px 0;
   background: #fff;
@@ -373,10 +456,15 @@ onMounted(loadData)
   background: #f8f9fa;
 }
 
+.provider-item:hover .btn-exclude {
+  opacity: 1;
+}
+
 .provider-info {
   display: flex;
   flex-direction: column;
   gap: 2px;
+  flex: 1;
 }
 
 .provider-name {
@@ -390,15 +478,50 @@ onMounted(loadData)
   font-family: monospace;
 }
 
+.btn-exclude {
+  padding: 2px 6px;
+  border: 1px solid #dee2e6;
+  border-radius: 3px;
+  background: white;
+  cursor: pointer;
+  font-size: 11px;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.btn-exclude:hover {
+  background: #ffc107;
+  border-color: #ffc107;
+  color: white;
+}
+
 .excluded-item, .disabled-item {
   display: flex;
   justify-content: space-between;
   align-items: center;
   padding: 8px 12px;
   margin: 5px 0;
-  background: #f8f9fa;
-  border: 1px solid #dee2e6;
+  background: #fff3cd;
+  border: 1px solid #ffc107;
   border-radius: 4px;
+}
+
+.excluded-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.excluded-info .provider-name {
+  font-weight: 500;
+  color: #495057;
+  font-size: 13px;
+}
+
+.excluded-info .model-name {
+  font-size: 11px;
+  color: #6c757d;
+  font-family: monospace;
 }
 
 .disabled-item {
