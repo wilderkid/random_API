@@ -1365,6 +1365,44 @@ function sendErrorResponse(res, stream, error, statusCode = 500) {
 // Global background task processor instance
 const backgroundProcessor = new BackgroundTaskProcessor();
 
+function buildStreamingChunkFromCompletion(completion) {
+  if (!completion || !Array.isArray(completion.choices) || completion.choices.length === 0) {
+    return null;
+  }
+
+  const created = completion.created || Math.floor(Date.now() / 1000);
+  const model = completion.model || 'unknown';
+  const id = completion.id || `chatcmpl-${created}-${Math.floor(Math.random() * 100000)}`;
+
+  const choices = completion.choices.map((choice, index) => {
+    const message = choice.message || {};
+    const content = typeof message.content === 'string' ? message.content : '';
+
+    return {
+      index: choice.index !== undefined ? choice.index : index,
+      delta: {
+        role: message.role || 'assistant',
+        content
+      },
+      finish_reason: choice.finish_reason || null
+    };
+  });
+
+  const chunk = {
+    id,
+    object: 'chat.completion.chunk',
+    created,
+    model,
+    choices
+  };
+
+  if (completion.usage) {
+    chunk.usage = completion.usage;
+  }
+
+  return chunk;
+}
+
 // Performance optimization: Simplified streaming response handler
 async function handleStreamingResponse(response, res, stream, selectedProvider, pureModelName, userSettings, pollingConfig, sessionIdentifier) {
   const originalContentType = response.headers['content-type'];
@@ -1410,8 +1448,10 @@ async function handleStreamingResponse(response, res, stream, selectedProvider, 
         const jsonData = JSON.parse(fullData);
 
         if (stream) {
-          // Convert to SSE format
-          const sseData = `data: ${JSON.stringify(jsonData)}\n\ndata: [DONE]\n\n`;
+          // Convert a non-stream JSON completion to a single SSE chunk
+          const sseChunk = buildStreamingChunkFromCompletion(jsonData);
+          const payload = sseChunk || jsonData;
+          const sseData = `data: ${JSON.stringify(payload)}\n\ndata: [DONE]\n\n`;
           res.end(sseData, 'utf8');
         } else {
           // Return JSON directly
@@ -1423,7 +1463,12 @@ async function handleStreamingResponse(response, res, stream, selectedProvider, 
 
       } catch (parseError) {
         log.error('Error parsing response:', parseError);
-        res.status(500).json({ error: 'Invalid response format' });
+        if (stream) {
+          res.write(`data: ${JSON.stringify({ error: { message: 'Invalid response format' } })}\n\n`);
+          res.end();
+        } else {
+          res.status(500).json({ error: 'Invalid response format' });
+        }
       }
     });
   }
