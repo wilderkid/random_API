@@ -9,39 +9,10 @@ const { logApiCall, logSystemEvent, readLogs, parseLogsForStats, deleteLogs, cle
 const app = express();
 const PORT = 3000;
 
-// Performance optimization: Add debug mode control
-const DEBUG_MODE = process.env.NODE_ENV !== 'production';
-const VERBOSE_LOGGING = process.env.VERBOSE_LOGGING === 'true';
-
-// Optimized logging functions
-const log = {
-  debug: DEBUG_MODE ? console.log : () => {},
-  verbose: (DEBUG_MODE && VERBOSE_LOGGING) ? console.log : () => {},
-  info: console.log,
-  error: console.error,
-  warn: console.warn
-};
-
 app.use(cors());
 app.use(express.json({ limit: '50mb' })); // 增加请求体大小限制
 app.use(express.urlencoded({ limit: '50mb', extended: true })); // 增加URL编码请求体大小限制
 app.use(express.static(path.join(__dirname, '../frontend/dist')));
-
-// 添加全局CORS中间件，确保所有响应都包含CORS头
-app.use((req, res, next) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Session-ID');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.setHeader('Access-Control-Max-Age', '86400');
-
-  // 处理OPTIONS预检请求
-  if (req.method === 'OPTIONS') {
-    console.log(`[DEBUG] Handling OPTIONS request for ${req.path}`);
-    return res.status(200).end();
-  }
-
-  next();
-});
 
 const DATA_DIR = path.join(__dirname, '../data');
 const API_SETTINGS_FILE = path.join(DATA_DIR, 'api_settings.json');
@@ -56,22 +27,16 @@ let apiSettingsCacheTime = 0;
 let userSettingsCacheTime = 0;
 const CACHE_TTL = 5000; // 5秒缓存
 
-// Performance optimization: Enhanced HTTP agents with better configuration
+// 性能优化：创建 HTTP 连接池
 const httpAgent = new require('http').Agent({
   keepAlive: true,
-  maxSockets: 100, // Increased from 50
-  maxFreeSockets: 10,
-  timeout: 30000,
-  freeSocketTimeout: 30000, // Free socket timeout
-  socketActiveTTL: 60000 // Socket active TTL
+  maxSockets: 50,
+  timeout: 30000
 });
 const httpsAgent = new require('https').Agent({
   keepAlive: true,
-  maxSockets: 100, // Increased from 50
-  maxFreeSockets: 10,
-  timeout: 30000,
-  freeSocketTimeout: 30000, // Free socket timeout
-  socketActiveTTL: 60000 // Socket active TTL
+  maxSockets: 50,
+  timeout: 30000
 });
 
 // 配置 axios 默认设置
@@ -87,29 +52,8 @@ async function initDataDir() {
   
   try {
     await fs.access(API_SETTINGS_FILE);
-    // 数据迁移：为旧的提供商添加apiType字段
-    const data = JSON.parse(await fs.readFile(API_SETTINGS_FILE, 'utf8'));
-    let updated = false;
-    if (data.providers) {
-      data.providers.forEach(provider => {
-        if (provider.apiType === undefined) {
-          provider.apiType = 'openai';
-          updated = true;
-        }
-      });
-    }
-    if (updated) {
-      await fs.writeFile(API_SETTINGS_FILE, JSON.stringify(data, null, 2));
-      invalidateApiSettingsCache();
-      console.log('Data migration: Added apiType to existing providers.');
-    }
   } catch {
-    await fs.writeFile(API_SETTINGS_FILE, JSON.stringify({
-      providers: [],
-      groups: [
-        { id: 'default', name: '默认分组', description: '未分组的提供商' }
-      ]
-    }, null, 2));
+    await fs.writeFile(API_SETTINGS_FILE, JSON.stringify({ providers: [] }, null, 2));
   }
   
   try {
@@ -137,23 +81,12 @@ async function getApiSettings() {
   
   try {
     const data = JSON.parse(await fs.readFile(API_SETTINGS_FILE, 'utf8'));
-    // 确保数据结构包含groups字段
-    if (!data.groups) {
-      data.groups = [
-        { id: 'default', name: '默认分组', description: '未分组的提供商' }
-      ];
-    }
     apiSettingsCache = data;
     apiSettingsCacheTime = now;
     return data;
   } catch (error) {
     console.error('Error reading API settings:', error);
-    return {
-      providers: [],
-      groups: [
-        { id: 'default', name: '默认分组', description: '未分组的提供商' }
-      ]
-    };
+    return { providers: [] };
   }
 }
 
@@ -203,65 +136,35 @@ app.get('/api/providers', async (req, res) => {
 app.get('/api/providers/export', async (req, res) => {
   try {
     const data = await getApiSettings();
-    const dataToExport = {
-      groups: data.groups || [],
-      providers: data.providers || []
-    };
+    const providersToExport = data.providers || [];
     res.setHeader('Content-Type', 'application/json');
-    res.setHeader('Content-Disposition', 'attachment; filename=equal-ask-providers-and-groups.json');
-    res.send(JSON.stringify(dataToExport, null, 2));
+    res.setHeader('Content-Disposition', 'attachment; filename=equal-ask-providers.json');
+    res.send(JSON.stringify(providersToExport, null, 2));
   } catch (error) {
-    console.error('Error exporting data:', error);
-    res.status(500).json({ error: 'Failed to export data' });
+    console.error('Error exporting providers:', error);
+    res.status(500).json({ error: 'Failed to export providers' });
   }
 });
 
 app.post('/api/providers/import', async (req, res) => {
   try {
-    const { providers, groups } = req.body;
-
-    // 兼容旧格式（只导入提供商）
-    if (Array.isArray(req.body)) {
-      const oldFormatProviders = req.body;
-      const newSettings = {
-        providers: oldFormatProviders,
-        groups: [{ id: 'default', name: '默认分组', description: '未分组的提供商' }]
-      };
-      await fs.writeFile(API_SETTINGS_FILE, JSON.stringify(newSettings, null, 2));
-      invalidateApiSettingsCache();
-      return res.json({ success: true, message: `成功导入 ${oldFormatProviders.length} 个提供商（旧格式）。` });
+    const { providers } = req.body;
+    if (!Array.isArray(providers)) {
+      return res.status(400).json({ error: 'Invalid data format. "providers" must be an array.' });
     }
-
-    if (!Array.isArray(providers) || !Array.isArray(groups)) {
-      return res.status(400).json({ error: '数据格式无效，需要 "providers" 和 "groups" 数组。' });
-    }
-
-    // 验证并确保默认分组存在
-    let hasDefaultGroup = groups.some(g => g.id === 'default');
-    if (!hasDefaultGroup) {
-      groups.unshift({ id: 'default', name: '默认分组', description: '未分组的提供商' });
-    }
-
-    const newSettings = { providers, groups };
+    const newSettings = { providers: providers };
     await fs.writeFile(API_SETTINGS_FILE, JSON.stringify(newSettings, null, 2));
     invalidateApiSettingsCache();
-    res.json({ success: true, message: `成功导入 ${providers.length} 个提供商和 ${groups.length} 个分组。` });
+    res.json({ success: true, message: `Imported ${providers.length} providers.` });
   } catch (error) {
-    console.error('Error importing data:', error);
-    res.status(500).json({ error: 'Failed to import data' });
+    console.error('Error importing providers:', error);
+    res.status(500).json({ error: 'Failed to import providers' });
   }
 });
 
 app.post('/api/providers', async (req, res) => {
   const data = await getApiSettings();
-  const newProvider = {
-    id: Date.now().toString(),
-    ...req.body,
-    failCount: 0,
-    disabled: false,
-    groupId: req.body.groupId || 'default', // 默认分组
-    apiType: req.body.apiType || 'openai' // 默认为OpenAI兼容格式
-  };
+  const newProvider = { id: Date.now().toString(), ...req.body, failCount: 0, disabled: false };
   data.providers.push(newProvider);
   await fs.writeFile(API_SETTINGS_FILE, JSON.stringify(data, null, 2));
   invalidateApiSettingsCache(); // 缓存失效
@@ -295,8 +198,7 @@ app.get('/api/providers/:id/models', async (req, res) => {
   if (!provider) return res.status(404).json({ error: 'Provider not found' });
   
   try {
-    const apiType = provider.apiType || 'openai';
-    const url = buildApiUrl(provider.baseUrl, 'models', apiType);
+    const url = buildApiUrl(provider.baseUrl, 'models');
     const response = await axios.get(url, {
       headers: { 'Authorization': `Bearer ${provider.apiKey}` },
       timeout: 10000 // 增加超时时间
@@ -314,8 +216,7 @@ app.get('/api/providers/:id/test', async (req, res) => {
   if (!provider) return res.status(404).json({ error: 'Provider not found' });
   
   try {
-    const apiType = provider.apiType || 'openai';
-    const url = buildApiUrl(provider.baseUrl, 'models', apiType);
+    const url = buildApiUrl(provider.baseUrl, 'models');
     await axios.get(url, {
       headers: { 'Authorization': `Bearer ${provider.apiKey}` },
       timeout: 8000 // 增加超时时间
@@ -325,123 +226,6 @@ app.get('/api/providers/:id/test', async (req, res) => {
     console.error('Error testing connection:', error.message);
     res.status(500).json({ error: error.message });
   }
-});
-
-// ==================== 分组管理接口 ====================
-
-// 获取所有分组
-app.get('/api/groups', async (req, res) => {
-  const data = await getApiSettings();
-  res.json(data.groups || []);
-});
-
-// 创建新分组
-app.post('/api/groups', async (req, res) => {
-  const data = await getApiSettings();
-  const { name, description } = req.body;
-  
-  if (!name || name.trim() === '') {
-    return res.status(400).json({ error: '分组名称不能为空' });
-  }
-  
-  const newGroup = {
-    id: Date.now().toString(),
-    name: name.trim(),
-    description: description || '',
-    createdAt: new Date().toISOString()
-  };
-  
-  if (!data.groups) {
-    data.groups = [];
-  }
-  
-  data.groups.push(newGroup);
-  await fs.writeFile(API_SETTINGS_FILE, JSON.stringify(data, null, 2));
-  invalidateApiSettingsCache();
-  res.json(newGroup);
-});
-
-// 更新分组
-app.put('/api/groups/:id', async (req, res) => {
-  const data = await getApiSettings();
-  const groupId = req.params.id;
-  
-  // 不允许修改默认分组的ID
-  if (groupId === 'default') {
-    return res.status(400).json({ error: '不能修改默认分组的ID' });
-  }
-  
-  const index = data.groups.findIndex(g => g.id === groupId);
-  if (index === -1) {
-    return res.status(404).json({ error: '分组不存在' });
-  }
-  
-  const { name, description } = req.body;
-  if (name !== undefined) {
-    data.groups[index].name = name.trim();
-  }
-  if (description !== undefined) {
-    data.groups[index].description = description;
-  }
-  
-  await fs.writeFile(API_SETTINGS_FILE, JSON.stringify(data, null, 2));
-  invalidateApiSettingsCache();
-  res.json(data.groups[index]);
-});
-
-// 删除分组
-app.delete('/api/groups/:id', async (req, res) => {
-  const data = await getApiSettings();
-  const groupId = req.params.id;
-  
-  // 不允许删除默认分组
-  if (groupId === 'default') {
-    return res.status(400).json({ error: '不能删除默认分组' });
-  }
-  
-  const groupIndex = data.groups.findIndex(g => g.id === groupId);
-  if (groupIndex === -1) {
-    return res.status(404).json({ error: '分组不存在' });
-  }
-  
-  // 将该分组下的所有提供商移到默认分组
-  data.providers.forEach(provider => {
-    if (provider.groupId === groupId) {
-      provider.groupId = 'default';
-    }
-  });
-  
-  data.groups.splice(groupIndex, 1);
-  await fs.writeFile(API_SETTINGS_FILE, JSON.stringify(data, null, 2));
-  invalidateApiSettingsCache();
-  res.json({ success: true, message: '分组已删除，提供商已移至默认分组' });
-});
-
-// 移动提供商到指定分组
-app.put('/api/providers/:id/group', async (req, res) => {
-  const data = await getApiSettings();
-  const providerId = req.params.id;
-  const { groupId } = req.body;
-  
-  if (!groupId) {
-    return res.status(400).json({ error: '分组ID不能为空' });
-  }
-  
-  // 检查分组是否存在
-  const groupExists = data.groups.some(g => g.id === groupId);
-  if (!groupExists) {
-    return res.status(404).json({ error: '目标分组不存在' });
-  }
-  
-  const providerIndex = data.providers.findIndex(p => p.id === providerId);
-  if (providerIndex === -1) {
-    return res.status(404).json({ error: '提供商不存在' });
-  }
-  
-  data.providers[providerIndex].groupId = groupId;
-  await fs.writeFile(API_SETTINGS_FILE, JSON.stringify(data, null, 2));
-  invalidateApiSettingsCache();
-  res.json(data.providers[providerIndex]);
 });
 
 app.get('/api/conversations', async (req, res) => {
@@ -622,103 +406,12 @@ app.put('/api/settings', async (req, res) => {
   res.json(req.body);
 });
 
-function buildApiUrl(baseUrl, endpoint, apiType = 'openai') {
-  log.verbose(`[DEBUG] buildApiUrl called with: baseUrl=${baseUrl}, endpoint=${endpoint}, apiType=${apiType}`);
-
+function buildApiUrl(baseUrl, endpoint) {
   baseUrl = baseUrl.replace(/\/$/, '');
-
-  // If baseUrl already contains version, directly append endpoint
   if (/\/v\d+$/.test(baseUrl)) {
-    const finalUrl = `${baseUrl}/${endpoint}`;
-    log.verbose(`[DEBUG] BaseURL contains version, final URL: ${finalUrl}`);
-    return finalUrl;
+    return `${baseUrl}/${endpoint}`;
   }
-
-  // Build different URLs based on API type
-  if (apiType === 'anthropic') {
-    // Anthropic compatible format
-    if (endpoint === 'chat/completions') {
-      const finalUrl = `${baseUrl}/v1/messages`;
-      log.verbose(`[DEBUG] Anthropic chat endpoint, final URL: ${finalUrl}`);
-      return finalUrl;
-    } else if (endpoint === 'models') {
-      const finalUrl = `${baseUrl}/v1/models`;
-      log.verbose(`[DEBUG] Anthropic models endpoint, final URL: ${finalUrl}`);
-      return finalUrl;
-    }
-    const finalUrl = `${baseUrl}/v1/${endpoint}`;
-    log.verbose(`[DEBUG] Anthropic other endpoint, final URL: ${finalUrl}`);
-    return finalUrl;
-  } else {
-    // OpenAI compatible format (default)
-    const finalUrl = `${baseUrl}/v1/${endpoint}`;
-    log.verbose(`[DEBUG] OpenAI compatible endpoint, final URL: ${finalUrl}`);
-    return finalUrl;
-  }
-}
-
-function buildChatRequestBody(modelId, messages, params, apiType = 'openai', images = null) {
-  log.verbose(`[DEBUG] buildChatRequestBody: modelId=${modelId}, apiType=${apiType}, messages=${messages.length}, images=${images ? images.length : 'none'}`);
-
-  // Process image message format
-  let processedMessages = messages;
-  if (images && images.length > 0) {
-    log.verbose(`[DEBUG] Processing ${images.length} images`);
-    processedMessages = [...messages];
-    const lastUserMessageIndex = processedMessages.length - 1;
-    if (lastUserMessageIndex >= 0 && processedMessages[lastUserMessageIndex].role === 'user') {
-      const content = [
-        { type: 'text', text: processedMessages[lastUserMessageIndex].content }
-      ];
-
-      images.forEach((image, index) => {
-        if (!image.dataUrl || !image.dataUrl.includes('base64,')) {
-          log.error(`[DEBUG] Invalid dataUrl format for image ${index + 1}`);
-          return;
-        }
-
-        content.push({
-          type: 'image_url',
-          image_url: {
-            url: image.dataUrl
-          }
-        });
-      });
-
-      processedMessages[lastUserMessageIndex] = {
-        ...processedMessages[lastUserMessageIndex],
-        content: content
-      };
-    }
-  }
-
-  if (apiType === 'anthropic') {
-    log.verbose(`[DEBUG] Building Anthropic API request body`);
-    // Anthropic API format
-    const requestBody = {
-      model: modelId,
-      messages: processedMessages,
-      ...params
-    };
-
-    // Anthropic API requires max_tokens parameter
-    if (!requestBody.max_tokens) {
-      requestBody.max_tokens = params.max_tokens || 4096;
-      log.verbose(`[DEBUG] Added default max_tokens: ${requestBody.max_tokens}`);
-    }
-
-    log.verbose(`[DEBUG] Final Anthropic request body created`);
-    return requestBody;
-  } else {
-    log.verbose(`[DEBUG] Building OpenAI compatible request body`);
-    const requestBody = {
-      model: modelId,
-      messages: processedMessages,
-      ...params
-    };
-    log.verbose(`[DEBUG] Final OpenAI request body created`);
-    return requestBody;
-  }
+  return `${baseUrl}/v1/${endpoint}`;
 }
 
 function extractModelName(modelId) {
@@ -1078,7 +771,7 @@ function isModelDisabledForProvider(modelName, providerId, userSettings) {
 }
 
 // 获取所有可用于故障转移的提供商列表（不使用 usedInCurrentRound 机制）
-function getFailoverProviders(providers, modelName, config, userSettings, excludeProviderIds = [], apiKeyInfo = null) {
+function getFailoverProviders(providers, modelName, config, userSettings, excludeProviderIds = []) {
   console.log(`[Failover] Getting failover providers for model: ${modelName}`);
   console.log(`[Failover] Excluding providers: ${excludeProviderIds.join(', ')}`);
   
@@ -1138,15 +831,6 @@ function getFailoverProviders(providers, modelName, config, userSettings, exclud
     if (!provider) {
       console.log(`[Failover] Provider ${providerId} not found`);
       continue;
-    }
-    
-    // 根据API密钥的分组权限进行过滤
-    if (apiKeyInfo && apiKeyInfo.allowedGroups && apiKeyInfo.allowedGroups.length > 0) {
-      const providerGroupId = provider.groupId || 'default';
-      if (!apiKeyInfo.allowedGroups.includes(providerGroupId)) {
-        console.log(`[Failover] Provider ${provider.name} (group: ${providerGroupId}) is not in allowed groups, skipping`);
-        continue;
-      }
     }
     
     if (provider.disabled) {
@@ -1223,8 +907,7 @@ async function resetFailCount(providerId) {
 
 async function getProviderModelId(provider, modelName) {
   try {
-    const apiType = provider.apiType || 'openai';
-    const url = buildApiUrl(provider.baseUrl, 'models', apiType);
+    const url = buildApiUrl(provider.baseUrl, 'models');
     const response = await axios.get(url, {
       headers: { 'Authorization': `Bearer ${provider.apiKey}` },
       timeout: 10000
@@ -1243,234 +926,28 @@ async function getProviderModelId(provider, modelName) {
   }
 }
 
-// Performance optimization: Background task processor
-class BackgroundTaskProcessor {
-  constructor() {
-    this.taskQueue = [];
-    this.processing = false;
-  }
-
-  // Add task to queue for background processing
-  addTask(taskFn) {
-    this.taskQueue.push(taskFn);
-    if (!this.processing) {
-      setImmediate(() => this.processTasks());
-    }
-  }
-
-  // Process all queued tasks
-  async processTasks() {
-    if (this.processing) return;
-    this.processing = true;
-
-    while (this.taskQueue.length > 0) {
-      const tasks = this.taskQueue.splice(0, 5); // Process up to 5 tasks at once
-      try {
-        await Promise.allSettled(tasks.map(task => task()));
-      } catch (error) {
-        log.error('Background task processing error:', error);
-      }
-    }
-
-    this.processing = false;
-  }
-
-  // Handle success logging and state updates
-  handleSuccess(selectedProvider, pureModelName, userSettings, pollingConfig, sessionIdentifier) {
-    this.addTask(async () => {
-      try {
-        // Run these operations in parallel
-        await Promise.all([
-          logApiCall(selectedProvider.name, pureModelName, true),
-          resetModelFailCount(selectedProvider.id, pureModelName, userSettings)
-        ]);
-
-        // Update polling state (synchronous)
-        updatePollingStateAfterSuccess(pureModelName, selectedProvider.id, pollingConfig, userSettings);
-
-        // Save conversation provider if needed
-        if (sessionIdentifier) {
-          saveConversationProvider(sessionIdentifier, pureModelName, selectedProvider.id, userSettings);
-        }
-
-        // Save polling state (async)
-        await savePollingState(userSettings);
-      } catch (error) {
-        log.error('Background success handling error:', error);
-      }
-    });
-  }
-
-  // Handle failure logging
-  handleFailure(selectedProvider, pureModelName, userSettings, errorMessage) {
-    this.addTask(async () => {
-      try {
-        await Promise.all([
-          logApiCall(selectedProvider.name, pureModelName, false, errorMessage),
-          incrementModelFailCount(selectedProvider.id, pureModelName, userSettings)
-        ]);
-        await savePollingState(userSettings);
-      } catch (error) {
-        log.error('Background failure handling error:', error.message);
-      }
-    });
-  }
-}
-
-// Performance optimization: Efficient error parser
-function parseErrorResponse(error) {
-  if (!error.response?.data) {
-    return error.message;
-  }
-
-  try {
-    let errorData = '';
-    const data = error.response.data;
-
-    if (Buffer.isBuffer(data)) {
-      errorData = data.toString('utf8');
-    } else if (typeof data === 'object') {
-      return data.error?.message || JSON.stringify(data);
-    } else {
-      errorData = String(data);
-    }
-
-    // Try to parse as JSON
-    try {
-      const parsed = JSON.parse(errorData);
-      return parsed.error?.message || parsed.message || errorData;
-    } catch {
-      return errorData;
-    }
-  } catch {
-    return error.message;
-  }
-}
-
-// Performance optimization: Unified error response handler
-function sendErrorResponse(res, stream, error, statusCode = 500) {
-  if (stream) {
-    if (!res.headersSent) {
-      res.setHeader('Content-Type', 'text/event-stream');
-      res.setHeader('Cache-Control', 'no-cache');
-      res.setHeader('Connection', 'keep-alive');
-    }
-    res.write(`data: ${JSON.stringify({ error })}\n\n`);
-    res.end();
-  } else {
-    res.status(statusCode).json({ error });
-  }
-}
-
-// Global background task processor instance
-const backgroundProcessor = new BackgroundTaskProcessor();
-
-// Performance optimization: Simplified streaming response handler
-async function handleStreamingResponse(response, res, stream, selectedProvider, pureModelName, userSettings, pollingConfig, sessionIdentifier) {
-  const originalContentType = response.headers['content-type'];
-
-  // Set appropriate response headers based on client request
-  if (stream) {
-    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
-  } else {
-    res.setHeader('Content-Type', 'application/json; charset=utf-8');
-  }
-
-  let responseCompleted = false;
-
-  // Handle different response types efficiently
-  if (originalContentType && originalContentType.includes('text/event-stream')) {
-    // Direct SSE forwarding
-    response.data.pipe(res);
-
-    // Handle success in background
-    response.data.on('end', () => {
-      if (!responseCompleted) {
-        responseCompleted = true;
-        backgroundProcessor.handleSuccess(selectedProvider, pureModelName, userSettings, pollingConfig, sessionIdentifier);
-      }
-    });
-  } else {
-    // Handle JSON response
-    let chunks = [];
-
-    response.data.on('data', chunk => {
-      if (responseCompleted) return;
-      chunks.push(chunk);
-    });
-
-    response.data.on('end', async () => {
-      if (responseCompleted) return;
-      responseCompleted = true;
-
-      try {
-        const fullData = Buffer.concat(chunks).toString('utf8');
-        const jsonData = JSON.parse(fullData);
-
-        if (stream) {
-          // Convert to SSE format
-          const sseData = `data: ${JSON.stringify(jsonData)}\n\ndata: [DONE]\n\n`;
-          res.end(sseData, 'utf8');
-        } else {
-          // Return JSON directly
-          res.json(jsonData);
-        }
-
-        // Handle success in background (non-blocking)
-        backgroundProcessor.handleSuccess(selectedProvider, pureModelName, userSettings, pollingConfig, sessionIdentifier);
-
-      } catch (parseError) {
-        log.error('Error parsing response:', parseError);
-        res.status(500).json({ error: 'Invalid response format' });
-      }
-    });
-  }
-
-  response.data.on('error', (error) => {
-    if (!responseCompleted) {
-      responseCompleted = true;
-      log.error('Stream error:', error.message);
-
-      // Handle failure in background
-      backgroundProcessor.handleFailure(selectedProvider, pureModelName, userSettings, error.message);
-
-      if (stream) {
-        res.write(`data: ${JSON.stringify({ error: { message: error.message } })}\n\n`);
-      } else {
-        res.status(500).json({ error: { message: error.message } });
-      }
-      res.end();
-    }
-  });
-}
-
 async function streamChat(provider, messages, params, res, modelId, images) {
-  log.verbose(`[DEBUG] streamChat: provider=${provider.name}, modelId=${modelId}, messages=${messages.length}, apiType=${provider.apiType}`);
-
-  const apiType = provider.apiType || 'openai';
-  const url = buildApiUrl(provider.baseUrl, 'chat/completions', apiType);
-
-  // Process image messages if needed
+  const url = buildApiUrl(provider.baseUrl, 'chat/completions');
+  
+  // 如果有图片，需要处理消息格式
   let processedMessages = messages;
   if (images && images.length > 0) {
-    // Find last user message and add images
+    // 找到最后一条用户消息并添加图片
     processedMessages = [...messages];
     const lastUserMessageIndex = processedMessages.length - 1;
     if (lastUserMessageIndex >= 0 && processedMessages[lastUserMessageIndex].role === 'user') {
       const content = [
         { type: 'text', text: processedMessages[lastUserMessageIndex].content }
       ];
-
-      // Add image content
+      
+      // 添加图片内容
       images.forEach((image, index) => {
-        // Check dataUrl format
+        // 检查dataUrl格式
         if (!image.dataUrl || !image.dataUrl.includes('base64,')) {
-          log.error(`Invalid dataUrl format for image ${index + 1}`);
+          console.error(`Invalid dataUrl format for image ${index + 1}`);
           return;
         }
-
+        
         content.push({
           type: 'image_url',
           image_url: {
@@ -1478,75 +955,67 @@ async function streamChat(provider, messages, params, res, modelId, images) {
           }
         });
       });
-
+      
       processedMessages[lastUserMessageIndex] = {
         ...processedMessages[lastUserMessageIndex],
         content: content
       };
     }
   }
+  
   try {
-    log.verbose(`[DEBUG] streamChat: Building request body...`);
-    const requestBody = buildChatRequestBody(modelId || provider.defaultModel, processedMessages, { ...params, stream: true }, apiType, images);
-
-    const headers = {
-      'Authorization': `Bearer ${provider.apiKey}`,
-      'Content-Type': 'application/json',
-      ...(apiType === 'anthropic' && {
-        'anthropic-version': '2023-06-01'
-      })
+    const requestBody = {
+      model: modelId || provider.defaultModel,
+      messages: processedMessages,
+      stream: true,
+      ...params
     };
-
-    log.verbose(`[DEBUG] streamChat: Making POST request to: ${url}`);
-
+    
     const response = await axios.post(url, requestBody, {
-      headers,
+      headers: {
+        'Authorization': `Bearer ${provider.apiKey}`,
+        'Content-Type': 'application/json'
+      },
       responseType: 'stream',
-      timeout: 60000 // Increase timeout to 60 seconds
+      timeout: 60000 // 增加超时时间到60秒
     });
-
-    log.verbose(`[DEBUG] streamChat: Request successful, response status: ${response.status}`);
-
-    // Record successful API call
+    
+    // 记录成功的API调用
     await logApiCall(provider.name, modelId || provider.defaultModel, true);
-
-    // Performance optimization: Add error handling and timeout control
+    
+    // 性能优化：添加错误处理和超时控制
     const timeout = setTimeout(() => {
       response.data.destroy();
       res.write(`data: ${JSON.stringify({ error: 'Stream timeout' })}\n\n`);
       res.end();
-    }, 120000); // 2 minute timeout
-
+    }, 120000); // 2分钟超时
+    
     response.data.on('data', chunk => {
       try {
         res.write(chunk);
       } catch (error) {
-        log.error('Error writing chunk:', error);
+        console.error('Error writing chunk:', error);
         clearTimeout(timeout);
         res.end();
       }
     });
-
+    
     response.data.on('end', () => {
       clearTimeout(timeout);
       res.end();
     });
-
+    
     response.data.on('error', (error) => {
-      log.error('Stream error:', error);
+      console.error('Stream error:', error);
       clearTimeout(timeout);
       res.write(`data: ${JSON.stringify({ error: 'Stream error: ' + error.message })}\n\n`);
       res.end();
     });
+    
   } catch (error) {
-    log.error(`[DEBUG] streamChat error occurred:`, error.message);
-
-    // Use efficient error parser
-    const errorMessage = parseErrorResponse(error);
-    log.verbose(`[DEBUG] Parsed error message:`, errorMessage);
-
-    // Record failed API call
-    await logApiCall(provider.name, modelId || provider.defaultModel, false, errorMessage);
+    console.error('StreamChat error:', error.message);
+    // 记录失败的API调用
+    await logApiCall(provider.name, modelId || provider.defaultModel, false, error.message);
     throw error;
   }
 }
@@ -1710,23 +1179,21 @@ app.get('/v1/models', verifyProxyApiKey, async (req, res) => {
 app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
   try {
     const { messages, model, stream = false, temperature, max_tokens, top_p, ...otherParams } = req.body;
-
-    log.debug(`[DEBUG] New chat completion request: model=${model}, stream=${stream}, messages=${messages ? messages.length : 'undefined'}`);
-    log.verbose(`[DEBUG] Request parameters:`, JSON.stringify({ temperature, max_tokens, top_p, ...otherParams }, null, 2));
-
+    
+    console.log(`[Proxy] Received request for model: ${model}, stream: ${stream}`);
+    
     if (!messages || !Array.isArray(messages)) {
-      log.debug(`[DEBUG] Invalid messages parameter`);
-      return sendErrorResponse(res, stream, {
-        message: 'messages is required and must be an array',
-        type: 'invalid_request_error',
-        code: 'invalid_messages'
-      }, 400);
+      return res.status(400).json({
+        error: {
+          message: 'messages is required and must be an array',
+          type: 'invalid_request_error',
+          code: 'invalid_messages'
+        }
+      });
     }
-
-    log.verbose(`[DEBUG] Loading settings...`);
+    
     const settings = await getApiSettings();
     const userSettings = await getUserSettings();
-    log.verbose(`[DEBUG] Found ${settings.providers.length} providers`);
     const pollingConfig = userSettings.pollingConfig || { available: {}, excluded: {} };
     
     // ==================== 会话识别机制（混合模式） ====================
@@ -1748,47 +1215,46 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
     
     // 确定要使用的模型名称
     let modelName = model;
-
-    log.verbose(`[DEBUG] Model name determination: original=${model}, final=${modelName}`);
-
+    
     if (!modelName) {
-      log.debug(`[DEBUG] No model specified, returning error`);
-      return sendErrorResponse(res, stream, {
-        message: 'model is required. Please specify a model in the request.',
-        type: 'invalid_request_error',
-        code: 'model_required'
-      }, 400);
+      return res.status(400).json({
+        error: {
+          message: 'model is required. Please specify a model in the request.',
+          type: 'invalid_request_error',
+          code: 'model_required'
+        }
+      });
     }
-
-    // Extract pure model name (remove possible prefix)
+    
+    // 提取纯模型名称（去掉可能的前缀）
     const pureModelName = modelName.includes('/') ? modelName.split('/').pop() : modelName;
-
-    log.verbose(`[DEBUG] Pure model name: ${pureModelName}`);
-
-    // Check model permissions - if key configured allowed model list, perform permission check
+    
+    console.log(`[Proxy] Pure model name: ${pureModelName}`);
+    
+    // 检查模型权限 - 如果密钥配置了允许的模型列表，则进行权限检查
     const allowedModels = req.apiKeyInfo?.allowedModels || [];
-    log.verbose(`[DEBUG] API key allowed models:`, allowedModels);
     if (allowedModels.length > 0 && !allowedModels.includes(pureModelName)) {
-      log.debug(`[DEBUG] Model not allowed for this API key`);
-      return sendErrorResponse(res, stream, {
-        message: `Model '${pureModelName}' is not allowed for this API key. Allowed models: ${allowedModels.join(', ')}`,
-        type: 'permission_error',
-        code: 'model_not_allowed'
-      }, 403);
+      return res.status(403).json({
+        error: {
+          message: `Model '${pureModelName}' is not allowed for this API key. Allowed models: ${allowedModels.join(', ')}`,
+          type: 'permission_error',
+          code: 'model_not_allowed'
+        }
+      });
     }
-
-    // Check if model is in available pool and must have at least 2 providers (consistent with frontend polling logic)
+    
+    // 检查模型是否在可用池中，且必须有至少2个提供商（与前台轮询逻辑一致）
     const availableProviderIds = pollingConfig.available?.[pureModelName] || [];
-    log.verbose(`[DEBUG] Available provider IDs for model ${pureModelName}:`, availableProviderIds);
     if (availableProviderIds.length < 2) {
-      log.debug(`[DEBUG] Insufficient providers for model ${pureModelName}: ${availableProviderIds.length}`);
-      return sendErrorResponse(res, stream, {
-        message: `Model '${pureModelName}' requires at least 2 providers for polling. Current providers: ${availableProviderIds.length}. Please configure more providers in polling settings.`,
-        type: 'invalid_request_error',
-        code: 'insufficient_providers'
-      }, 400);
+      return res.status(400).json({
+        error: {
+          message: `Model '${pureModelName}' requires at least 2 providers for polling. Current providers: ${availableProviderIds.length}. Please configure more providers in polling settings.`,
+          type: 'invalid_request_error',
+          code: 'insufficient_providers'
+        }
+      });
     }
-
+    
     // 检查模型是否所有提供商都被排除
     const excludedSet = new Set();
     if (Array.isArray(pollingConfig.excluded)) {
@@ -1798,18 +1264,18 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
         }
       });
     }
-    log.verbose(`[DEBUG] Excluded provider IDs for model ${pureModelName}:`, Array.from(excludedSet));
-
-    // Calculate actual available provider count (excluding excluded ones)
+    
+    // 计算实际可用的提供商数量（排除被排除的）
     const actualAvailableProviders = availableProviderIds.filter(id => !excludedSet.has(id));
-    log.verbose(`[DEBUG] Actual available providers after exclusions:`, actualAvailableProviders);
     
     if (actualAvailableProviders.length === 0) {
-      return sendErrorResponse(res, stream, {
-        message: `Model '${pureModelName}' has no available providers (all providers are excluded).`,
-        type: 'invalid_request_error',
-        code: 'all_providers_excluded'
-      }, 400);
+      return res.status(400).json({
+        error: {
+          message: `Model '${pureModelName}' has no available providers (all providers are excluded).`,
+          type: 'invalid_request_error',
+          code: 'all_providers_excluded'
+        }
+      });
     }
     
     // 构建请求参数 - 参数隔离机制
@@ -1879,22 +1345,23 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
         pureModelName,
         pollingConfig,
         userSettings,
-        [selectedProvider.id],
-        req.apiKeyInfo
+        [selectedProvider.id]
       );
       failoverProviders = failoverProviders.concat(otherProviders);
     } else {
       // 没有绑定的提供商，获取所有可用的提供商
-      failoverProviders = getFailoverProviders(settings.providers, pureModelName, pollingConfig, userSettings, [], req.apiKeyInfo);
+      failoverProviders = getFailoverProviders(settings.providers, pureModelName, pollingConfig, userSettings, []);
     }
     
     if (failoverProviders.length === 0) {
-      log.error(`[Proxy] No available providers for model ${pureModelName}`);
-      return sendErrorResponse(res, stream, {
-        message: `No available providers for model '${pureModelName}'`,
-        type: 'server_error',
-        code: 'no_providers_available'
-      }, 503);
+      console.log(`[Proxy] No available providers for model ${pureModelName}`);
+      return res.status(503).json({
+        error: {
+          message: `No available providers for model '${pureModelName}'`,
+          type: 'server_error',
+          code: 'no_providers_available'
+        }
+      });
     }
     
     console.log(`[Proxy] Found ${failoverProviders.length} providers for failover`);
@@ -1918,134 +1385,169 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
       }
       
       console.log(`[Proxy] Using model ID: ${providerModelId} from provider ${selectedProvider.name}`);
-
-      const apiType = selectedProvider.apiType || 'openai';
-      console.log(`[DEBUG] Provider API type: ${apiType}`);
-      const url = buildApiUrl(selectedProvider.baseUrl, 'chat/completions', apiType);
-
+      
+      const url = buildApiUrl(selectedProvider.baseUrl, 'chat/completions');
+      
       if (stream) {
         // ==================== 流式响应（带故障转移） ====================
-        console.log(`[DEBUG] Starting streaming request to: ${url}`);
         try {
-          const requestBody = buildChatRequestBody(providerModelId, messages, params, apiType, null);
-          requestBody.stream = true;
-
-          const headers = {
-            'Authorization': `Bearer ${selectedProvider.apiKey}`,
-            'Content-Type': 'application/json',
-            ...(apiType === 'anthropic' && {
-              'anthropic-version': '2023-06-01'
-            })
-          };
-
-          console.log(`[DEBUG] Request headers:`, JSON.stringify(headers, null, 2));
-          console.log(`[DEBUG] Making streaming POST request...`);
-
-          const response = await axios.post(url, requestBody, {
-            headers,
+          const response = await axios.post(url, {
+            model: providerModelId,
+            messages: messages,
+            stream: true,
+            ...params
+          }, {
+            headers: {
+              'Authorization': `Bearer ${selectedProvider.apiKey}`,
+              'Content-Type': 'application/json'
+            },
             responseType: 'stream',
             timeout: 120000
           });
-
-          log.verbose(`[DEBUG] Stream request successful, response status: ${response.status}`);
-
-          // Use simplified streaming response handler
-          await handleStreamingResponse(response, res, stream, selectedProvider, pureModelName, userSettings, pollingConfig, sessionIdentifier);
-
-          // Stream request successfully initiated, exit loop
-          log.verbose(`[DEBUG] Stream request initiated successfully, exiting provider loop`);
+          
+          // 流式请求成功建立连接
+          res.setHeader('Content-Type', 'text/event-stream');
+          res.setHeader('Cache-Control', 'no-cache');
+          res.setHeader('Connection', 'keep-alive');
+          res.setHeader('Access-Control-Allow-Origin', '*');
+          
+          response.data.on('data', chunk => {
+            try {
+              res.write(chunk);
+            } catch (error) {
+              console.error('[Proxy] Error writing chunk:', error);
+            }
+          });
+          
+          response.data.on('end', async () => {
+            await logApiCall(selectedProvider.name, pureModelName, true);
+            await resetModelFailCount(selectedProvider.id, pureModelName, userSettings);
+            updatePollingStateAfterSuccess(pureModelName, selectedProvider.id, pollingConfig, userSettings);
+            
+            // 保存会话-提供商绑定
+            if (sessionIdentifier) {
+              saveConversationProvider(sessionIdentifier, pureModelName, selectedProvider.id, userSettings);
+              console.log(`[Session] Saved provider binding for session`);
+            }
+            
+            await savePollingState(userSettings);
+            console.log(`[Proxy] Stream completed successfully using provider ${selectedProvider.name}`);
+            res.end();
+          });
+          
+          response.data.on('error', async (error) => {
+            console.error('[Proxy] Stream error:', error);
+            await logApiCall(selectedProvider.name, pureModelName, false, error.message);
+            await incrementModelFailCount(selectedProvider.id, pureModelName, userSettings);
+            await savePollingState(userSettings);
+            res.write(`data: ${JSON.stringify({ error: { message: error.message } })}\n\n`);
+            res.end();
+          });
+          
+          // 流式请求成功启动，退出循环
           return;
-
+          
         } catch (error) {
-          log.error(`[DEBUG] Provider ${selectedProvider.name} failed with error:`, error.message);
-
-          // Use efficient error parser
-          const errorMessage = parseErrorResponse(error);
-
-          // Handle failure in background (non-blocking)
-          backgroundProcessor.handleFailure(selectedProvider, pureModelName, userSettings, errorMessage);
-
+          console.error(`[Proxy] Provider ${selectedProvider.name} failed:`, error.message);
+          await logApiCall(selectedProvider.name, pureModelName, false, error.message);
           errors.push({
             provider: selectedProvider.name,
-            error: errorMessage,
-            status: error.response?.status
+            error: error.message
           });
-          // Continue trying next provider
+          await incrementModelFailCount(selectedProvider.id, pureModelName, userSettings);
+          // 继续尝试下一个提供商
         }
         
       } else {
         // ==================== 非流式响应（带故障转移） ====================
-        console.log(`[DEBUG] Starting non-streaming request to: ${url}`);
         try {
-          const requestBody = buildChatRequestBody(providerModelId, messages, params, apiType, null);
-          requestBody.stream = false;
-
-          const headers = {
-            'Authorization': `Bearer ${selectedProvider.apiKey}`,
-            'Content-Type': 'application/json',
-            ...(apiType === 'anthropic' && {
-              'anthropic-version': '2023-06-01'
-            })
-          };
-
-          console.log(`[DEBUG] Non-streaming request headers:`, JSON.stringify(headers, null, 2));
-          console.log(`[DEBUG] Making non-streaming POST request...`);
-
-          const response = await axios.post(url, requestBody, {
-            headers,
+          const response = await axios.post(url, {
+            model: providerModelId,
+            messages: messages,
+            stream: false,
+            ...params
+          }, {
+            headers: {
+              'Authorization': `Bearer ${selectedProvider.apiKey}`,
+              'Content-Type': 'application/json'
+            },
             timeout: 120000
           });
-
-          log.verbose(`[DEBUG] Non-streaming request successful, response status: ${response.status}`);
-
-          // Handle success in background (non-blocking)
-          backgroundProcessor.handleSuccess(selectedProvider, pureModelName, userSettings, pollingConfig, sessionIdentifier);
-
-          log.verbose(`[DEBUG] Non-streaming request completed successfully using provider ${selectedProvider.name}`);
-          return res.status(200).json(response.data);
-
+          
+          // 成功！重置失败计数并返回响应
+          await logApiCall(selectedProvider.name, pureModelName, true);
+          await resetModelFailCount(selectedProvider.id, pureModelName, userSettings);
+          updatePollingStateAfterSuccess(pureModelName, selectedProvider.id, pollingConfig, userSettings);
+          
+          // 保存会话-提供商绑定
+          if (sessionIdentifier) {
+            saveConversationProvider(sessionIdentifier, pureModelName, selectedProvider.id, userSettings);
+            console.log(`[Session] Saved provider binding for session`);
+          }
+          
+          await savePollingState(userSettings);
+          
+          console.log(`[Proxy] Request completed successfully using provider ${selectedProvider.name}`);
+          return res.json(response.data);
+          
         } catch (error) {
-          log.error(`[DEBUG] Non-streaming provider ${selectedProvider.name} failed with error:`, error.message);
-
-          // Use efficient error parser
-          const errorMessage = parseErrorResponse(error);
-
-          // Handle failure in background (non-blocking)
-          backgroundProcessor.handleFailure(selectedProvider, pureModelName, userSettings, errorMessage);
-
+          console.error(`[Proxy] Provider ${selectedProvider.name} failed:`, error.message);
+          await logApiCall(selectedProvider.name, pureModelName, false, error.response?.data?.error?.message || error.message);
           errors.push({
             provider: selectedProvider.name,
-            error: errorMessage,
+            error: error.response?.data?.error?.message || error.message,
             status: error.response?.status
           });
-          // Continue trying next provider
+          await incrementModelFailCount(selectedProvider.id, pureModelName, userSettings);
+          // 继续尝试下一个提供商
         }
       }
     }
     
-    // All providers failed
-    backgroundProcessor.addTask(async () => {
-      await savePollingState(userSettings);
-    });
-
-    log.error(`[Proxy] All ${triedProviderIds.length} providers failed for model ${pureModelName}`);
-
-    // Build detailed error information
+    // 所有提供商都失败了
+    await savePollingState(userSettings);
+    
+    console.log(`[Proxy] All ${triedProviderIds.length} providers failed for model ${pureModelName}`);
+    
+    // 构建详细的错误信息
     const errorDetails = errors.map(e => `${e.provider}: ${e.error}`).join('; ');
-
-    sendErrorResponse(res, stream, {
-      message: `All providers failed for model '${pureModelName}'. Tried ${triedProviderIds.length} providers.${stream ? ` Details: ${errorDetails}` : ''}`,
-      type: 'server_error',
-      code: 'all_providers_failed',
-      ...(stream ? {} : { details: errors })
-    }, 503);
-
+    
+    if (stream) {
+      // 流式响应：如果还没有发送过响应头
+      if (!res.headersSent) {
+        res.setHeader('Content-Type', 'text/event-stream');
+        res.setHeader('Cache-Control', 'no-cache');
+        res.setHeader('Connection', 'keep-alive');
+        res.setHeader('Access-Control-Allow-Origin', '*');
+      }
+      res.write(`data: ${JSON.stringify({
+        error: {
+          message: `All providers failed for model '${pureModelName}'. Tried ${triedProviderIds.length} providers. Details: ${errorDetails}`,
+          type: 'server_error',
+          code: 'all_providers_failed'
+        }
+      })}\n\n`);
+      res.end();
+    } else {
+      // 非流式响应
+      res.status(503).json({
+        error: {
+          message: `All providers failed for model '${pureModelName}'. Tried ${triedProviderIds.length} providers.`,
+          type: 'server_error',
+          code: 'all_providers_failed',
+          details: errors
+        }
+      });
+    }
+    
   } catch (error) {
-    log.error('[Proxy] Unexpected error:', error);
-    sendErrorResponse(res, stream, {
-      message: error.message,
-      type: 'server_error',
-      code: 'internal_error'
+    console.error('[Proxy] Unexpected error:', error);
+    res.status(500).json({
+      error: {
+        message: error.message,
+        type: 'server_error',
+        code: 'internal_error'
+      }
     });
   }
 });
@@ -2112,7 +1614,6 @@ app.post('/api/proxy-keys', async (req, res) => {
         top_p: 1
       },
       allowedModels: [],
-      allowedGroups: [], // 新增：允许的分组
       rateLimit: {
         requestsPerMinute: 60,
         requestsPerHour: 1000
