@@ -110,11 +110,25 @@
               <h4>模型权限</h4>
               <p class="section-desc">选择此密钥可以访问的模型</p>
               <div class="models-grid">
-                <label v-for="model in availableModels" :key="model" class="model-checkbox">
-                  <input type="checkbox" 
-                         :value="model" 
+                <label v-for="model in filteredAvailableModels" :key="model" class="model-checkbox">
+                  <input type="checkbox"
+                         :value="model"
                          v-model="selectedKey.allowedModels">
                   <span>{{ model }}</span>
+                </label>
+              </div>
+            </div>
+            
+            <!-- 分组权限 -->
+            <div class="config-section">
+              <h4>分组权限</h4>
+              <p class="section-desc">选择此密钥可以访问的提供商分组（不选则为全部允许）</p>
+              <div class="models-grid">
+                <label v-for="group in availableGroups" :key="group.id" class="model-checkbox">
+                  <input type="checkbox"
+                         :value="group.id"
+                         v-model="selectedKey.allowedGroups">
+                  <span>{{ group.name }}</span>
                 </label>
               </div>
             </div>
@@ -186,13 +200,15 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import axios from 'axios'
 
 const apiKeys = ref([])
 const selectedKey = ref(null)
 const showCreateModal = ref(false)
 const availableModels = ref([])
+const availableGroups = ref([])
+const allProviders = ref([])
 const originalKey = ref(null)
 
 const newKey = ref({
@@ -205,6 +221,33 @@ const hasChanges = computed(() => {
   if (!selectedKey.value || !originalKey.value) return false
   return JSON.stringify(selectedKey.value) !== JSON.stringify(originalKey.value)
 })
+
+const filteredAvailableModels = computed(() => {
+  if (!selectedKey.value || !selectedKey.value.allowedGroups || selectedKey.value.allowedGroups.length === 0) {
+    return availableModels.value;
+  }
+
+  const allowedGroupIds = new Set(selectedKey.value.allowedGroups);
+  const providersInAllowedGroups = allProviders.value.filter(p => allowedGroupIds.has(p.groupId || 'default'));
+  
+  const modelsInAllowedGroups = new Set();
+  providersInAllowedGroups.forEach(p => {
+    (p.models || []).forEach(modelObj => {
+      const modelName = modelObj.id.includes('/') ? modelObj.id.split('/').pop() : modelObj.id;
+      modelsInAllowedGroups.add(modelName);
+    });
+  });
+
+  return availableModels.value.filter(m => modelsInAllowedGroups.has(m));
+});
+
+// 当可见模型列表变化时，清理掉不再可见的已选模型
+watch(filteredAvailableModels, (newVisibleModels) => {
+  if (selectedKey.value?.allowedModels) {
+    const visibleModelSet = new Set(newVisibleModels);
+    selectedKey.value.allowedModels = selectedKey.value.allowedModels.filter(m => visibleModelSet.has(m));
+  }
+});
 
 // 加载API密钥列表
 async function loadApiKeys() {
@@ -230,10 +273,38 @@ async function loadAvailableModels() {
   }
 }
 
+// 加载可用分组列表
+async function loadAvailableGroups() {
+  try {
+    const response = await axios.get('/api/groups')
+    availableGroups.value = response.data
+  } catch (error) {
+    console.error('加载分组失败:', error)
+  }
+}
+
+async function loadAllProviders() {
+  try {
+    const res = await axios.get('/api/providers');
+    allProviders.value = res.data.map(p => ({
+      ...p,
+      models: p.models || [],
+      groupId: p.groupId || 'default'
+    }));
+  } catch (error) {
+    console.error('加载提供商失败:', error);
+  }
+}
+
 // 选择密钥
 function selectKey(key) {
-  selectedKey.value = JSON.parse(JSON.stringify(key))
-  originalKey.value = JSON.parse(JSON.stringify(key))
+  // 确保新选择的密钥有 allowedGroups 字段
+  const keyWithDefaults = {
+    ...key,
+    allowedGroups: key.allowedGroups || []
+  };
+  selectedKey.value = JSON.parse(JSON.stringify(keyWithDefaults))
+  originalKey.value = JSON.parse(JSON.stringify(keyWithDefaults))
 }
 
 // 格式化密钥预览
@@ -368,6 +439,8 @@ async function deleteKey(key) {
 onMounted(() => {
   loadApiKeys()
   loadAvailableModels()
+  loadAvailableGroups()
+  loadAllProviders()
 })
 </script>
 

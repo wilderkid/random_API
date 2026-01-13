@@ -9,20 +9,33 @@
           <button @click="importProviders" class="btn-import">导入</button>
           <button @click="exportProviders" class="btn-export">导出</button>
         </div>
+        <div class="group-management">
+          <button @click="showGroupManager = true" class="btn-manage-groups">📁 管理分组</button>
+        </div>
       </div>
       
       <div class="providers-list">
-        <div
-          v-for="provider in filteredProviders"
-          :key="provider.id"
-          :class="['provider-item', { active: selectedProvider?.id === provider.id }]"
-          @click="selectProvider(provider)"
-        >
-          <div class="provider-item-icon">{{ provider.name.charAt(0) }}</div>
-          <div class="provider-item-info">
-            <div class="provider-item-name">{{ provider.name }}</div>
-            <div :class="['provider-item-status', provider.disabled ? 'disabled' : 'active']">
-              {{ provider.disabled ? '已禁用' : 'ON' }}
+        <!-- 按分组显示提供商 -->
+        <div v-for="group in groupedProviders" :key="group.id" class="provider-group">
+          <div class="group-header" @click="toggleGroupExpand(group.id)">
+            <span class="group-expand-icon">{{ expandedGroups[group.id] ? '▼' : '▶' }}</span>
+            <span class="group-name">{{ group.name }}</span>
+            <span class="group-count">{{ group.providers.length }}</span>
+          </div>
+          <div v-if="expandedGroups[group.id]" class="group-providers">
+            <div
+              v-for="provider in group.providers"
+              :key="provider.id"
+              :class="['provider-item', { active: selectedProvider?.id === provider.id }]"
+              @click="selectProvider(provider)"
+            >
+              <div class="provider-item-icon">{{ provider.name.charAt(0) }}</div>
+              <div class="provider-item-info">
+                <div class="provider-item-name">{{ provider.name }}</div>
+                <div :class="['provider-item-status', provider.disabled ? 'disabled' : 'active']">
+                  {{ provider.disabled ? '已禁用' : 'ON' }}
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -43,6 +56,16 @@
           </div>
         </div>
         
+        <!-- 分组选择 -->
+        <div class="config-section">
+          <label>所属分组</label>
+          <select v-model="selectedProvider.groupId" @change="updateProviderGroup" class="input-field">
+            <option v-for="group in groups" :key="group.id" :value="group.id">
+              {{ group.name }}
+            </option>
+          </select>
+        </div>
+        
         <!-- API 密钥 -->
         <div class="config-section">
           <label>API 密钥</label>
@@ -53,9 +76,19 @@
           </div>
         </div>
         
+        <!-- API 类型 -->
+        <div class="config-section">
+          <label>API 兼容格式</label>
+          <select v-model="selectedProvider.apiType" @change="updateProviderApiType" class="input-field">
+            <option value="openai">OpenAI 兼容格式</option>
+            <option value="anthropic">Anthropic 兼容格式</option>
+          </select>
+          <small class="hint">OpenAI格式: /v1/chat/completions | Anthropic格式: /v1/messages</small>
+        </div>
+        
         <!-- API 地址 -->
         <div class="config-section">
-          <label>API 地址 <span class="hint">完成: {{ selectedProvider.baseUrl }}/v1/chat/completions</span></label>
+          <label>API 地址 <span class="hint">完成: {{ getFullApiUrl(selectedProvider) }}</span></label>
           <div class="input-group">
             <input :value="selectedProvider.baseUrl" readonly class="input-field">
           </div>
@@ -139,6 +172,22 @@
           基础 URL
           <input v-model="providerForm.baseUrl" class="input-field" placeholder="https://api.openai.com">
         </label>
+        <label>
+          API 兼容格式
+          <select v-model="providerForm.apiType" class="input-field">
+            <option value="openai">OpenAI 兼容格式</option>
+            <option value="anthropic">Anthropic 兼容格式</option>
+          </select>
+          <small class="hint">OpenAI格式使用 /v1/chat/completions，Anthropic格式使用 /v1/messages</small>
+        </label>
+        <label>
+          所属分组
+          <select v-model="providerForm.groupId" class="input-field">
+            <option v-for="group in groups" :key="group.id" :value="group.id">
+              {{ group.name }}
+            </option>
+          </select>
+        </label>
         <div class="modal-actions">
           <button @click="saveProvider" class="btn-save">保存</button>
           <button @click="closeModal" class="btn-cancel">取消</button>
@@ -165,6 +214,54 @@
         </div>
       </div>
     </div>
+    
+    <!-- 分组管理弹窗 -->
+    <div v-if="showGroupManager" class="modal" @click.self="closeGroupManager">
+      <div class="modal-content modal-large">
+        <h3>分组管理</h3>
+        <div class="group-manager-content">
+          <div class="group-list">
+            <div class="group-list-header">
+              <span>分组列表</span>
+              <button @click="showAddGroup = true" class="btn-icon-small">➕</button>
+            </div>
+            <div v-for="group in groups" :key="group.id" class="group-item">
+              <div class="group-item-info">
+                <div class="group-item-name">{{ group.name }}</div>
+                <div class="group-item-desc">{{ group.description || '无描述' }}</div>
+                <div class="group-item-count">{{ getGroupProviderCount(group.id) }} 个提供商</div>
+              </div>
+              <div class="group-item-actions">
+                <button v-if="group.id !== 'default'" @click="editGroup(group)" class="btn-icon-tiny">✎</button>
+                <button v-if="group.id !== 'default'" @click="deleteGroup(group.id)" class="btn-icon-tiny">×</button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="modal-actions">
+          <button @click="closeGroupManager" class="btn-cancel">关闭</button>
+        </div>
+      </div>
+    </div>
+    
+    <!-- 添加/编辑分组弹窗 -->
+    <div v-if="showAddGroup || editingGroup" class="modal" @click.self="closeGroupModal">
+      <div class="modal-content">
+        <h3>{{ editingGroup ? '编辑分组' : '添加分组' }}</h3>
+        <label>
+          分组名称
+          <input v-model="groupForm.name" class="input-field" placeholder="例如: 主力提供商">
+        </label>
+        <label>
+          描述
+          <input v-model="groupForm.description" class="input-field" placeholder="可选">
+        </label>
+        <div class="modal-actions">
+          <button @click="saveGroup" class="btn-save">保存</button>
+          <button @click="closeGroupModal" class="btn-cancel">取消</button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -173,21 +270,58 @@ import { ref, computed, onMounted } from 'vue'
 import axios from 'axios'
 
 const providers = ref([])
+const groups = ref([])
 const selectedProvider = ref(null)
 const searchProvider = ref('')
 const modelSearch = ref('')
 const availableModelsCache = ref({}) // 缓存每个提供商的模型列表
 const expandedGroupsCache = ref({}) // 缓存每个提供商的展开状态
+const expandedGroups = ref({}) // 分组展开状态
 const showAddProvider = ref(false)
 const editingProvider = ref(null)
-const providerForm = ref({ name: '', baseUrl: '', apiKey: '' })
+const providerForm = ref({ name: '', baseUrl: '', apiKey: '', groupId: 'default', apiType: 'openai' })
 const showApiKey = ref(false)
 const showAddModelModal = ref(false)
 const addModelForm = ref({ modelId: '', visible: true })
+const showGroupManager = ref(false)
+const showAddGroup = ref(false)
+const editingGroup = ref(null)
+const groupForm = ref({ name: '', description: '' })
 
 const filteredProviders = computed(() => {
   const query = searchProvider.value.toLowerCase()
   return query ? providers.value.filter(p => p.name.toLowerCase().includes(query)) : providers.value
+})
+
+const groupedProviders = computed(() => {
+  const filtered = filteredProviders.value
+  const grouped = {}
+  
+  // 初始化所有分组
+  groups.value.forEach(group => {
+    grouped[group.id] = {
+      id: group.id,
+      name: group.name,
+      description: group.description,
+      providers: []
+    }
+  })
+  
+  // 将提供商分配到对应分组
+  filtered.forEach(provider => {
+    const groupId = provider.groupId || 'default'
+    if (grouped[groupId]) {
+      grouped[groupId].providers.push(provider)
+    } else {
+      // 如果分组不存在，放到默认分组
+      if (grouped['default']) {
+        grouped['default'].providers.push(provider)
+      }
+    }
+  })
+  
+  // 转换为数组并过滤掉空分组
+  return Object.values(grouped).filter(group => group.providers.length > 0)
 })
 
 const currentAvailableModels = computed(() => {
@@ -228,9 +362,46 @@ const addedModelsGrouped = computed(() => {
 
 async function loadProviders() {
   const res = await axios.get('/api/providers')
-  providers.value = res.data.map(p => ({ ...p, models: p.models || [] }))
+  providers.value = res.data.map(p => ({
+    ...p,
+    models: p.models || [],
+    groupId: p.groupId || 'default',
+    apiType: p.apiType || 'openai' // 默认为OpenAI兼容格式
+  }))
   if (providers.value.length > 0 && !selectedProvider.value) {
     selectedProvider.value = providers.value[0]
+  }
+}
+
+async function loadGroups() {
+  try {
+    const res = await axios.get('/api/groups')
+    groups.value = res.data
+    // 初始化所有分组为展开状态
+    groups.value.forEach(group => {
+      expandedGroups.value[group.id] = true
+    })
+  } catch (error) {
+    console.error('Failed to load groups:', error)
+  }
+}
+
+function toggleGroupExpand(groupId) {
+  expandedGroups.value[groupId] = !expandedGroups.value[groupId]
+}
+
+function getGroupProviderCount(groupId) {
+  return providers.value.filter(p => (p.groupId || 'default') === groupId).length
+}
+
+async function updateProviderGroup() {
+  try {
+    await axios.put(`/api/providers/${selectedProvider.value.id}/group`, {
+      groupId: selectedProvider.value.groupId
+    })
+    await loadProviders()
+  } catch (error) {
+    alert('更新分组失败: ' + (error.response?.data?.error || error.message))
   }
 }
 
@@ -318,7 +489,9 @@ function editProvider() {
   providerForm.value = {
     name: selectedProvider.value.name,
     baseUrl: selectedProvider.value.baseUrl,
-    apiKey: selectedProvider.value.apiKey
+    apiKey: selectedProvider.value.apiKey,
+    groupId: selectedProvider.value.groupId || 'default',
+    apiType: selectedProvider.value.apiType || 'openai'
   }
 }
 
@@ -382,7 +555,7 @@ function getModelIcon(modelId) {
 function closeModal() {
   showAddProvider.value = false
   editingProvider.value = null
-  providerForm.value = { name: '', baseUrl: '', apiKey: '' }
+  providerForm.value = { name: '', baseUrl: '', apiKey: '', groupId: 'default', apiType: 'openai' }
 }
 
 function closeAddModelModal() {
@@ -453,9 +626,15 @@ function importProviders() {
     reader.onload = async (event) => {
       try {
         const content = JSON.parse(event.target.result);
-        if (confirm(`确定要导入 ${content.length} 个提供商吗？这将覆盖所有现有提供商。`)) {
-          await axios.post('/api/providers/import', { providers: content });
+        
+        // 兼容旧格式（一个只包含提供商的数组）和新格式（一个包含providers和groups的对象）
+        const providerCount = Array.isArray(content) ? content.length : (content.providers || []).length;
+        const groupCount = Array.isArray(content) ? 0 : (content.groups || []).length;
+
+        if (confirm(`确定要导入 ${providerCount} 个提供商和 ${groupCount} 个分组吗？这将覆盖所有现有配置。`)) {
+          await axios.post('/api/providers/import', content);
           alert('导入成功！');
+          await loadGroups();
           await loadProviders();
         }
       } catch (error) {
@@ -467,7 +646,81 @@ function importProviders() {
   input.click();
 }
 
-onMounted(loadProviders)
+// 分组管理函数
+function closeGroupManager() {
+  showGroupManager.value = false
+}
+
+function closeGroupModal() {
+  showAddGroup.value = false
+  editingGroup.value = null
+  groupForm.value = { name: '', description: '' }
+}
+
+function editGroup(group) {
+  editingGroup.value = group
+  groupForm.value = {
+    name: group.name,
+    description: group.description || ''
+  }
+}
+
+async function saveGroup() {
+  if (!groupForm.value.name.trim()) {
+    alert('分组名称不能为空')
+    return
+  }
+  
+  try {
+    if (editingGroup.value) {
+      await axios.put(`/api/groups/${editingGroup.value.id}`, groupForm.value)
+    } else {
+      await axios.post('/api/groups', groupForm.value)
+    }
+    await loadGroups()
+    closeGroupModal()
+  } catch (error) {
+    alert('保存分组失败: ' + (error.response?.data?.error || error.message))
+  }
+}
+
+async function deleteGroup(groupId) {
+  if (confirm('确定删除此分组？该分组下的提供商将移至默认分组。')) {
+    try {
+      await axios.delete(`/api/groups/${groupId}`)
+      await loadGroups()
+      await loadProviders()
+    } catch (error) {
+      alert('删除分组失败: ' + (error.response?.data?.error || error.message))
+    }
+  }
+}
+
+async function updateProviderApiType() {
+  try {
+    await axios.put(`/api/providers/${selectedProvider.value.id}`, selectedProvider.value)
+    await loadProviders()
+  } catch (error) {
+    alert('更新API类型失败: ' + (error.response?.data?.error || error.message))
+  }
+}
+
+function getFullApiUrl(provider) {
+  if (!provider) return ''
+  const baseUrl = provider.baseUrl.replace(/\/$/, '')
+  const apiType = provider.apiType || 'openai'
+  
+  if (apiType === 'anthropic') {
+    return `${baseUrl}/v1/messages`
+  } else {
+    return `${baseUrl}/v1/chat/completions`
+  }
+}
+
+onMounted(async () => {
+  await loadGroups()
+  await loadProviders()
+})
 </script>
 
 <style scoped>
@@ -478,7 +731,7 @@ onMounted(loadProviders)
 }
 
 .providers-sidebar {
-  width: 300px;
+  width: 320px;
   background: white;
   border-right: 1px solid #dee2e6;
   display: flex;
@@ -488,6 +741,25 @@ onMounted(loadProviders)
 .sidebar-header {
   padding: 20px;
   border-bottom: 1px solid #dee2e6;
+}
+
+.group-management {
+  margin-top: 12px;
+}
+
+.btn-manage-groups {
+  width: 100%;
+  padding: 8px 12px;
+  background: #6c757d;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  text-align: center;
+}
+
+.btn-manage-groups:hover {
+  background: #5a6268;
 }
 
 .search-input {
@@ -539,6 +811,48 @@ onMounted(loadProviders)
   flex: 1;
   overflow-y: auto;
   padding: 10px;
+}
+
+.provider-group {
+  margin-bottom: 12px;
+}
+
+.group-header {
+  display: flex;
+  align-items: center;
+  padding: 8px 12px;
+  background: #e9ecef;
+  border-radius: 6px;
+  cursor: pointer;
+  font-weight: 500;
+  color: #495057;
+  margin-bottom: 4px;
+  transition: background 0.2s;
+}
+
+.group-header:hover {
+  background: #dee2e6;
+}
+
+.group-expand-icon {
+  margin-right: 8px;
+  font-size: 12px;
+}
+
+.group-name {
+  flex: 1;
+}
+
+.group-count {
+  background: #6c757d;
+  color: white;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 12px;
+}
+
+.group-providers {
+  padding-left: 8px;
 }
 
 .provider-item {
@@ -898,6 +1212,60 @@ onMounted(loadProviders)
   max-width: 500px;
   max-height: 90vh;
   overflow-y: auto;
+}
+
+.modal-large {
+  max-width: 700px;
+}
+
+.group-manager-content {
+  margin: 20px 0;
+}
+
+.group-list-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+  font-weight: 500;
+  color: #495057;
+}
+
+.group-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px;
+  background: #f8f9fa;
+  border: 1px solid #dee2e6;
+  border-radius: 6px;
+  margin-bottom: 8px;
+}
+
+.group-item-info {
+  flex: 1;
+}
+
+.group-item-name {
+  font-weight: 500;
+  color: #495057;
+  margin-bottom: 4px;
+}
+
+.group-item-desc {
+  font-size: 12px;
+  color: #6c757d;
+  margin-bottom: 4px;
+}
+
+.group-item-count {
+  font-size: 12px;
+  color: #007bff;
+}
+
+.group-item-actions {
+  display: flex;
+  gap: 4px;
 }
 
 .modal-content h3 {
