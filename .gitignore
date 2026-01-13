@@ -25,3 +25,15 @@ Thumbs.db
 *.njsproj
 *.sln
 *.sw?
+
+# Claude Code 临时文件
+tmpclaude-*-cwd
+
+# 文档文件夹（包含开发记录和临时文档）
+/document/
+
+# 测试文件
+/test/
+test_*.js
+test_*.md
+test_*.txt
