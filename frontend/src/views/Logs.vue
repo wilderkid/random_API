@@ -161,7 +161,8 @@
 import { ref, computed, onMounted } from 'vue'
 import axios from 'axios'
 
-const API_BASE = 'http://localhost:3000'
+// 使用相对路径，自动适配当前域名和端口
+const API_BASE = window.location.origin
 
 const startDate = ref('')
 const endDate = ref('')
