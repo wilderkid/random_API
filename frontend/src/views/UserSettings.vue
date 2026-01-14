@@ -105,18 +105,18 @@
             <div class="endpoint-info">
               <div class="endpoint-item">
                 <span class="endpoint-label">Base URL:</span>
-                <code class="endpoint-url">http://localhost:3000/v1</code>
-                <button @click="copyToClipboard('http://localhost:3000/v1')" class="btn-copy">复制</button>
+                <code class="endpoint-url">{{ apiBaseUrl }}/v1</code>
+                <button @click="copyToClipboard(`${apiBaseUrl}/v1`)" class="btn-copy">复制</button>
               </div>
               <div class="endpoint-item">
                 <span class="endpoint-label">Chat Completions:</span>
-                <code class="endpoint-url">http://localhost:3000/v1/chat/completions</code>
-                <button @click="copyToClipboard('http://localhost:3000/v1/chat/completions')" class="btn-copy">复制</button>
+                <code class="endpoint-url">{{ apiBaseUrl }}/v1/chat/completions</code>
+                <button @click="copyToClipboard(`${apiBaseUrl}/v1/chat/completions`)" class="btn-copy">复制</button>
               </div>
               <div class="endpoint-item">
                 <span class="endpoint-label">Models:</span>
-                <code class="endpoint-url">http://localhost:3000/v1/models</code>
-                <button @click="copyToClipboard('http://localhost:3000/v1/models')" class="btn-copy">复制</button>
+                <code class="endpoint-url">{{ apiBaseUrl }}/v1/models</code>
+                <button @click="copyToClipboard(`${apiBaseUrl}/v1/models`)" class="btn-copy">复制</button>
               </div>
             </div>
           </section>
@@ -147,7 +147,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, computed } from 'vue'
 import axios from 'axios'
 
 const settings = ref({
@@ -158,6 +158,17 @@ const settings = ref({
 const saveMessage = ref('')
 const selectedSetting = ref('user')
 const allModels = ref([])
+
+// 动态获取API基础URL
+const apiBaseUrl = computed(() => {
+  // 如果是开发环境（端口5173），则指向后端端口3000
+  // 如果是生产环境，则使用当前域名
+  const origin = window.location.origin
+  if (origin.includes(':5173')) {
+    return origin.replace(':5173', ':3000')
+  }
+  return origin
+})
 
 const settingsItems = ref([
   {
