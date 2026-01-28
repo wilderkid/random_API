@@ -9,6 +9,11 @@
           <button @click="importProviders" class="btn-import">导入</button>
           <button @click="exportProviders" class="btn-export">导出</button>
         </div>
+        <div class="button-group">
+          <button @click="refreshAllModels" class="btn-refresh-all" :disabled="isRefreshingAll">
+            {{ isRefreshingAll ? '刷新中...' : '🔄 刷新所有模型' }}
+          </button>
+        </div>
         <div class="group-management">
           <button @click="showGroupManager = true" class="btn-manage-groups">📁 管理分组</button>
         </div>
@@ -26,12 +31,20 @@
             <div
               v-for="provider in group.providers"
               :key="provider.id"
-              :class="['provider-item', { active: selectedProvider?.id === provider.id }]"
+              :class="['provider-item', {
+                active: selectedProvider?.id === provider.id,
+                'no-models': !provider.disabled && (!provider.models || provider.models.length === 0)
+              }]"
               @click="selectProvider(provider)"
             >
               <div class="provider-item-icon">{{ provider.name.charAt(0) }}</div>
               <div class="provider-item-info">
-                <div class="provider-item-name">{{ provider.name }}</div>
+                <div class="provider-item-name">
+                  {{ provider.name }}
+                  <span class="model-count-badge" :class="{ 'zero-models': !provider.disabled && (!provider.models || provider.models.length === 0) }">
+                    {{ provider.models?.length || 0 }}
+                  </span>
+                </div>
                 <div :class="['provider-item-status', provider.disabled ? 'disabled' : 'active']">
                   {{ provider.disabled ? '已禁用' : 'ON' }}
                 </div>
@@ -287,6 +300,7 @@ const showGroupManager = ref(false)
 const showAddGroup = ref(false)
 const editingGroup = ref(null)
 const groupForm = ref({ name: '', description: '' })
+const isRefreshingAll = ref(false) // 批量刷新状态
 
 const filteredProviders = computed(() => {
   const query = searchProvider.value.toLowerCase()
@@ -415,10 +429,10 @@ async function fetchModels() {
   try {
     const res = await axios.get(`/api/providers/${selectedProvider.value.id}/models`)
     const providerId = selectedProvider.value.id
-    
+
     // 缓存模型列表
     availableModelsCache.value[providerId] = res.data
-    
+
     // 自动展开所有分组
     const groups = {}
     res.data.forEach(model => {
@@ -428,6 +442,57 @@ async function fetchModels() {
     expandedGroupsCache.value[providerId] = groups
   } catch (e) {
     alert('获取模型失败: ' + (e.response?.data?.error || e.message))
+  }
+}
+
+// 刷新所有提供商的模型
+async function refreshAllModels() {
+  if (isRefreshingAll.value) return
+
+  const activeProviders = providers.value.filter(p => !p.disabled)
+  if (activeProviders.length === 0) {
+    alert('没有可用的提供商')
+    return
+  }
+
+  if (!confirm(`确定要刷新所有 ${activeProviders.length} 个提供商的模型吗？\n\n这将自动获取最新的模型列表并覆盖现有配置。\n已禁用的提供商将被跳过。`)) {
+    return
+  }
+
+  isRefreshingAll.value = true
+
+  try {
+    const res = await axios.post('/api/providers/refresh-all-models')
+    const { success, failed, successCount, failedCount, total } = res.data
+
+    // 刷新提供商列表
+    await loadProviders()
+
+    // 构建结果消息
+    let message = `刷新完成！\n\n`
+    message += `总计: ${total} 个提供商\n`
+    message += `成功: ${successCount} 个\n`
+    message += `失败: ${failedCount} 个\n\n`
+
+    if (success.length > 0) {
+      message += `成功的提供商:\n`
+      success.forEach(item => {
+        message += `  ✓ ${item.providerName}: ${item.modelCount} 个模型\n`
+      })
+    }
+
+    if (failed.length > 0) {
+      message += `\n失败的提供商:\n`
+      failed.forEach(item => {
+        message += `  ✗ ${item.providerName}: ${item.error}\n`
+      })
+    }
+
+    alert(message)
+  } catch (error) {
+    alert('批量刷新失败: ' + (error.response?.data?.error || error.message))
+  } finally {
+    isRefreshingAll.value = false
   }
 }
 
@@ -807,6 +872,29 @@ onMounted(async () => {
   background: #e0a800;
 }
 
+.btn-refresh-all {
+  width: 100%;
+  padding: 8px 12px;
+  background: #17a2b8;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  text-align: center;
+  font-weight: 500;
+  transition: background 0.2s;
+}
+
+.btn-refresh-all:hover:not(:disabled) {
+  background: #138496;
+}
+
+.btn-refresh-all:disabled {
+  background: #6c757d;
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
 .providers-list {
   flex: 1;
   overflow-y: auto;
@@ -875,6 +963,21 @@ onMounted(async () => {
   color: white;
 }
 
+.provider-item.no-models {
+  border: 2px solid #dc3545;
+  background: #fff5f5;
+}
+
+.provider-item.no-models:hover {
+  background: #ffe5e5;
+}
+
+.provider-item.no-models.active {
+  background: #dc3545;
+  color: white;
+  border-color: #dc3545;
+}
+
 .provider-item-icon {
   width: 40px;
   height: 40px;
@@ -899,6 +1002,33 @@ onMounted(async () => {
 .provider-item-name {
   font-weight: 500;
   margin-bottom: 4px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.model-count-badge {
+  display: inline-block;
+  background: #28a745;
+  color: white;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 600;
+  min-width: 20px;
+  text-align: center;
+}
+
+.model-count-badge.zero-models {
+  background: #dc3545;
+}
+
+.provider-item.active .model-count-badge {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+.provider-item.active .model-count-badge.zero-models {
+  background: rgba(220, 53, 69, 0.8);
 }
 
 .provider-item-status {

@@ -1,7 +1,10 @@
 {
   "permissions": {
     "allow": [
-      "Bash(tree:*)"
+      "Bash(tree:*)",
+      "Bash(node -c server.js)",
+      "Bash(node test_normalize.js)",
+      "Bash(del:*)"
     ]
   }
 }

@@ -68,6 +68,14 @@
                   <span>启用此密钥</span>
                 </label>
               </div>
+              <div class="form-group">
+                <label>轮询模式</label>
+                <label class="toggle">
+                  <input type="checkbox" v-model="selectedKey.usePolling">
+                  <span>启用轮询模式（自动负载均衡）</span>
+                </label>
+                <small class="hint">启用后将使用轮询池中的模型，关闭后可选择特定分组的所有模型</small>
+              </div>
             </div>
             
             <!-- API密钥 -->
@@ -105,31 +113,83 @@
               </div>
             </div>
             
-            <!-- 模型权限 -->
-            <div class="config-section">
-              <h4>模型权限</h4>
-              <p class="section-desc">选择此密钥可以访问的模型</p>
+            <!-- 模型权限 - 轮询模式 -->
+            <div v-if="selectedKey.usePolling" class="config-section">
+              <h4>轮询模型权限</h4>
+              <p class="section-desc">选择此密钥可以访问的轮询模型（留空表示允许所有轮询模型）</p>
+              <div class="models-search">
+                <input v-model="modelSearchQuery"
+                       type="text"
+                       placeholder="🔍 搜索模型..."
+                       class="search-input-small">
+                <span class="search-count">{{ searchedPollingModels.length }} / {{ availablePollingModels.length }}</span>
+              </div>
+              <div class="models-header">
+                <button @click="selectAllPollingModels" class="btn-select-all">✓ 全选</button>
+                <button @click="clearAllPollingModels" class="btn-clear-all">✗ 清空</button>
+              </div>
               <div class="models-grid">
-                <label v-for="model in filteredAvailableModels" :key="model" class="model-checkbox">
+                <label v-for="model in searchedPollingModels" :key="model" class="model-checkbox">
                   <input type="checkbox"
                          :value="model"
                          v-model="selectedKey.allowedModels">
                   <span>{{ model }}</span>
                 </label>
               </div>
+              <div v-if="availablePollingModels.length === 0" class="empty-hint">
+                暂无可用的轮询模型，请先在轮询配置中添加模型
+              </div>
+              <div v-else-if="searchedPollingModels.length === 0" class="empty-hint">
+                没有匹配的模型
+              </div>
             </div>
-            
-            <!-- 分组权限 -->
-            <div class="config-section">
-              <h4>分组权限</h4>
-              <p class="section-desc">选择此密钥可以访问的提供商分组（不选则为全部允许）</p>
+
+            <!-- 分组权限 - 非轮询模式 -->
+            <div v-if="!selectedKey.usePolling" class="config-section">
+              <h4>提供商分组权限</h4>
+              <p class="section-desc">选择此密钥可以访问的提供商分组（留空表示允许所有分组）</p>
+              <div class="models-header">
+                <button @click="selectAllGroups" class="btn-select-all">✓ 全选</button>
+                <button @click="clearAllGroups" class="btn-clear-all">✗ 清空</button>
+              </div>
               <div class="models-grid">
                 <label v-for="group in availableGroups" :key="group.id" class="model-checkbox">
                   <input type="checkbox"
                          :value="group.id"
                          v-model="selectedKey.allowedGroups">
-                  <span>{{ group.name }}</span>
+                  <span>{{ group.name }} ({{ getGroupProviderCount(group.id) }}个提供商)</span>
                 </label>
+              </div>
+            </div>
+
+            <!-- 模型权限 - 非轮询模式 -->
+            <div v-if="!selectedKey.usePolling" class="config-section">
+              <h4>模型权限</h4>
+              <p class="section-desc">选择此密钥可以访问的模型（基于已选分组）</p>
+              <div class="models-search">
+                <input v-model="modelSearchQuery"
+                       type="text"
+                       placeholder="🔍 搜索模型..."
+                       class="search-input-small">
+                <span class="search-count">{{ searchedAvailableModels.length }} / {{ filteredAvailableModels.length }}</span>
+              </div>
+              <div class="models-header">
+                <button @click="selectAllModels" class="btn-select-all">✓ 全选</button>
+                <button @click="clearAllModels" class="btn-clear-all">✗ 清空</button>
+              </div>
+              <div class="models-grid">
+                <label v-for="model in searchedAvailableModels" :key="model" class="model-checkbox">
+                  <input type="checkbox"
+                         :value="model"
+                         v-model="selectedKey.allowedModels">
+                  <span>{{ model }}</span>
+                </label>
+              </div>
+              <div v-if="filteredAvailableModels.length === 0" class="empty-hint">
+                请先选择提供商分组
+              </div>
+              <div v-else-if="searchedAvailableModels.length === 0" class="empty-hint">
+                没有匹配的模型
               </div>
             </div>
             
@@ -207,9 +267,11 @@ const apiKeys = ref([])
 const selectedKey = ref(null)
 const showCreateModal = ref(false)
 const availableModels = ref([])
+const availablePollingModels = ref([]) // 轮询模型列表
 const availableGroups = ref([])
 const allProviders = ref([])
 const originalKey = ref(null)
+const modelSearchQuery = ref('') // 模型搜索关键词
 
 const newKey = ref({
   name: '',
@@ -222,32 +284,82 @@ const hasChanges = computed(() => {
   return JSON.stringify(selectedKey.value) !== JSON.stringify(originalKey.value)
 })
 
+// 非轮询模式：根据选择的分组过滤模型
 const filteredAvailableModels = computed(() => {
-  if (!selectedKey.value || !selectedKey.value.allowedGroups || selectedKey.value.allowedGroups.length === 0) {
-    return availableModels.value;
+  if (!selectedKey.value || selectedKey.value.usePolling) {
+    return []
   }
 
-  const allowedGroupIds = new Set(selectedKey.value.allowedGroups);
-  const providersInAllowedGroups = allProviders.value.filter(p => allowedGroupIds.has(p.groupId || 'default'));
-  
-  const modelsInAllowedGroups = new Set();
+  // 如果没有选择分组，返回所有模型
+  if (!selectedKey.value.allowedGroups || selectedKey.value.allowedGroups.length === 0) {
+    return availableModels.value
+  }
+
+  const allowedGroupIds = new Set(selectedKey.value.allowedGroups)
+  const providersInAllowedGroups = allProviders.value.filter(p => allowedGroupIds.has(p.groupId || 'default'))
+
+  const modelsInAllowedGroups = new Set()
   providersInAllowedGroups.forEach(p => {
     (p.models || []).forEach(modelObj => {
-      const modelName = modelObj.id.includes('/') ? modelObj.id.split('/').pop() : modelObj.id;
-      modelsInAllowedGroups.add(modelName);
-    });
-  });
+      if (modelObj.visible !== false) {
+        modelsInAllowedGroups.add(modelObj.id)
+      }
+    })
+  })
 
-  return availableModels.value.filter(m => modelsInAllowedGroups.has(m));
-});
+  return Array.from(modelsInAllowedGroups).sort()
+})
+
+// 搜索过滤后的轮询模型
+const searchedPollingModels = computed(() => {
+  if (!modelSearchQuery.value.trim()) {
+    return availablePollingModels.value
+  }
+  const query = modelSearchQuery.value.toLowerCase()
+  return availablePollingModels.value.filter(model =>
+    model.toLowerCase().includes(query)
+  )
+})
+
+// 搜索过滤后的非轮询模型
+const searchedAvailableModels = computed(() => {
+  if (!modelSearchQuery.value.trim()) {
+    return filteredAvailableModels.value
+  }
+  const query = modelSearchQuery.value.toLowerCase()
+  return filteredAvailableModels.value.filter(model =>
+    model.toLowerCase().includes(query)
+  )
+})
+
+// 获取分组的提供商数量
+function getGroupProviderCount(groupId) {
+  return allProviders.value.filter(p => (p.groupId || 'default') === groupId).length
+}
 
 // 当可见模型列表变化时，清理掉不再可见的已选模型
 watch(filteredAvailableModels, (newVisibleModels) => {
-  if (selectedKey.value?.allowedModels) {
-    const visibleModelSet = new Set(newVisibleModels);
-    selectedKey.value.allowedModels = selectedKey.value.allowedModels.filter(m => visibleModelSet.has(m));
+  if (selectedKey.value?.allowedModels && !selectedKey.value.usePolling) {
+    const visibleModelSet = new Set(newVisibleModels)
+    selectedKey.value.allowedModels = selectedKey.value.allowedModels.filter(m => visibleModelSet.has(m))
   }
-});
+})
+
+// 监听轮询模式切换
+watch(() => selectedKey.value?.usePolling, (newValue) => {
+  if (selectedKey.value) {
+    // 切换模式时清空已选模型和搜索
+    selectedKey.value.allowedModels = []
+    selectedKey.value.allowedGroups = []
+    modelSearchQuery.value = ''
+  }
+})
+
+// 监听密钥切换
+watch(selectedKey, () => {
+  // 切换密钥时清空搜索
+  modelSearchQuery.value = ''
+})
 
 // 加载API密钥列表
 async function loadApiKeys() {
@@ -267,7 +379,22 @@ async function loadAvailableModels() {
   try {
     const userSettings = await axios.get('/api/settings')
     const pollingConfig = userSettings.data.pollingConfig || { available: {} }
-    availableModels.value = Object.keys(pollingConfig.available || {})
+
+    // 轮询模型列表（规范化后的模型名）
+    availablePollingModels.value = Object.keys(pollingConfig.available || {}).sort()
+
+    // 所有模型列表（从提供商中获取）
+    const allModelsSet = new Set()
+    allProviders.value.forEach(provider => {
+      if (!provider.disabled && provider.models) {
+        provider.models.forEach(model => {
+          if (model.visible !== false) {
+            allModelsSet.add(model.id)
+          }
+        })
+      }
+    })
+    availableModels.value = Array.from(allModelsSet).sort()
   } catch (error) {
     console.error('加载可用模型失败:', error)
   }
@@ -298,11 +425,12 @@ async function loadAllProviders() {
 
 // 选择密钥
 function selectKey(key) {
-  // 确保新选择的密钥有 allowedGroups 字段
+  // 确保新选择的密钥有必要的字段
   const keyWithDefaults = {
     ...key,
-    allowedGroups: key.allowedGroups || []
-  };
+    allowedGroups: key.allowedGroups || [],
+    usePolling: key.usePolling !== undefined ? key.usePolling : true // 默认启用轮询
+  }
   selectedKey.value = JSON.parse(JSON.stringify(keyWithDefaults))
   originalKey.value = JSON.parse(JSON.stringify(keyWithDefaults))
 }
@@ -411,6 +539,50 @@ async function duplicateKey(key) {
     console.error('复制失败:', error)
     alert('复制失败，请手动复制')
   }
+}
+
+// 全选轮询模型
+function selectAllPollingModels() {
+  if (!selectedKey.value) return
+  // 全选搜索结果中的模型
+  const modelsToAdd = searchedPollingModels.value.filter(m => !selectedKey.value.allowedModels.includes(m))
+  selectedKey.value.allowedModels = [...selectedKey.value.allowedModels, ...modelsToAdd]
+}
+
+// 清空轮询模型
+function clearAllPollingModels() {
+  if (!selectedKey.value) return
+  // 清空搜索结果中的模型
+  const searchedSet = new Set(searchedPollingModels.value)
+  selectedKey.value.allowedModels = selectedKey.value.allowedModels.filter(m => !searchedSet.has(m))
+}
+
+// 全选分组
+function selectAllGroups() {
+  if (!selectedKey.value) return
+  selectedKey.value.allowedGroups = availableGroups.value.map(g => g.id)
+}
+
+// 清空分组
+function clearAllGroups() {
+  if (!selectedKey.value) return
+  selectedKey.value.allowedGroups = []
+}
+
+// 全选模型（非轮询模式）
+function selectAllModels() {
+  if (!selectedKey.value) return
+  // 全选搜索结果中的模型
+  const modelsToAdd = searchedAvailableModels.value.filter(m => !selectedKey.value.allowedModels.includes(m))
+  selectedKey.value.allowedModels = [...selectedKey.value.allowedModels, ...modelsToAdd]
+}
+
+// 清空模型（非轮询模式）
+function clearAllModels() {
+  if (!selectedKey.value) return
+  // 清空搜索结果中的模型
+  const searchedSet = new Set(searchedAvailableModels.value)
+  selectedKey.value.allowedModels = selectedKey.value.allowedModels.filter(m => !searchedSet.has(m))
 }
 
 // 删除密钥
@@ -768,6 +940,66 @@ onMounted(() => {
   gap: 16px;
 }
 
+.models-search {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.search-input-small {
+  flex: 1;
+  padding: 8px 12px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 14px;
+}
+
+.search-input-small:focus {
+  outline: none;
+  border-color: #007bff;
+  box-shadow: 0 0 0 2px rgba(0, 123, 255, 0.25);
+}
+
+.search-count {
+  font-size: 13px;
+  color: #666;
+  white-space: nowrap;
+}
+
+.models-header {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.btn-select-all, .btn-clear-all {
+  padding: 6px 12px;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  transition: all 0.2s;
+}
+
+.btn-select-all {
+  background-color: #28a745;
+  color: white;
+}
+
+.btn-select-all:hover {
+  background-color: #218838;
+}
+
+.btn-clear-all {
+  background-color: #dc3545;
+  color: white;
+}
+
+.btn-clear-all:hover {
+  background-color: #c82333;
+}
+
 .models-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
@@ -777,6 +1009,22 @@ onMounted(() => {
   padding: 12px;
   border: 1px solid #e0e0e0;
   border-radius: 4px;
+}
+
+.empty-hint {
+  padding: 20px;
+  text-align: center;
+  color: #999;
+  font-size: 14px;
+  background-color: #f8f9fa;
+  border-radius: 4px;
+}
+
+.hint {
+  display: block;
+  margin-top: 4px;
+  color: #666;
+  font-size: 12px;
 }
 
 .model-checkbox {
