@@ -152,20 +152,20 @@ const availableGroups = computed(() => {
     (settings.value.pollingConfig.excluded || []).map(item => `${item.providerId}:${item.modelName}`)
   )
 
-  for (const [modelName, providerIds] of Object.entries(settings.value.pollingConfig.available)) {
+  for (const [normalizedModelName, providerIds] of Object.entries(settings.value.pollingConfig.available)) {
     const availableProviders = providerIds.filter(id => {
-      return !excludedSet.has(`${id}:${modelName}`)
+      return !excludedSet.has(`${id}:${normalizedModelName}`)
     })
 
     if (availableProviders.length > 0) {
-      groups[modelName] = availableProviders.map(id => {
+      groups[normalizedModelName] = availableProviders.map(id => {
         const provider = providers.value.find(p => p.id === id)
-        // 找到该提供商中对应的具体模型ID
-        let actualModelId = modelName
+        // 找到该提供商中对应的具体模型ID（通过规范化匹配）
+        let actualModelId = normalizedModelName
         if (provider && provider.models) {
           const matchedModel = provider.models.find(m => {
-            const extractedName = m.id.includes('/') ? m.id.split('/').pop() : m.id
-            return extractedName === modelName
+            const normalized = normalizeModelName(m.id)
+            return normalized === normalizedModelName
           })
           if (matchedModel) {
             actualModelId = matchedModel.id
@@ -303,66 +303,106 @@ async function loadData() {
   await buildPollingConfig()
 }
 
+/**
+ * 规范化模型名称，用于判断不同提供商的模型是否实际上是同一个模型
+ * 规则：
+ * 1. 忽略平台名（斜杠前的部分）
+ * 2. 忽略大小写差异
+ * 3. 忽略日期差异（YYYYMMDD 或 YYYY-MM-DD 格式）
+ * 4. 保留模型名、版本、参数量、其他说明
+ */
+function normalizeModelName(modelId) {
+  // 1. 转换为小写（忽略大小写）
+  let normalized = modelId.toLowerCase().trim()
+
+  // 2. 移除平台前缀（如果有斜杠）
+  if (normalized.includes('/')) {
+    normalized = normalized.split('/').pop()
+  }
+
+  // 3. 移除日期部分
+  // 匹配 YYYYMMDD 格式（8位连续数字，前4位是年份）
+  normalized = normalized.replace(/[-_]?20\d{6}[-_]?/g, '')
+
+  // 匹配 YYYY-MM-DD 格式
+  normalized = normalized.replace(/[-_]?20\d{2}-\d{2}-\d{2}[-_]?/g, '')
+
+  // 4. 清理多余的连字符和下划线
+  normalized = normalized.replace(/[-_]+/g, '-')  // 将多个连字符/下划线合并为一个
+  normalized = normalized.replace(/^-+|-+$/g, '')  // 移除首尾的连字符
+
+  return normalized
+}
+
 async function buildPollingConfig() {
   console.log('Building polling config...')
-  const modelMap = {}
-  
+  const modelMap = {}  // 规范化名称 -> [{providerId, originalModelId}]
+
   for (const provider of providers.value) {
     if (provider.disabled) {
       console.log(`Skipping disabled provider: ${provider.name}`)
       continue
     }
-    
+
     console.log(`Processing provider: ${provider.name}`)
     console.log(`Provider models:`, provider.models)
-    
+
     // 使用提供商已添加的模型，而不是从API获取所有模型
     if (provider.models && provider.models.length > 0) {
       provider.models.forEach(model => {
         if (model.visible !== false) { // 只统计可见的模型
-          const modelName = model.id.includes('/') ? model.id.split('/').pop() : model.id
-          
-          // 检查该模型是否被禁用
-          const isDisabled = settings.value.disabledModels?.[provider.id]?.includes(modelName)
+          const originalModelId = model.id
+          const normalizedName = normalizeModelName(originalModelId)
+
+          // 检查该模型是否被禁用（使用规范化名称检查）
+          const isDisabled = settings.value.disabledModels?.[provider.id]?.includes(normalizedName)
           if (isDisabled) {
-            console.log(`Skipping disabled model: ${provider.name} - ${modelName}`)
+            console.log(`Skipping disabled model: ${provider.name} - ${normalizedName}`)
             return
           }
-          
-          if (!modelMap[modelName]) modelMap[modelName] = []
+
+          if (!modelMap[normalizedName]) {
+            modelMap[normalizedName] = []
+          }
+
           // 避免重复添加同一个提供商
-          if (!modelMap[modelName].includes(provider.id)) {
-            modelMap[modelName].push(provider.id)
+          const existingEntry = modelMap[normalizedName].find(entry => entry.providerId === provider.id)
+          if (!existingEntry) {
+            modelMap[normalizedName].push({
+              providerId: provider.id,
+              originalModelId: originalModelId
+            })
           }
         }
       })
     }
   }
-  
+
   console.log('All models map:', modelMap)
-  
+
   // 只保留有多个提供商的模型（重复模型）
   const duplicateModels = {}
-  Object.entries(modelMap).forEach(([modelName, providerIds]) => {
-    if (providerIds.length > 1) {
-      duplicateModels[modelName] = providerIds
-      console.log(`Found duplicate model: ${modelName} with providers:`, providerIds)
+  Object.entries(modelMap).forEach(([normalizedName, entries]) => {
+    if (entries.length > 1) {
+      // 存储格式：规范化名称 -> 提供商ID数组
+      duplicateModels[normalizedName] = entries.map(e => e.providerId)
+      console.log(`Found duplicate model: ${normalizedName} with ${entries.length} providers`)
     }
   })
-  
+
   console.log('Duplicate models:', duplicateModels)
-  
+
   // 保留现有的排除池配置（数组格式）
   const existingExcluded = settings.value.pollingConfig.excluded || []
-  
+
   // 清理排除池中不再存在的模型
   const validExcluded = existingExcluded.filter(item => {
     return duplicateModels[item.modelName]?.includes(item.providerId)
   })
-  
+
   settings.value.pollingConfig.available = duplicateModels
   settings.value.pollingConfig.excluded = validExcluded
-  
+
   await saveSettings()
   console.log('Polling config saved')
 }

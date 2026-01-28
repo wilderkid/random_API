@@ -293,7 +293,7 @@ app.get('/api/providers/:id/models', async (req, res) => {
   const data = await getApiSettings();
   const provider = data.providers.find(p => p.id === req.params.id);
   if (!provider) return res.status(404).json({ error: 'Provider not found' });
-  
+
   try {
     const apiType = provider.apiType || 'openai';
     const url = buildApiUrl(provider.baseUrl, 'models', apiType);
@@ -306,6 +306,73 @@ app.get('/api/providers/:id/models', async (req, res) => {
     console.error('Error fetching models:', error.message);
     res.status(500).json({ error: error.message });
   }
+});
+
+// 批量刷新所有提供商的模型
+app.post('/api/providers/refresh-all-models', async (req, res) => {
+  const data = await getApiSettings();
+  const results = {
+    success: [],
+    failed: [],
+    total: 0,
+    successCount: 0,
+    failedCount: 0
+  };
+
+  // 过滤掉已禁用的提供商
+  const activeProviders = data.providers.filter(p => !p.disabled);
+  results.total = activeProviders.length;
+
+  // 并发获取所有提供商的模型
+  const promises = activeProviders.map(async (provider) => {
+    try {
+      const apiType = provider.apiType || 'openai';
+      const url = buildApiUrl(provider.baseUrl, 'models', apiType);
+      const response = await axios.get(url, {
+        headers: { 'Authorization': `Bearer ${provider.apiKey}` },
+        timeout: 10000
+      });
+
+      const models = response.data.data || [];
+
+      // 更新提供商的模型列表，保留visible属性
+      const oldModels = provider.models || [];
+      const oldModelsMap = new Map(oldModels.map(m => [m.id, m.visible]));
+
+      // 将获取到的模型转换为系统格式，保留之前的可见性设置
+      provider.models = models.map(model => ({
+        id: model.id,
+        visible: oldModelsMap.has(model.id) ? oldModelsMap.get(model.id) : true
+      }));
+
+      results.success.push({
+        providerId: provider.id,
+        providerName: provider.name,
+        modelCount: provider.models.length
+      });
+      results.successCount++;
+    } catch (error) {
+      console.error(`Error fetching models for provider ${provider.name}:`, error.message);
+
+      // 刷新失败时清空该提供商的模型列表
+      provider.models = [];
+
+      results.failed.push({
+        providerId: provider.id,
+        providerName: provider.name,
+        error: error.message
+      });
+      results.failedCount++;
+    }
+  });
+
+  await Promise.all(promises);
+
+  // 保存更新后的配置
+  await fs.writeFile(API_SETTINGS_FILE, JSON.stringify(data, null, 2));
+  invalidateApiSettingsCache();
+
+  res.json(results);
 });
 
 app.get('/api/providers/:id/test', async (req, res) => {
@@ -544,55 +611,99 @@ app.post('/api/chat', async (req, res) => {
     const modelName = extractModelName(model);
     console.log(`Polling mode enabled for model: ${modelName}`);
     console.log(`User settings polling config:`, JSON.stringify(userSettings.pollingConfig, null, 2));
-    
-    // 使用新的轮询机制获取下一个提供商
-    const selectedProvider = getNextPollingProvider(settings.providers, modelName, userSettings.pollingConfig, userSettings);
-    
-    if (!selectedProvider) {
+
+    // 获取所有可用的轮询提供商
+    const pollingProviders = getPollingProviders(settings.providers, modelName, userSettings.pollingConfig);
+
+    if (pollingProviders.length === 0) {
       console.log(`No polling providers available for model ${modelName}`);
       res.write(`data: ${JSON.stringify({ error: `模型 ${modelName} 没有可用的轮询提供商或已被排除` })}\n\n`);
       res.end();
       return;
     }
-    
-    try {
-      console.log(`Using selected provider ${selectedProvider.name} (ID: ${selectedProvider.id}) for model ${modelName}`);
-      
-      // 获取该提供商的具体模型ID
-      const modelId = await getProviderModelId(selectedProvider, modelName);
-      if (!modelId) {
-        console.log(`Model ${modelName} not found in provider ${selectedProvider.name}`);
-        throw new Error(`模型 ${modelName} 在提供商 ${selectedProvider.name} 中不存在`);
+
+    console.log(`Found ${pollingProviders.length} available providers for polling`);
+
+    // 收集所有失败的错误信息
+    const errors = [];
+    let successfulProvider = null;
+
+    // 按照轮询顺序尝试每个提供商
+    for (const provider of pollingProviders) {
+      try {
+        console.log(`Trying provider ${provider.name} (ID: ${provider.id}) for model ${modelName}`);
+
+        // 获取该提供商的具体模型ID
+        const modelId = await getProviderModelId(provider, modelName);
+        if (!modelId) {
+          console.log(`Model ${modelName} not found in provider ${provider.name}`);
+          errors.push({
+            provider: provider.name,
+            error: `模型 ${modelName} 在提供商中不存在`
+          });
+          await incrementModelFailCount(provider.id, modelName, userSettings);
+          continue; // 尝试下一个提供商
+        }
+
+        console.log(`Using model ID: ${modelId} from provider ${provider.name}`);
+
+        // 尝试调用该提供商
+        await streamChat(provider, messages, params, res, modelId, images);
+
+        // 如果成功，重置模型失败计数并保存轮询状态
+        await resetModelFailCount(provider.id, modelName, userSettings);
+
+        // 标记该提供商在当前轮次已使用
+        const pollingState = userSettings.pollingState || {};
+        if (!pollingState[modelName]) {
+          pollingState[modelName] = {
+            currentIndex: 0,
+            usedInCurrentRound: []
+          };
+        }
+        if (!pollingState[modelName].usedInCurrentRound.includes(provider.id)) {
+          pollingState[modelName].usedInCurrentRound.push(provider.id);
+        }
+        userSettings.pollingState = pollingState;
+
+        await savePollingState(userSettings);
+
+        console.log(`Successfully used provider ${provider.name} for model ${modelName}`);
+        successfulProvider = provider;
+        break; // 成功，退出循环
+
+      } catch (error) {
+        console.error(`Provider ${provider.name} failed:`, error.message);
+
+        // 记录错误信息
+        errors.push({
+          provider: provider.name,
+          error: error.message || 'Unknown error'
+        });
+
+        // 增加模型失败计数
+        await incrementModelFailCount(provider.id, modelName, userSettings);
+        await savePollingState(userSettings);
+
+        // 继续尝试下一个提供商
+        console.log(`Trying next provider...`);
       }
-      
-      console.log(`Using model ID: ${modelId} from provider ${selectedProvider.name}`);
-      
-      await streamChat(selectedProvider, messages, params, res, modelId, images);
-      
-      // 如果成功，重置模型失败计数并保存轮询状态
-      await resetModelFailCount(selectedProvider.id, modelName, userSettings);
-      
-      // 保存轮询状态
-      await savePollingState(userSettings);
-      
-      console.log(`Successfully used provider ${selectedProvider.name} for model ${modelName}`);
-      return;
-      
-    } catch (error) {
-      console.error(`Provider ${selectedProvider.name} failed:`, error.message);
-      console.error(`Error details:`, error);
-      
-      // 增加模型失败计数
-      await incrementModelFailCount(selectedProvider.id, modelName, userSettings);
-      
-      // 保存轮询状态（即使失败也要保存，以便下次轮询到其他提供商）
-      await savePollingState(userSettings);
-      
-      // 返回错误信息
-      const errorMessage = error.message || 'Provider failed';
-      res.write(`data: ${JSON.stringify({ error: `轮询失败: ${errorMessage}` })}\n\n`);
+    }
+
+    // 如果所有提供商都失败了，返回所有错误信息
+    if (!successfulProvider) {
+      console.error(`All providers failed for model ${modelName}`);
+
+      let errorMessage = `所有提供商都失败了 (${errors.length}/${pollingProviders.length}):\n\n`;
+      errors.forEach((err, index) => {
+        errorMessage += `${index + 1}. ${err.provider}: ${err.error}\n`;
+      });
+
+      res.write(`data: ${JSON.stringify({ error: errorMessage })}\n\n`);
       res.end();
     }
+
+    return;
   } else {
     const [providerId, modelId] = model.split('::');
     const provider = settings.providers.find(p => p.id === providerId);
@@ -723,19 +834,19 @@ function buildChatRequestBody(modelId, messages, params, apiType = 'openai', ima
 
 function extractModelName(modelId) {
   console.log(`Extracting model name from: ${modelId}`);
-  
+
   // 如果是轮询模式的格式 (providerId::modelId)，提取modelId部分
   if (modelId.includes('::')) {
     const [, actualModelId] = modelId.split('::');
-    const extractedName = actualModelId.includes('/') ? actualModelId.split('/').pop() : actualModelId;
-    console.log(`Extracted model name from polling format: ${extractedName}`);
-    return extractedName;
+    const normalized = normalizeModelName(actualModelId);
+    console.log(`Extracted and normalized model name from polling format: ${normalized}`);
+    return normalized;
   }
-  
-  // 普通格式
-  const extractedName = modelId.includes('/') ? modelId.split('/').pop() : modelId;
-  console.log(`Extracted model name from normal format: ${extractedName}`);
-  return extractedName;
+
+  // 普通格式，使用规范化
+  const normalized = normalizeModelName(modelId);
+  console.log(`Extracted and normalized model name from normal format: ${normalized}`);
+  return normalized;
 }
 
 // ==================== 对话连续性：消息指纹识别 ====================
@@ -745,10 +856,34 @@ function generateMessageFingerprint(messages, modelName) {
   if (!messages || messages.length === 0) {
     return null;
   }
-  
-  // 只使用前3条消息（或全部如果少于3条）来生成指纹
+
+  // 如果只有一条消息，这很可能是新对话，添加时间戳确保唯一性
+  // 这样即使用户清除对话后发送相同的问题，也会被识别为新对话
+  if (messages.length === 1) {
+    const timestamp = Date.now();
+    const contentParts = [];
+
+    const msg = messages[0];
+    if (typeof msg.content === 'string') {
+      contentParts.push(msg.content);
+    } else if (Array.isArray(msg.content)) {
+      contentParts.push(msg.content
+        .filter(part => part.type === 'text')
+        .map(part => part.text)
+        .join('|'));
+    }
+
+    const contentString = contentParts.join('||');
+    // 加入时间戳确保每次新对话都有唯一指纹
+    const hash = crypto.createHash('md5').update(`${modelName}:${contentString}:${timestamp}`).digest('hex');
+
+    console.log(`[Fingerprint] Generated NEW conversation fingerprint with timestamp: ${hash.substring(0, 8)}...`);
+    return hash;
+  }
+
+  // 对于多条消息的对话，使用前3条消息生成指纹（保持会话连续性）
   const messagesToHash = messages.slice(0, Math.min(3, messages.length));
-  
+
   // 提取消息内容
   const contentParts = messagesToHash.map(msg => {
     if (typeof msg.content === 'string') {
@@ -762,10 +897,10 @@ function generateMessageFingerprint(messages, modelName) {
     }
     return '';
   });
-  
+
   const contentString = contentParts.join('||');
   const hash = crypto.createHash('md5').update(`${modelName}:${contentString}`).digest('hex');
-  
+
   console.log(`[Fingerprint] Generated fingerprint for ${messagesToHash.length} messages: ${hash.substring(0, 8)}...`);
   return hash;
 }
@@ -917,18 +1052,18 @@ function getPollingProviders(providers, modelName, config) {
   return pollingProviders;
 }
 
-// 获取下一个轮询提供商（实现真正的轮询机制）
+// 获取下一个轮询提供商（实现随机但不重复的轮询机制）
 function getNextPollingProvider(providers, modelName, config, userSettings) {
   console.log(`Getting next polling provider for model: ${modelName}`);
-  
+
   const available = config.available[modelName] || [];
   console.log(`Available provider IDs for ${modelName}:`, available);
-  
+
   if (available.length === 0) {
     console.log(`No available providers for model ${modelName}`);
     return null;
   }
-  
+
   // 构建排除集合（新格式：数组）
   const excludedSet = new Set();
   if (Array.isArray(config.excluded)) {
@@ -938,9 +1073,9 @@ function getNextPollingProvider(providers, modelName, config, userSettings) {
       }
     });
   }
-  
+
   console.log(`Excluded provider IDs for ${modelName}:`, Array.from(excludedSet));
-  
+
   // 获取或初始化轮询状态
   const pollingState = userSettings.pollingState || {};
   if (!pollingState[modelName]) {
@@ -949,60 +1084,54 @@ function getNextPollingProvider(providers, modelName, config, userSettings) {
       usedInCurrentRound: []
     };
   }
-  
+
   const modelState = pollingState[modelName];
-  
+
   // 确保 usedInCurrentRound 是数组格式（兼容性处理）
   if (!Array.isArray(modelState.usedInCurrentRound)) {
     modelState.usedInCurrentRound = [];
   }
-  
+
   console.log(`Current polling state for ${modelName}:`, modelState);
-  
-  // 如果当前轮次已经用完所有提供商，开始新的轮次
-  if (modelState.usedInCurrentRound.length >= available.length) {
+
+  // 获取所有可用且未被排除的提供商ID
+  const validProviderIds = available.filter(id => {
+    const provider = providers.find(p => p.id === id);
+    const isModelDisabled = isModelDisabledForProvider(modelName, id, userSettings);
+    const isExcluded = excludedSet.has(id);
+    return provider && !provider.disabled && !isModelDisabled && !isExcluded;
+  });
+
+  console.log(`Valid provider IDs for ${modelName}:`, validProviderIds);
+
+  // 如果当前轮次已经用完所有有效提供商，开始新的轮次
+  if (modelState.usedInCurrentRound.length >= validProviderIds.length) {
     console.log(`All providers used in current round, starting new round for ${modelName}`);
     modelState.usedInCurrentRound = [];
-    modelState.currentIndex = 0;
   }
-  
-  // 找到下一个未使用的提供商
-  let attempts = 0;
-  let selectedProvider = null;
-  
-  while (attempts < available.length && !selectedProvider) {
-    const providerId = available[modelState.currentIndex];
-    
-    // 检查这个提供商在当前轮次是否已经使用过
-    if (!modelState.usedInCurrentRound.includes(providerId)) {
-      const provider = providers.find(p => p.id === providerId);
-      
-      // 检查该模型在该提供商是否被禁用
-      const isModelDisabled = isModelDisabledForProvider(modelName, providerId, userSettings);
-      
-      // 检查该提供商是否在排除池中
-      const isExcluded = excludedSet.has(providerId);
-      
-      if (provider && !provider.disabled && !isModelDisabled && !isExcluded) {
-        selectedProvider = provider;
-        modelState.usedInCurrentRound.push(providerId);
-        console.log(`Selected provider: ${provider.name} (ID: ${providerId}) for model ${modelName}`);
-        console.log(`Used providers in current round:`, modelState.usedInCurrentRound);
-      } else {
-        console.log(`Provider ${providerId} not found, disabled, excluded, or model ${modelName} is disabled for this provider, skipping`);
-      }
-    } else {
-      console.log(`Provider ${providerId} already used in current round, skipping`);
-    }
-    
-    // 移动到下一个提供商
-    modelState.currentIndex = (modelState.currentIndex + 1) % available.length;
-    attempts++;
+
+  // 找到本轮次还未使用的提供商
+  const unusedProviderIds = validProviderIds.filter(id => !modelState.usedInCurrentRound.includes(id));
+
+  if (unusedProviderIds.length === 0) {
+    console.log(`No unused providers available for ${modelName}`);
+    return null;
   }
-  
+
+  // 从未使用的提供商中随机选择一个
+  const randomIndex = Math.floor(Math.random() * unusedProviderIds.length);
+  const selectedProviderId = unusedProviderIds[randomIndex];
+  const selectedProvider = providers.find(p => p.id === selectedProviderId);
+
+  if (selectedProvider) {
+    modelState.usedInCurrentRound.push(selectedProviderId);
+    console.log(`Randomly selected provider: ${selectedProvider.name} (ID: ${selectedProviderId}) for model ${modelName}`);
+    console.log(`Used providers in current round (${modelState.usedInCurrentRound.length}/${validProviderIds.length}):`, modelState.usedInCurrentRound);
+  }
+
   // 保存轮询状态
   userSettings.pollingState = pollingState;
-  
+
   return selectedProvider;
 }
 
@@ -1081,88 +1210,128 @@ function isModelDisabledForProvider(modelName, providerId, userSettings) {
 function getFailoverProviders(providers, modelName, config, userSettings, excludeProviderIds = [], apiKeyInfo = null) {
   console.log(`[Failover] Getting failover providers for model: ${modelName}`);
   console.log(`[Failover] Excluding providers: ${excludeProviderIds.join(', ')}`);
-  
-  const available = config.available[modelName] || [];
-  console.log(`[Failover] Available provider IDs for ${modelName}:`, available);
-  
-  if (available.length === 0) {
-    console.log(`[Failover] No available providers for model ${modelName}`);
-    return [];
-  }
-  
-  // 构建排除集合（新格式：数组）
-  const excludedFromPool = new Set();
-  if (Array.isArray(config.excluded)) {
-    config.excluded.forEach(item => {
-      if (item.modelName === modelName) {
-        excludedFromPool.add(item.providerId);
-      }
-    });
-  }
-  
-  console.log(`[Failover] Providers excluded from pool for ${modelName}:`, Array.from(excludedFromPool));
-  
-  // 获取轮询状态，确定起始位置
-  const pollingState = userSettings.pollingState || {};
-  if (!pollingState[modelName]) {
-    pollingState[modelName] = {
-      currentIndex: 0,
-      usedInCurrentRound: []
-    };
-  }
-  userSettings.pollingState = pollingState;
-  
-  const modelState = pollingState[modelName];
-  const startIndex = modelState.currentIndex || 0;
-  
-  // 收集所有可用的提供商，按轮询顺序排列
-  const failoverProviders = [];
-  
-  for (let i = 0; i < available.length; i++) {
-    const index = (startIndex + i) % available.length;
-    const providerId = available[index];
-    
-    // 跳过已排除的提供商（从故障转移列表中排除）
-    if (excludeProviderIds.includes(providerId)) {
-      console.log(`[Failover] Provider ${providerId} already tried, skipping`);
-      continue;
+
+  // 判断是否使用轮询模式
+  const usePolling = apiKeyInfo?.usePolling !== false; // 默认为true
+
+  let candidateProviders = [];
+
+  if (usePolling) {
+    // 轮询模式：从轮询池中获取提供商
+    const available = config.available[modelName] || [];
+    console.log(`[Failover] Polling mode - Available provider IDs for ${modelName}:`, available);
+
+    if (available.length === 0) {
+      console.log(`[Failover] No available providers for model ${modelName}`);
+      return [];
     }
-    
-    // 跳过在排除池中的提供商
-    if (excludedFromPool.has(providerId)) {
-      console.log(`[Failover] Provider ${providerId} is in excluded pool for model ${modelName}, skipping`);
-      continue;
+
+    // 构建排除集合（新格式：数组）
+    const excludedFromPool = new Set();
+    if (Array.isArray(config.excluded)) {
+      config.excluded.forEach(item => {
+        if (item.modelName === modelName) {
+          excludedFromPool.add(item.providerId);
+        }
+      });
     }
-    
-    const provider = providers.find(p => p.id === providerId);
-    if (!provider) {
-      console.log(`[Failover] Provider ${providerId} not found`);
-      continue;
+
+    console.log(`[Failover] Providers excluded from pool for ${modelName}:`, Array.from(excludedFromPool));
+
+    // 获取轮询状态，确定起始位置
+    const pollingState = userSettings.pollingState || {};
+    if (!pollingState[modelName]) {
+      pollingState[modelName] = {
+        currentIndex: 0,
+        usedInCurrentRound: []
+      };
     }
-    
-    // 根据API密钥的分组权限进行过滤
-    if (apiKeyInfo && apiKeyInfo.allowedGroups && apiKeyInfo.allowedGroups.length > 0) {
-      const providerGroupId = provider.groupId || 'default';
-      if (!apiKeyInfo.allowedGroups.includes(providerGroupId)) {
-        console.log(`[Failover] Provider ${provider.name} (group: ${providerGroupId}) is not in allowed groups, skipping`);
+    userSettings.pollingState = pollingState;
+
+    const modelState = pollingState[modelName];
+    const startIndex = modelState.currentIndex || 0;
+
+    // 收集所有可用的提供商，按轮询顺序排列
+    for (let i = 0; i < available.length; i++) {
+      const index = (startIndex + i) % available.length;
+      const providerId = available[index];
+
+      // 跳过已排除的提供商（从故障转移列表中排除）
+      if (excludeProviderIds.includes(providerId)) {
+        console.log(`[Failover] Provider ${providerId} already tried, skipping`);
         continue;
       }
+
+      // 跳过在排除池中的提供商
+      if (excludedFromPool.has(providerId)) {
+        console.log(`[Failover] Provider ${providerId} is in excluded pool for model ${modelName}, skipping`);
+        continue;
+      }
+
+      const provider = providers.find(p => p.id === providerId);
+      if (!provider) {
+        console.log(`[Failover] Provider ${providerId} not found`);
+        continue;
+      }
+
+      // 根据API密钥的分组权限进行过滤
+      if (apiKeyInfo && apiKeyInfo.allowedGroups && apiKeyInfo.allowedGroups.length > 0) {
+        const providerGroupId = provider.groupId || 'default';
+        if (!apiKeyInfo.allowedGroups.includes(providerGroupId)) {
+          console.log(`[Failover] Provider ${provider.name} (group: ${providerGroupId}) is not in allowed groups, skipping`);
+          continue;
+        }
+      }
+
+      if (provider.disabled) {
+        console.log(`[Failover] Provider ${provider.name} is disabled globally`);
+        continue;
+      }
+
+      candidateProviders.push(provider);
     }
-    
-    if (provider.disabled) {
-      console.log(`[Failover] Provider ${provider.name} is disabled globally`);
-      continue;
+  } else {
+    // 非轮询模式：从所有提供商中查找支持该模型的提供商
+    console.log(`[Failover] Non-polling mode - Searching all providers for model ${modelName}`);
+
+    const allowedGroups = apiKeyInfo?.allowedGroups || [];
+
+    for (const provider of providers) {
+      // 跳过已排除的提供商
+      if (excludeProviderIds.includes(provider.id)) {
+        console.log(`[Failover] Provider ${provider.id} already tried, skipping`);
+        continue;
+      }
+
+      if (provider.disabled) {
+        console.log(`[Failover] Provider ${provider.name} is disabled globally`);
+        continue;
+      }
+
+      // 根据API密钥的分组权限进行过滤
+      if (allowedGroups.length > 0) {
+        const providerGroupId = provider.groupId || 'default';
+        if (!allowedGroups.includes(providerGroupId)) {
+          console.log(`[Failover] Provider ${provider.name} (group: ${providerGroupId}) is not in allowed groups, skipping`);
+          continue;
+        }
+      }
+
+      // 检查提供商是否支持该模型（使用规范化匹配）
+      const hasModel = provider.models?.some(m => {
+        const normalized = normalizeModelName(m.id);
+        return normalized === modelName && m.visible !== false;
+      });
+
+      if (hasModel) {
+        console.log(`[Failover] Provider ${provider.name} supports model ${modelName}`);
+        candidateProviders.push(provider);
+      }
     }
-    
-    // 注意：在故障转移模式下，我们忽略 disabledModels 检查
-    // 因为 disabledModels 是基于历史失败计数的，但当前请求应该尝试所有可用提供商
-    
-    failoverProviders.push(provider);
-    console.log(`[Failover] Added provider ${provider.name} (ID: ${providerId}) to failover list`);
   }
-  
-  console.log(`[Failover] Total failover providers: ${failoverProviders.length}`);
-  return failoverProviders;
+
+  console.log(`[Failover] Found ${candidateProviders.length} candidate providers`);
+  return candidateProviders;
 }
 
 // 更新轮询状态（在故障转移成功后调用）
@@ -1223,24 +1392,69 @@ async function resetFailCount(providerId) {
 
 async function getProviderModelId(provider, modelName) {
   try {
+    // 首先尝试从provider.models中查找（避免额外的API调用）
+    if (provider.models && provider.models.length > 0) {
+      const matchedModel = provider.models.find(model => {
+        const normalized = normalizeModelName(model.id);
+        return normalized === modelName;
+      });
+
+      if (matchedModel) {
+        console.log(`Found model ${matchedModel.id} in provider's model list (normalized: ${modelName})`);
+        return matchedModel.id;
+      }
+    }
+
+    // 如果在provider.models中找不到，尝试从API获取
     const apiType = provider.apiType || 'openai';
     const url = buildApiUrl(provider.baseUrl, 'models', apiType);
     const response = await axios.get(url, {
       headers: { 'Authorization': `Bearer ${provider.apiKey}` },
       timeout: 10000
     });
-    
+
     const models = response.data.data || [];
     const matchedModel = models.find(model => {
-      const extractedName = model.id.includes('/') ? model.id.split('/').pop() : model.id;
-      return extractedName === modelName;
+      const normalized = normalizeModelName(model.id);
+      return normalized === modelName;
     });
-    
+
     return matchedModel ? matchedModel.id : null;
   } catch (error) {
     console.error(`Failed to get models for provider ${provider.name}:`, error.message);
     return null;
   }
+}
+
+/**
+ * 规范化模型名称，用于判断不同提供商的模型是否实际上是同一个模型
+ * 规则：
+ * 1. 忽略平台名（斜杠前的部分）
+ * 2. 忽略大小写差异
+ * 3. 忽略日期差异（YYYYMMDD 或 YYYY-MM-DD 格式）
+ * 4. 保留模型名、版本、参数量、其他说明
+ */
+function normalizeModelName(modelId) {
+  // 1. 转换为小写（忽略大小写）
+  let normalized = modelId.toLowerCase().trim();
+
+  // 2. 移除平台前缀（如果有斜杠）
+  if (normalized.includes('/')) {
+    normalized = normalized.split('/').pop();
+  }
+
+  // 3. 移除日期部分
+  // 匹配 YYYYMMDD 格式（8位连续数字，前4位是年份）
+  normalized = normalized.replace(/[-_]?20\d{6}[-_]?/g, '');
+
+  // 匹配 YYYY-MM-DD 格式
+  normalized = normalized.replace(/[-_]?20\d{2}-\d{2}-\d{2}[-_]?/g, '');
+
+  // 4. 清理多余的连字符和下划线
+  normalized = normalized.replace(/[-_]+/g, '-');  // 将多个连字符/下划线合并为一个
+  normalized = normalized.replace(/^-+|-+$/g, '');  // 移除首尾的连字符
+
+  return normalized;
 }
 
 // Performance optimization: Background task processor
@@ -1679,39 +1893,70 @@ async function verifyProxyApiKey(req, res, next) {
 app.get('/v1/models', verifyProxyApiKey, async (req, res) => {
   try {
     const userSettings = await getUserSettings();
+    const settings = await getApiSettings();
     const pollingConfig = userSettings.pollingConfig || { available: {}, excluded: {} };
-    
-    // 获取所有在可用池中的模型（必须有至少2个提供商才是轮询模型）
+    const apiKeyInfo = req.apiKeyInfo;
+
     let availableModelNames = [];
-    const availableModels = pollingConfig.available || {};
-    
-    // 构建排除集合（新格式：数组）
-    const excludedModels = new Map(); // modelName -> Set of excluded providerIds
-    if (Array.isArray(pollingConfig.excluded)) {
-      pollingConfig.excluded.forEach(item => {
-        if (!excludedModels.has(item.modelName)) {
-          excludedModels.set(item.modelName, new Set());
-        }
-        excludedModels.get(item.modelName).add(item.providerId);
-      });
-    }
-    
-    for (const modelName of Object.keys(availableModels)) {
-      const allProviders = availableModels[modelName] || [];
-      
-      // 过滤掉被排除的提供商
-      const excludedSet = excludedModels.get(modelName) || new Set();
-      const availableProviders = allProviders.filter(id => !excludedSet.has(id));
-      
-      // 只有拥有至少2个可用提供商的模型才能被外部使用
-      if (availableProviders.length >= 2) {
-        availableModelNames.push(modelName);
+
+    // 判断是否使用轮询模式
+    const usePolling = apiKeyInfo?.usePolling !== false; // 默认为true
+
+    if (usePolling) {
+      // 轮询模式：返回轮询池中的模型
+      const availableModels = pollingConfig.available || {};
+
+      // 构建排除集合（新格式：数组）
+      const excludedModels = new Map(); // modelName -> Set of excluded providerIds
+      if (Array.isArray(pollingConfig.excluded)) {
+        pollingConfig.excluded.forEach(item => {
+          if (!excludedModels.has(item.modelName)) {
+            excludedModels.set(item.modelName, new Set());
+          }
+          excludedModels.get(item.modelName).add(item.providerId);
+        });
       }
+
+      for (const modelName of Object.keys(availableModels)) {
+        const allProviders = availableModels[modelName] || [];
+
+        // 过滤掉被排除的提供商
+        const excludedSet = excludedModels.get(modelName) || new Set();
+        const availableProviders = allProviders.filter(id => !excludedSet.has(id));
+
+        // 只有拥有至少2个可用提供商的模型才能被外部使用
+        if (availableProviders.length >= 2) {
+          availableModelNames.push(modelName);
+        }
+      }
+    } else {
+      // 非轮询模式：返回指定分组的所有模型
+      const allowedGroups = apiKeyInfo?.allowedGroups || [];
+      const allModelsSet = new Set();
+
+      // 如果没有指定分组，返回所有分组的模型
+      const providersToInclude = settings.providers.filter(p => {
+        if (p.disabled) return false;
+        if (allowedGroups.length === 0) return true; // 没有限制，包含所有
+        return allowedGroups.includes(p.groupId || 'default');
+      });
+
+      providersToInclude.forEach(provider => {
+        if (provider.models) {
+          provider.models.forEach(model => {
+            if (model.visible !== false) {
+              allModelsSet.add(model.id);
+            }
+          });
+        }
+      });
+
+      availableModelNames = Array.from(allModelsSet);
     }
-    
+
     // 根据API密钥权限过滤模型
-    const allowedModels = req.apiKeyInfo?.allowedModels || [];
-    
+    const allowedModels = apiKeyInfo?.allowedModels || [];
+
     // 如果密钥配置了允许的模型列表，则只返回允许的模型
     // 如果没有配置（空数组），则返回所有可用的模型
     let filteredModels = availableModelNames;
@@ -1720,7 +1965,7 @@ app.get('/v1/models', verifyProxyApiKey, async (req, res) => {
         allowedModels.includes(modelName)
       );
     }
-    
+
     const models = filteredModels.map(modelName => ({
       id: modelName,
       object: 'model',
@@ -1730,11 +1975,12 @@ app.get('/v1/models', verifyProxyApiKey, async (req, res) => {
       root: modelName,
       parent: null
     }));
-    
-    console.log(`[Models API] API Key: ${req.apiKeyInfo?.name || 'Legacy'}`);
+
+    console.log(`[Models API] API Key: ${apiKeyInfo?.name || 'Legacy'}`);
+    console.log(`[Models API] Use Polling: ${usePolling}`);
     console.log(`[Models API] Allowed models: ${allowedModels.length > 0 ? allowedModels.join(', ') : 'All models'}`);
     console.log(`[Models API] Returned models: ${filteredModels.join(', ')}`);
-    
+
     res.json({
       object: 'list',
       data: models
@@ -1806,7 +2052,7 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
     }
 
     // Extract pure model name (remove possible prefix)
-    const pureModelName = modelName.includes('/') ? modelName.split('/').pop() : modelName;
+    const pureModelName = normalizeModelName(modelName);
 
     log.verbose(`[DEBUG] Pure model name: ${pureModelName}`);
 
@@ -1822,39 +2068,60 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
       }, 403);
     }
 
-    // Check if model is in available pool and must have at least 2 providers (consistent with frontend polling logic)
-    const availableProviderIds = pollingConfig.available?.[pureModelName] || [];
-    log.verbose(`[DEBUG] Available provider IDs for model ${pureModelName}:`, availableProviderIds);
-    if (availableProviderIds.length < 2) {
-      log.debug(`[DEBUG] Insufficient providers for model ${pureModelName}: ${availableProviderIds.length}`);
-      return sendErrorResponse(res, stream, {
-        message: `Model '${pureModelName}' requires at least 2 providers for polling. Current providers: ${availableProviderIds.length}. Please configure more providers in polling settings.`,
-        type: 'invalid_request_error',
-        code: 'insufficient_providers'
-      }, 400);
-    }
+    // 判断是否使用轮询模式
+    const usePolling = req.apiKeyInfo?.usePolling !== false; // 默认为true
 
-    // 检查模型是否所有提供商都被排除
-    const excludedSet = new Set();
-    if (Array.isArray(pollingConfig.excluded)) {
-      pollingConfig.excluded.forEach(item => {
-        if (item.modelName === pureModelName) {
-          excludedSet.add(item.providerId);
-        }
+    if (usePolling) {
+      // 轮询模式：检查模型是否在轮询池中
+      const availableProviderIds = pollingConfig.available?.[pureModelName] || [];
+      log.verbose(`[DEBUG] Available provider IDs for model ${pureModelName}:`, availableProviderIds);
+      if (availableProviderIds.length < 2) {
+        log.debug(`[DEBUG] Insufficient providers for model ${pureModelName}: ${availableProviderIds.length}`);
+        return sendErrorResponse(res, stream, {
+          message: `Model '${pureModelName}' requires at least 2 providers for polling. Current providers: ${availableProviderIds.length}. Please configure more providers in polling settings.`,
+          type: 'invalid_request_error',
+          code: 'insufficient_providers'
+        }, 400);
+      }
+
+      // 检查模型是否所有提供商都被排除
+      const excludedSet = new Set();
+      if (Array.isArray(pollingConfig.excluded)) {
+        pollingConfig.excluded.forEach(item => {
+          if (item.modelName === pureModelName) {
+            excludedSet.add(item.providerId);
+          }
+        });
+      }
+      log.verbose(`[DEBUG] Excluded provider IDs for model ${pureModelName}:`, Array.from(excludedSet));
+
+      // Calculate actual available provider count (excluding excluded ones)
+      const actualAvailableProviders = availableProviderIds.filter(id => !excludedSet.has(id));
+      log.verbose(`[DEBUG] Actual available providers after exclusions:`, actualAvailableProviders);
+
+      if (actualAvailableProviders.length === 0) {
+        return sendErrorResponse(res, stream, {
+          message: `Model '${pureModelName}' has no available providers (all providers are excluded).`,
+          type: 'invalid_request_error',
+          code: 'all_providers_excluded'
+        }, 400);
+      }
+    } else {
+      // 非轮询模式：检查模型是否在允许的分组中
+      const allowedGroups = req.apiKeyInfo?.allowedGroups || [];
+      const modelExists = settings.providers.some(provider => {
+        if (provider.disabled) return false;
+        if (allowedGroups.length > 0 && !allowedGroups.includes(provider.groupId || 'default')) return false;
+        return provider.models?.some(m => normalizeModelName(m.id) === pureModelName && m.visible !== false);
       });
-    }
-    log.verbose(`[DEBUG] Excluded provider IDs for model ${pureModelName}:`, Array.from(excludedSet));
 
-    // Calculate actual available provider count (excluding excluded ones)
-    const actualAvailableProviders = availableProviderIds.filter(id => !excludedSet.has(id));
-    log.verbose(`[DEBUG] Actual available providers after exclusions:`, actualAvailableProviders);
-    
-    if (actualAvailableProviders.length === 0) {
-      return sendErrorResponse(res, stream, {
-        message: `Model '${pureModelName}' has no available providers (all providers are excluded).`,
-        type: 'invalid_request_error',
-        code: 'all_providers_excluded'
-      }, 400);
+      if (!modelExists) {
+        return sendErrorResponse(res, stream, {
+          message: `Model '${pureModelName}' is not available in the allowed provider groups.`,
+          type: 'invalid_request_error',
+          code: 'model_not_available'
+        }, 400);
+      }
     }
     
     // 构建请求参数 - 参数隔离机制
