@@ -4,6 +4,7 @@
       <div class="nav-brand">Random_API</div>
       <div class="nav-links">
         <router-link to="/">聊天</router-link>
+        <router-link to="/translate">翻译</router-link>
         <router-link to="/settings/apis">API 管理</router-link>
         <router-link to="/settings/polling">轮询配置</router-link>
         <router-link to="/settings/proxy-keys">代理密钥</router-link>

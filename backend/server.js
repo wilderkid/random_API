@@ -49,14 +49,17 @@ const USER_SETTINGS_FILE = path.join(DATA_DIR, 'user_settings.json');
 const CONVERSATIONS_DIR = path.join(DATA_DIR, 'conversations');
 const LOGS_DIR = path.join(DATA_DIR, 'logs');
 const PROMPTS_FILE = path.join(DATA_DIR, 'prompts.json');
+const LANGUAGES_FILE = path.join(DATA_DIR, 'languages.json');
 
 // 性能优化：添加内存缓存
 let apiSettingsCache = null;
 let userSettingsCache = null;
 let promptsCache = null;
+let languagesCache = null;
 let apiSettingsCacheTime = 0;
 let userSettingsCacheTime = 0;
 let promptsCacheTime = 0;
+let languagesCacheTime = 0;
 const CACHE_TTL = 5000; // 5秒缓存
 
 // Performance optimization: Enhanced HTTP agents with better configuration
@@ -122,6 +125,13 @@ async function initDataDir() {
       defaultParams: { temperature: 0.7, max_tokens: 2000, top_p: 1 },
       globalFrequency: 10,
       defaultPromptId: '', // 默认提示词ID
+      translateDefaultModel: '', // 翻译默认模型
+      translateDefaultPromptId: '', // 翻译默认提示词
+      translatePollingEnabled: false, // 翻译轮询开关
+      quickTranslations: [ // 快捷转换按钮（最多5个）
+        { id: '1', name: '中→英', sourceLanguage: '中文', targetLanguage: '英语' },
+        { id: '2', name: '英→中', sourceLanguage: '英语', targetLanguage: '中文' }
+      ],
       pollingConfig: { available: {}, excluded: {}, disabled: {} },
       pollingState: {}, // 存储每个模型的轮询状态
       modelFailCounts: {}, // 存储每个模型在每个提供商的失败计数
@@ -138,9 +148,38 @@ async function initDataDir() {
     await fs.writeFile(PROMPTS_FILE, JSON.stringify({
       prompts: [],
       groups: [
-        { id: 'default', name: '默认分组', description: '未分组的提示词' }
+        { id: 'default', name: '默认分组', description: '未分组的提示词' },
+        { id: 'translate', name: '翻译', description: '翻译相关的提示词' }
       ],
       tags: []
+    }, null, 2));
+  }
+
+  // 初始化语言文件
+  try {
+    await fs.access(LANGUAGES_FILE);
+  } catch {
+    await fs.writeFile(LANGUAGES_FILE, JSON.stringify({
+      sourceLanguages: [
+        { id: '1', name: '中文', code: 'zh' },
+        { id: '2', name: '英语', code: 'en' },
+        { id: '3', name: '日语', code: 'ja' },
+        { id: '4', name: '韩语', code: 'ko' },
+        { id: '5', name: '法语', code: 'fr' },
+        { id: '6', name: '德语', code: 'de' },
+        { id: '7', name: '俄语', code: 'ru' },
+        { id: '8', name: '西班牙语', code: 'es' }
+      ],
+      targetLanguages: [
+        { id: '1', name: '英语', code: 'en' },
+        { id: '2', name: '中文', code: 'zh' },
+        { id: '3', name: '日语', code: 'ja' },
+        { id: '4', name: '韩语', code: 'ko' },
+        { id: '5', name: '法语', code: 'fr' },
+        { id: '6', name: '德语', code: 'de' },
+        { id: '7', name: '俄语', code: 'ru' },
+        { id: '8', name: '西班牙语', code: 'es' }
+      ]
     }, null, 2));
   }
 }
@@ -214,6 +253,41 @@ function invalidateUserSettingsCache() {
 function invalidatePromptsCache() {
   promptsCache = null;
   promptsCacheTime = 0;
+}
+
+function invalidateLanguagesCache() {
+  languagesCache = null;
+  languagesCacheTime = 0;
+}
+
+// 读取语言数据
+async function getLanguages() {
+  const now = Date.now();
+  if (languagesCache && (now - languagesCacheTime) < CACHE_TTL) {
+    return languagesCache;
+  }
+
+  try {
+    const data = JSON.parse(await fs.readFile(LANGUAGES_FILE, 'utf8'));
+    if (!data.sourceLanguages) data.sourceLanguages = [];
+    if (!data.targetLanguages) data.targetLanguages = [];
+
+    languagesCache = data;
+    languagesCacheTime = now;
+    return data;
+  } catch (error) {
+    console.error('Error reading languages:', error);
+    return {
+      sourceLanguages: [],
+      targetLanguages: []
+    };
+  }
+}
+
+// 保存语言数据
+async function saveLanguages(data) {
+  await fs.writeFile(LANGUAGES_FILE, JSON.stringify(data, null, 2));
+  invalidateLanguagesCache();
 }
 
 // 读取提示词库
@@ -793,6 +867,167 @@ app.get('/api/prompt-tags', async (req, res) => {
 
 // ==================== 提示词库管理 API 结束 ====================
 
+// ==================== 语言管理 API ====================
+
+// 获取所有语言
+app.get('/api/languages', async (req, res) => {
+  try {
+    const data = await getLanguages();
+    res.json(data);
+  } catch (error) {
+    console.error('Error getting languages:', error);
+    res.status(500).json({ error: '获取语言失败' });
+  }
+});
+
+// 获取源语言列表
+app.get('/api/source-languages', async (req, res) => {
+  try {
+    const data = await getLanguages();
+    res.json(data.sourceLanguages || []);
+  } catch (error) {
+    console.error('Error getting source languages:', error);
+    res.status(500).json({ error: '获取源语言失败' });
+  }
+});
+
+// 添加源语言
+app.post('/api/source-languages', async (req, res) => {
+  try {
+    const data = await getLanguages();
+    const newLanguage = {
+      id: Date.now().toString(),
+      name: req.body.name || '新语言',
+      code: req.body.code || ''
+    };
+
+    data.sourceLanguages.push(newLanguage);
+    await saveLanguages(data);
+    res.json(newLanguage);
+  } catch (error) {
+    console.error('Error creating source language:', error);
+    res.status(500).json({ error: '创建源语言失败' });
+  }
+});
+
+// 更新源语言
+app.put('/api/source-languages/:id', async (req, res) => {
+  try {
+    const data = await getLanguages();
+    const langIndex = data.sourceLanguages.findIndex(l => l.id === req.params.id);
+
+    if (langIndex === -1) {
+      return res.status(404).json({ error: '语言不存在' });
+    }
+
+    data.sourceLanguages[langIndex] = {
+      ...data.sourceLanguages[langIndex],
+      ...req.body,
+      id: req.params.id
+    };
+
+    await saveLanguages(data);
+    res.json(data.sourceLanguages[langIndex]);
+  } catch (error) {
+    console.error('Error updating source language:', error);
+    res.status(500).json({ error: '更新源语言失败' });
+  }
+});
+
+// 删除源语言
+app.delete('/api/source-languages/:id', async (req, res) => {
+  try {
+    const data = await getLanguages();
+    const langIndex = data.sourceLanguages.findIndex(l => l.id === req.params.id);
+
+    if (langIndex === -1) {
+      return res.status(404).json({ error: '语言不存在' });
+    }
+
+    data.sourceLanguages.splice(langIndex, 1);
+    await saveLanguages(data);
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error deleting source language:', error);
+    res.status(500).json({ error: '删除源语言失败' });
+  }
+});
+
+// 获取目标语言列表
+app.get('/api/target-languages', async (req, res) => {
+  try {
+    const data = await getLanguages();
+    res.json(data.targetLanguages || []);
+  } catch (error) {
+    console.error('Error getting target languages:', error);
+    res.status(500).json({ error: '获取目标语言失败' });
+  }
+});
+
+// 添加目标语言
+app.post('/api/target-languages', async (req, res) => {
+  try {
+    const data = await getLanguages();
+    const newLanguage = {
+      id: Date.now().toString(),
+      name: req.body.name || '新语言',
+      code: req.body.code || ''
+    };
+
+    data.targetLanguages.push(newLanguage);
+    await saveLanguages(data);
+    res.json(newLanguage);
+  } catch (error) {
+    console.error('Error creating target language:', error);
+    res.status(500).json({ error: '创建目标语言失败' });
+  }
+});
+
+// 更新目标语言
+app.put('/api/target-languages/:id', async (req, res) => {
+  try {
+    const data = await getLanguages();
+    const langIndex = data.targetLanguages.findIndex(l => l.id === req.params.id);
+
+    if (langIndex === -1) {
+      return res.status(404).json({ error: '语言不存在' });
+    }
+
+    data.targetLanguages[langIndex] = {
+      ...data.targetLanguages[langIndex],
+      ...req.body,
+      id: req.params.id
+    };
+
+    await saveLanguages(data);
+    res.json(data.targetLanguages[langIndex]);
+  } catch (error) {
+    console.error('Error updating target language:', error);
+    res.status(500).json({ error: '更新目标语言失败' });
+  }
+});
+
+// 删除目标语言
+app.delete('/api/target-languages/:id', async (req, res) => {
+  try {
+    const data = await getLanguages();
+    const langIndex = data.targetLanguages.findIndex(l => l.id === req.params.id);
+
+    if (langIndex === -1) {
+      return res.status(404).json({ error: '语言不存在' });
+    }
+
+    data.targetLanguages.splice(langIndex, 1);
+    await saveLanguages(data);
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error deleting target language:', error);
+    res.status(500).json({ error: '删除目标语言失败' });
+  }
+});
+
+// ==================== 语言管理 API 结束 ====================
+
 // 速率限制存储 - 按模型分别统计
 const rateLimitMap = new Map(); // key: model, value: { requests: [timestamps], queue: [] }
 
@@ -815,9 +1050,15 @@ function calculateDelay(modelRequests, maxRequestsPerMinute, now) {
 }
 
 app.post('/api/chat', async (req, res) => {
-  const { messages, model, params, polling, images, systemPrompt } = req.body;
+  const { messages, model, params, polling, images, systemPrompt, translateContext } = req.body;
   const settings = await getApiSettings();
   const userSettings = await getUserSettings();
+
+  // 处理提示词变量替换
+  let processedSystemPrompt = systemPrompt;
+  if (systemPrompt && translateContext) {
+    processedSystemPrompt = replacePromptVariables(systemPrompt, translateContext);
+  }
   
   // 获取每分钟最大请求次数
   const maxRequestsPerMinute = userSettings.globalFrequency || 10;
@@ -895,7 +1136,7 @@ app.post('/api/chat', async (req, res) => {
         console.log(`Using model ID: ${modelId} from provider ${provider.name}`);
 
         // 尝试调用该提供商
-        await streamChat(provider, messages, params, res, modelId, images, systemPrompt);
+        await streamChat(provider, messages, params, res, modelId, images, processedSystemPrompt);
 
         // 如果成功，重置模型失败计数并保存轮询状态
         await resetModelFailCount(provider.id, modelName, userSettings);
@@ -960,7 +1201,7 @@ app.post('/api/chat', async (req, res) => {
     }
     
     try {
-      await streamChat(provider, messages, params, res, modelId, images, systemPrompt);
+      await streamChat(provider, messages, params, res, modelId, images, processedSystemPrompt);
     } catch (error) {
       console.error(`Chat error:`, error.message);
       res.write(`data: ${JSON.stringify({ error: error.message })}\n\n`);
@@ -979,6 +1220,33 @@ app.put('/api/settings', async (req, res) => {
   invalidateUserSettingsCache(); // 缓存失效
   res.json(req.body);
 });
+
+// 提示词变量替换函数
+function replacePromptVariables(prompt, context) {
+  if (!prompt || !context) return prompt;
+
+  let result = prompt;
+
+  // 替换输入文本变量
+  if (context.inputText) {
+    result = result.replace(/\{\{输入文本\}\}/g, context.inputText);
+    result = result.replace(/\{\{input text\}\}/gi, context.inputText);
+  }
+
+  // 替换源语言变量
+  if (context.sourceLanguage) {
+    result = result.replace(/\{\{源文本\}\}/g, context.sourceLanguage);
+    result = result.replace(/\{\{source language\}\}/gi, context.sourceLanguage);
+  }
+
+  // 替换目标语言变量
+  if (context.targetLanguage) {
+    result = result.replace(/\{\{目标文本\}\}/g, context.targetLanguage);
+    result = result.replace(/\{\{target language\}\}/gi, context.targetLanguage);
+  }
+
+  return result;
+}
 
 function buildApiUrl(baseUrl, endpoint, apiType = 'openai') {
   log.verbose(`[DEBUG] buildApiUrl called with: baseUrl=${baseUrl}, endpoint=${endpoint}, apiType=${apiType}`);

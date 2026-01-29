@@ -8,12 +8,14 @@ import ProxyKeys from './views/ProxyKeys.vue'
 import UserSettings from './views/UserSettings.vue'
 import Logs from './views/Logs.vue'
 import PromptLibrary from './views/PromptLibrary.vue'
+import Translate from './views/Translate.vue'
 import './style.css'
 
 const router = createRouter({
   history: createWebHistory(),
   routes: [
     { path: '/', component: Chat },
+    { path: '/translate', component: Translate },
     { path: '/settings/apis', component: ApiSettings },
     { path: '/settings/polling', component: PollingSettings },
     { path: '/settings/proxy-keys', component: ProxyKeys },
