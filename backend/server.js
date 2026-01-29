@@ -48,12 +48,15 @@ const API_SETTINGS_FILE = path.join(DATA_DIR, 'api_settings.json');
 const USER_SETTINGS_FILE = path.join(DATA_DIR, 'user_settings.json');
 const CONVERSATIONS_DIR = path.join(DATA_DIR, 'conversations');
 const LOGS_DIR = path.join(DATA_DIR, 'logs');
+const PROMPTS_FILE = path.join(DATA_DIR, 'prompts.json');
 
 // 性能优化：添加内存缓存
 let apiSettingsCache = null;
 let userSettingsCache = null;
+let promptsCache = null;
 let apiSettingsCacheTime = 0;
 let userSettingsCacheTime = 0;
+let promptsCacheTime = 0;
 const CACHE_TTL = 5000; // 5秒缓存
 
 // Performance optimization: Enhanced HTTP agents with better configuration
@@ -118,12 +121,26 @@ async function initDataDir() {
     await fs.writeFile(USER_SETTINGS_FILE, JSON.stringify({
       defaultParams: { temperature: 0.7, max_tokens: 2000, top_p: 1 },
       globalFrequency: 10,
+      defaultPromptId: '', // 默认提示词ID
       pollingConfig: { available: {}, excluded: {}, disabled: {} },
       pollingState: {}, // 存储每个模型的轮询状态
       modelFailCounts: {}, // 存储每个模型在每个提供商的失败计数
       proxyApiKey: '', // 代理接口密钥（向后兼容）
       proxyApiKeys: {}, // 多API密钥管理
       conversationProviderMap: {} // 会话-提供商映射（用于对话连续性）
+    }, null, 2));
+  }
+
+  // 初始化提示词库文件
+  try {
+    await fs.access(PROMPTS_FILE);
+  } catch {
+    await fs.writeFile(PROMPTS_FILE, JSON.stringify({
+      prompts: [],
+      groups: [
+        { id: 'default', name: '默认分组', description: '未分组的提示词' }
+      ],
+      tags: []
     }, null, 2));
   }
 }
@@ -192,6 +209,44 @@ function invalidateApiSettingsCache() {
 function invalidateUserSettingsCache() {
   userSettingsCache = null;
   userSettingsCacheTime = 0;
+}
+
+function invalidatePromptsCache() {
+  promptsCache = null;
+  promptsCacheTime = 0;
+}
+
+// 读取提示词库
+async function getPrompts() {
+  const now = Date.now();
+  if (promptsCache && (now - promptsCacheTime) < CACHE_TTL) {
+    return promptsCache;
+  }
+
+  try {
+    const data = JSON.parse(await fs.readFile(PROMPTS_FILE, 'utf8'));
+    // 确保数据结构完整
+    if (!data.prompts) data.prompts = [];
+    if (!data.groups) data.groups = [{ id: 'default', name: '默认分组', description: '未分组的提示词' }];
+    if (!data.tags) data.tags = [];
+
+    promptsCache = data;
+    promptsCacheTime = now;
+    return data;
+  } catch (error) {
+    console.error('Error reading prompts:', error);
+    return {
+      prompts: [],
+      groups: [{ id: 'default', name: '默认分组', description: '未分组的提示词' }],
+      tags: []
+    };
+  }
+}
+
+// 保存提示词库
+async function savePrompts(data) {
+  await fs.writeFile(PROMPTS_FILE, JSON.stringify(data, null, 2));
+  invalidatePromptsCache();
 }
 
 // API 路由
@@ -546,6 +601,198 @@ app.delete('/api/conversations/:id', async (req, res) => {
   res.json({ success: true });
 });
 
+// ==================== 提示词库管理 API ====================
+
+// 获取所有提示词
+app.get('/api/prompts', async (req, res) => {
+  try {
+    const data = await getPrompts();
+    res.json(data);
+  } catch (error) {
+    console.error('Error getting prompts:', error);
+    res.status(500).json({ error: '获取提示词失败' });
+  }
+});
+
+// 创建新提示词
+app.post('/api/prompts', async (req, res) => {
+  try {
+    const data = await getPrompts();
+    const newPrompt = {
+      id: Date.now().toString(),
+      name: req.body.name || '新提示词',
+      content: req.body.content || '',
+      groupId: req.body.groupId || 'default',
+      tags: req.body.tags || [],
+      description: req.body.description || '',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+
+    data.prompts.push(newPrompt);
+    await savePrompts(data);
+    res.json(newPrompt);
+  } catch (error) {
+    console.error('Error creating prompt:', error);
+    res.status(500).json({ error: '创建提示词失败' });
+  }
+});
+
+// 更新提示词
+app.put('/api/prompts/:id', async (req, res) => {
+  try {
+    const data = await getPrompts();
+    const promptIndex = data.prompts.findIndex(p => p.id === req.params.id);
+
+    if (promptIndex === -1) {
+      return res.status(404).json({ error: '提示词不存在' });
+    }
+
+    data.prompts[promptIndex] = {
+      ...data.prompts[promptIndex],
+      ...req.body,
+      id: req.params.id, // 保持ID不变
+      updatedAt: new Date().toISOString()
+    };
+
+    await savePrompts(data);
+    res.json(data.prompts[promptIndex]);
+  } catch (error) {
+    console.error('Error updating prompt:', error);
+    res.status(500).json({ error: '更新提示词失败' });
+  }
+});
+
+// 删除提示词
+app.delete('/api/prompts/:id', async (req, res) => {
+  try {
+    const data = await getPrompts();
+    const promptIndex = data.prompts.findIndex(p => p.id === req.params.id);
+
+    if (promptIndex === -1) {
+      return res.status(404).json({ error: '提示词不存在' });
+    }
+
+    data.prompts.splice(promptIndex, 1);
+    await savePrompts(data);
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error deleting prompt:', error);
+    res.status(500).json({ error: '删除提示词失败' });
+  }
+});
+
+// 获取所有提示词分组
+app.get('/api/prompt-groups', async (req, res) => {
+  try {
+    const data = await getPrompts();
+    res.json(data.groups || []);
+  } catch (error) {
+    console.error('Error getting prompt groups:', error);
+    res.status(500).json({ error: '获取分组失败' });
+  }
+});
+
+// 创建新分组
+app.post('/api/prompt-groups', async (req, res) => {
+  try {
+    const data = await getPrompts();
+    const newGroup = {
+      id: Date.now().toString(),
+      name: req.body.name || '新分组',
+      description: req.body.description || ''
+    };
+
+    data.groups.push(newGroup);
+    await savePrompts(data);
+    res.json(newGroup);
+  } catch (error) {
+    console.error('Error creating prompt group:', error);
+    res.status(500).json({ error: '创建分组失败' });
+  }
+});
+
+// 更新分组
+app.put('/api/prompt-groups/:id', async (req, res) => {
+  try {
+    const data = await getPrompts();
+    const groupIndex = data.groups.findIndex(g => g.id === req.params.id);
+
+    if (groupIndex === -1) {
+      return res.status(404).json({ error: '分组不存在' });
+    }
+
+    // 不允许修改默认分组的ID
+    if (data.groups[groupIndex].id === 'default' && req.body.id && req.body.id !== 'default') {
+      return res.status(400).json({ error: '不能修改默认分组的ID' });
+    }
+
+    data.groups[groupIndex] = {
+      ...data.groups[groupIndex],
+      ...req.body,
+      id: req.params.id // 保持ID不变
+    };
+
+    await savePrompts(data);
+    res.json(data.groups[groupIndex]);
+  } catch (error) {
+    console.error('Error updating prompt group:', error);
+    res.status(500).json({ error: '更新分组失败' });
+  }
+});
+
+// 删除分组
+app.delete('/api/prompt-groups/:id', async (req, res) => {
+  try {
+    const data = await getPrompts();
+
+    // 不允许删除默认分组
+    if (req.params.id === 'default') {
+      return res.status(400).json({ error: '不能删除默认分组' });
+    }
+
+    const groupIndex = data.groups.findIndex(g => g.id === req.params.id);
+
+    if (groupIndex === -1) {
+      return res.status(404).json({ error: '分组不存在' });
+    }
+
+    // 将该分组下的所有提示词移到默认分组
+    data.prompts.forEach(prompt => {
+      if (prompt.groupId === req.params.id) {
+        prompt.groupId = 'default';
+      }
+    });
+
+    data.groups.splice(groupIndex, 1);
+    await savePrompts(data);
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error deleting prompt group:', error);
+    res.status(500).json({ error: '删除分组失败' });
+  }
+});
+
+// 获取所有标签
+app.get('/api/prompt-tags', async (req, res) => {
+  try {
+    const data = await getPrompts();
+    // 从所有提示词中收集唯一的标签
+    const tagsSet = new Set();
+    data.prompts.forEach(prompt => {
+      if (prompt.tags && Array.isArray(prompt.tags)) {
+        prompt.tags.forEach(tag => tagsSet.add(tag));
+      }
+    });
+    res.json(Array.from(tagsSet));
+  } catch (error) {
+    console.error('Error getting prompt tags:', error);
+    res.status(500).json({ error: '获取标签失败' });
+  }
+});
+
+// ==================== 提示词库管理 API 结束 ====================
+
 // 速率限制存储 - 按模型分别统计
 const rateLimitMap = new Map(); // key: model, value: { requests: [timestamps], queue: [] }
 
@@ -568,7 +815,7 @@ function calculateDelay(modelRequests, maxRequestsPerMinute, now) {
 }
 
 app.post('/api/chat', async (req, res) => {
-  const { messages, model, params, polling, images } = req.body;
+  const { messages, model, params, polling, images, systemPrompt } = req.body;
   const settings = await getApiSettings();
   const userSettings = await getUserSettings();
   
@@ -648,7 +895,7 @@ app.post('/api/chat', async (req, res) => {
         console.log(`Using model ID: ${modelId} from provider ${provider.name}`);
 
         // 尝试调用该提供商
-        await streamChat(provider, messages, params, res, modelId, images);
+        await streamChat(provider, messages, params, res, modelId, images, systemPrompt);
 
         // 如果成功，重置模型失败计数并保存轮询状态
         await resetModelFailCount(provider.id, modelName, userSettings);
@@ -713,7 +960,7 @@ app.post('/api/chat', async (req, res) => {
     }
     
     try {
-      await streamChat(provider, messages, params, res, modelId, images);
+      await streamChat(provider, messages, params, res, modelId, images, systemPrompt);
     } catch (error) {
       console.error(`Chat error:`, error.message);
       res.write(`data: ${JSON.stringify({ error: error.message })}\n\n`);
@@ -768,8 +1015,8 @@ function buildApiUrl(baseUrl, endpoint, apiType = 'openai') {
   }
 }
 
-function buildChatRequestBody(modelId, messages, params, apiType = 'openai', images = null) {
-  log.verbose(`[DEBUG] buildChatRequestBody: modelId=${modelId}, apiType=${apiType}, messages=${messages.length}, images=${images ? images.length : 'none'}`);
+function buildChatRequestBody(modelId, messages, params, apiType = 'openai', images = null, systemPrompt = null) {
+  log.verbose(`[DEBUG] buildChatRequestBody: modelId=${modelId}, apiType=${apiType}, messages=${messages.length}, images=${images ? images.length : 'none'}, systemPrompt=${systemPrompt ? 'yes' : 'no'}`);
 
   // Process image message format
   let processedMessages = messages;
@@ -805,12 +1052,18 @@ function buildChatRequestBody(modelId, messages, params, apiType = 'openai', ima
 
   if (apiType === 'anthropic') {
     log.verbose(`[DEBUG] Building Anthropic API request body`);
-    // Anthropic API format
+    // Anthropic API format - system prompt is a separate field
     const requestBody = {
       model: modelId,
       messages: processedMessages,
       ...params
     };
+
+    // Add system prompt if provided
+    if (systemPrompt && systemPrompt.trim()) {
+      requestBody.system = systemPrompt.trim();
+      log.verbose(`[DEBUG] Added system prompt to Anthropic request`);
+    }
 
     // Anthropic API requires max_tokens parameter
     if (!requestBody.max_tokens) {
@@ -822,9 +1075,20 @@ function buildChatRequestBody(modelId, messages, params, apiType = 'openai', ima
     return requestBody;
   } else {
     log.verbose(`[DEBUG] Building OpenAI compatible request body`);
+
+    // For OpenAI, add system prompt as first message
+    let finalMessages = processedMessages;
+    if (systemPrompt && systemPrompt.trim()) {
+      finalMessages = [
+        { role: 'system', content: systemPrompt.trim() },
+        ...processedMessages
+      ];
+      log.verbose(`[DEBUG] Added system prompt as first message`);
+    }
+
     const requestBody = {
       model: modelId,
-      messages: processedMessages,
+      messages: finalMessages,
       ...params
     };
     log.verbose(`[DEBUG] Final OpenAI request body created`);
@@ -1705,8 +1969,8 @@ async function handleStreamingResponse(response, res, stream, selectedProvider, 
   });
 }
 
-async function streamChat(provider, messages, params, res, modelId, images) {
-  log.verbose(`[DEBUG] streamChat: provider=${provider.name}, modelId=${modelId}, messages=${messages.length}, apiType=${provider.apiType}`);
+async function streamChat(provider, messages, params, res, modelId, images, systemPrompt) {
+  log.verbose(`[DEBUG] streamChat: provider=${provider.name}, modelId=${modelId}, messages=${messages.length}, apiType=${provider.apiType}, systemPrompt=${systemPrompt ? 'yes' : 'no'}`);
 
   const apiType = provider.apiType || 'openai';
   const url = buildApiUrl(provider.baseUrl, 'chat/completions', apiType);
@@ -1746,7 +2010,7 @@ async function streamChat(provider, messages, params, res, modelId, images) {
   }
   try {
     log.verbose(`[DEBUG] streamChat: Building request body...`);
-    const requestBody = buildChatRequestBody(modelId || provider.defaultModel, processedMessages, { ...params, stream: true }, apiType, images);
+    const requestBody = buildChatRequestBody(modelId || provider.defaultModel, processedMessages, { ...params, stream: true }, apiType, images, systemPrompt);
 
     const headers = {
       'Authorization': `Bearer ${provider.apiKey}`,

@@ -98,6 +98,21 @@
     <div v-if="showParams" class="modal" @click.self="showParams = false">
       <div class="modal-content">
         <h3>参数配置</h3>
+        <label>系统提示词:
+          <select v-model="selectedPromptId" class="prompt-select">
+            <option value="">无（不使用提示词）</option>
+            <option v-for="prompt in prompts" :key="prompt.id" :value="prompt.id">
+              {{ prompt.name }}
+            </option>
+          </select>
+        </label>
+        <div v-if="selectedPrompt" class="prompt-preview">
+          <div class="prompt-preview-header">
+            <strong>{{ selectedPrompt.name }}</strong>
+            <span class="prompt-preview-desc">{{ selectedPrompt.description }}</span>
+          </div>
+          <div class="prompt-preview-content">{{ selectedPrompt.content }}</div>
+        </div>
         <label>温度: <input v-model.number="params.temperature" type="number" step="0.1" min="0" max="2"></label>
         <label>最大长度: <input v-model.number="params.max_tokens" type="number"></label>
         <label>Top P: <input v-model.number="params.top_p" type="number" step="0.1" min="0" max="1"></label>
@@ -614,6 +629,53 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* 提示词选择样式 */
+.prompt-select {
+  width: 100%;
+  padding: 8px;
+  border: 2px solid #e0e0e0;
+  border-radius: 8px;
+  font-size: 14px;
+  margin-top: 5px;
+}
+
+.prompt-preview {
+  margin-top: 15px;
+  padding: 15px;
+  background: #f8f9fa;
+  border-radius: 10px;
+  border: 2px solid #e0e0e0;
+}
+
+.prompt-preview-header {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-bottom: 10px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid #dee2e6;
+}
+
+.prompt-preview-header strong {
+  color: #333;
+  font-size: 14px;
+}
+
+.prompt-preview-desc {
+  color: #6c757d;
+  font-size: 12px;
+}
+
+.prompt-preview-content {
+  color: #495057;
+  font-size: 13px;
+  line-height: 1.6;
+  max-height: 200px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
 </style>
 
 <script setup>
@@ -642,6 +704,10 @@ const uploadedImages = ref([])
 const uploadedFiles = ref([])
 // 存储提供商列表，用于计算重复模型
 const providers = ref([])
+
+// 提示词相关
+const prompts = ref([])
+const selectedPromptId = ref('')
 
 // 支持的文件类型
 const supportedFileTypes = '.txt,.md,.json,.js,.ts,.jsx,.tsx,.vue,.py,.java,.c,.cpp,.h,.hpp,.cs,.go,.rs,.rb,.php,.html,.css,.scss,.less,.xml,.yaml,.yml,.toml,.ini,.conf,.sh,.bat,.ps1,.sql,.csv,.log'
@@ -700,6 +766,12 @@ const filteredConversations = computed(() => {
   searchCache.set(query, result)
   
   return result
+})
+
+// 计算当前选中的提示词
+const selectedPrompt = computed(() => {
+  if (!selectedPromptId.value) return null
+  return prompts.value.find(p => p.id === selectedPromptId.value)
 })
 
 // 计算当前模型是否可以启用轮询
@@ -858,8 +930,22 @@ async function loadSettings() {
     frequency.value = res.data.globalFrequency || 10
     params.value = res.data.defaultParams || { temperature: 0.7, max_tokens: 2000, top_p: 1 }
     userSettings.value = res.data
+
+    // 设置默认提示词
+    if (res.data.defaultPromptId) {
+      selectedPromptId.value = res.data.defaultPromptId
+    }
   } catch (error) {
     console.error('Error loading settings:', error)
+  }
+}
+
+async function loadPrompts() {
+  try {
+    const res = await axios.get('/api/prompts')
+    prompts.value = res.data.prompts || []
+  } catch (error) {
+    console.error('Error loading prompts:', error)
   }
 }
 
@@ -975,7 +1061,8 @@ async function sendMessage() {
         model: currentModel.value,
         params: params.value,
         polling: pollingEnabled.value,
-        images: sentImages.length > 0 ? sentImages : undefined
+        images: sentImages.length > 0 ? sentImages : undefined,
+        systemPrompt: selectedPrompt.value ? selectedPrompt.value.content : undefined
       })
     })
     
@@ -1673,5 +1760,6 @@ onMounted(() => {
   loadConversations()
   loadProviders()
   loadSettings()
+  loadPrompts()
 })
 </script>

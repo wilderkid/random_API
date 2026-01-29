@@ -4,7 +4,11 @@
       "Bash(tree:*)",
       "Bash(node -c server.js)",
       "Bash(node test_normalize.js)",
-      "Bash(del:*)"
+      "Bash(del:*)",
+      "Bash(find:*)",
+      "Bash(curl:*)",
+      "Bash(netstat:*)",
+      "Bash(findstr:*)"
     ]
   }
 }

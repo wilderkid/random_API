@@ -7,6 +7,7 @@ import PollingSettings from './views/PollingSettings.vue'
 import ProxyKeys from './views/ProxyKeys.vue'
 import UserSettings from './views/UserSettings.vue'
 import Logs from './views/Logs.vue'
+import PromptLibrary from './views/PromptLibrary.vue'
 import './style.css'
 
 const router = createRouter({
@@ -17,6 +18,7 @@ const router = createRouter({
     { path: '/settings/polling', component: PollingSettings },
     { path: '/settings/proxy-keys', component: ProxyKeys },
     { path: '/settings/defaults', component: UserSettings },
+    { path: '/prompts', component: PromptLibrary },
     { path: '/logs', component: Logs }
   ]
 })

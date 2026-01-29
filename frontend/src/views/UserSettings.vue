@@ -63,7 +63,7 @@
         <div class="details-header">
           <h2>默认模型配置</h2>
         </div>
-        
+
         <div class="settings-form">
           <section class="settings-section">
             <h3>默认模型选择</h3>
@@ -78,12 +78,47 @@
             </label>
             <p class="hint-text">设置后，新建对话时将自动选择此模型</p>
           </section>
-          
+
           <button @click="saveSettings" class="btn-save">保存设置</button>
           <div v-if="saveMessage" class="save-message">{{ saveMessage }}</div>
         </div>
       </div>
-      
+
+      <div v-else-if="selectedSetting === 'defaultPrompt'" class="details-content">
+        <div class="details-header">
+          <h2>默认提示词配置</h2>
+        </div>
+
+        <div class="settings-form">
+          <section class="settings-section">
+            <h3>默认提示词选择</h3>
+            <label>
+              默认提示词:
+              <select v-model="settings.defaultPromptId" class="input-field">
+                <option value="">无（不使用提示词）</option>
+                <option v-for="prompt in allPrompts" :key="prompt.id" :value="prompt.id">
+                  {{ prompt.name }}
+                </option>
+              </select>
+            </label>
+            <p class="hint-text">设置后，聊天时将默认选择此提示词作为系统提示词</p>
+
+            <!-- 提示词预览 -->
+            <div v-if="selectedPromptPreview" class="prompt-preview-box">
+              <h4>提示词预览</h4>
+              <div class="prompt-preview-header">
+                <strong>{{ selectedPromptPreview.name }}</strong>
+                <span class="prompt-preview-desc">{{ selectedPromptPreview.description }}</span>
+              </div>
+              <div class="prompt-preview-content">{{ selectedPromptPreview.content }}</div>
+            </div>
+          </section>
+
+          <button @click="saveSettings" class="btn-save">保存设置</button>
+          <div v-if="saveMessage" class="save-message">{{ saveMessage }}</div>
+        </div>
+      </div>
+
       <div v-else-if="selectedSetting === 'proxy'" class="details-content">
         <div class="details-header">
           <h2>代理接口配置</h2>
@@ -153,11 +188,13 @@ import axios from 'axios'
 const settings = ref({
   defaultParams: { temperature: 0.7, max_tokens: 2000, top_p: 1 },
   globalFrequency: 10,
-  defaultModel: ''
+  defaultModel: '',
+  defaultPromptId: ''
 })
 const saveMessage = ref('')
 const selectedSetting = ref('user')
 const allModels = ref([])
+const allPrompts = ref([])
 
 // 动态获取API基础URL
 const apiBaseUrl = computed(() => {
@@ -168,6 +205,12 @@ const apiBaseUrl = computed(() => {
     return origin.replace(':5173', ':3000')
   }
   return origin
+})
+
+// 计算选中的提示词预览
+const selectedPromptPreview = computed(() => {
+  if (!settings.value.defaultPromptId) return null
+  return allPrompts.value.find(p => p.id === settings.value.defaultPromptId)
 })
 
 const settingsItems = ref([
@@ -182,6 +225,12 @@ const settingsItems = ref([
     name: '默认模型',
     description: '新对话默认模型',
     icon: '🤖'
+  },
+  {
+    id: 'defaultPrompt',
+    name: '默认提示词',
+    description: '聊天默认系统提示词',
+    icon: '💬'
   },
   {
     id: 'proxy',
@@ -223,6 +272,16 @@ async function loadModels() {
   }
 }
 
+async function loadPrompts() {
+  try {
+    const res = await axios.get('/api/prompts')
+    allPrompts.value = res.data.prompts || []
+  } catch (error) {
+    console.error('Error loading prompts:', error)
+    allPrompts.value = []
+  }
+}
+
 async function saveSettings() {
   await axios.put('/api/settings', settings.value)
   saveMessage.value = '设置已保存'
@@ -242,6 +301,7 @@ function copyToClipboard(text) {
 onMounted(() => {
   loadSettings()
   loadModels()
+  loadPrompts()
 })
 </script>
 
@@ -502,5 +562,53 @@ onMounted(() => {
   margin-bottom: 6px;
   color: #856404;
   font-size: 13px;
+}
+
+/* 提示词预览样式 */
+.prompt-preview-box {
+  margin-top: 20px;
+  padding: 16px;
+  background: #f8f9fa;
+  border-radius: 10px;
+  border: 2px solid #e0e0e0;
+}
+
+.prompt-preview-box h4 {
+  margin: 0 0 12px 0;
+  color: #333;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.prompt-preview-header {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-bottom: 10px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid #dee2e6;
+}
+
+.prompt-preview-header strong {
+  color: #333;
+  font-size: 14px;
+}
+
+.prompt-preview-desc {
+  color: #6c757d;
+  font-size: 12px;
+}
+
+.prompt-preview-content {
+  color: #495057;
+  font-size: 13px;
+  line-height: 1.6;
+  max-height: 200px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  background: white;
+  padding: 12px;
+  border-radius: 6px;
 }
 </style>
