@@ -482,10 +482,11 @@ onMounted(() => {
   font-size: 14px;
   font-family: inherit;
   resize: vertical;
-  min-height: 200px;
+  min-height: 242px;
   background: white;
   color: #334155;
   outline: none;
+  box-sizing: border-box;
 }
 
 .text-input:focus {
@@ -498,11 +499,14 @@ onMounted(() => {
   border: 1px solid #e2e8f0;
   border-radius: 8px;
   font-size: 14px;
-  min-height: 200px;
+  min-height: 242px;
   background: #f8fafc;
   color: #334155;
   white-space: pre-wrap;
   word-wrap: break-word;
+  box-sizing: border-box;
+  overflow-y: auto;
+  resize: vertical;
 }
 
 .text-output-placeholder {
@@ -511,12 +515,13 @@ onMounted(() => {
   border: 1px solid #e2e8f0;
   border-radius: 8px;
   font-size: 14px;
-  min-height: 200px;
+  min-height: 242px;
   background: #f8fafc;
   color: #94a3b8;
   display: flex;
   align-items: center;
   justify-content: center;
+  box-sizing: border-box;
 }
 
 .btn-copy-small {
