@@ -119,6 +119,147 @@
         </div>
       </div>
 
+      <div v-else-if="selectedSetting === 'sourceLanguages'" class="details-content">
+        <div class="details-header">
+          <h2>源语言管理</h2>
+        </div>
+
+        <div class="settings-form">
+          <section class="settings-section">
+            <h3>源语言列表</h3>
+            <div class="language-list">
+              <div v-for="lang in sourceLanguages" :key="lang.id" class="language-item">
+                <input v-model="lang.name" @blur="updateSourceLanguage(lang)" class="input-field" placeholder="语言名称">
+                <input v-model="lang.code" @blur="updateSourceLanguage(lang)" class="input-field" placeholder="语言代码">
+                <button @click="deleteSourceLanguage(lang.id)" class="btn-delete-small">删除</button>
+              </div>
+            </div>
+            <button @click="addSourceLanguage" class="btn-add">+ 添加源语言</button>
+          </section>
+        </div>
+      </div>
+
+      <div v-else-if="selectedSetting === 'targetLanguages'" class="details-content">
+        <div class="details-header">
+          <h2>目标语言管理</h2>
+        </div>
+
+        <div class="settings-form">
+          <section class="settings-section">
+            <h3>目标语言列表</h3>
+            <div class="language-list">
+              <div v-for="lang in targetLanguages" :key="lang.id" class="language-item">
+                <input v-model="lang.name" @blur="updateTargetLanguage(lang)" class="input-field" placeholder="语言名称">
+                <input v-model="lang.code" @blur="updateTargetLanguage(lang)" class="input-field" placeholder="语言代码">
+                <button @click="deleteTargetLanguage(lang.id)" class="btn-delete-small">删除</button>
+              </div>
+            </div>
+            <button @click="addTargetLanguage" class="btn-add">+ 添加目标语言</button>
+          </section>
+        </div>
+      </div>
+
+      <div v-else-if="selectedSetting === 'translateDefaults'" class="details-content">
+        <div class="details-header">
+          <h2>翻译默认配置</h2>
+        </div>
+
+        <div class="settings-form">
+          <section class="settings-section">
+            <h3>默认翻译模型</h3>
+            <label>
+              默认模型:
+              <select v-model="settings.translateDefaultModel" class="input-field">
+                <option value="">请选择默认模型</option>
+                <option v-for="model in allModels" :key="model.value" :value="model.value">
+                  {{ model.label }}
+                </option>
+              </select>
+            </label>
+            <p class="hint-text">设置后，翻译页面将自动选择此模型</p>
+          </section>
+
+          <section class="settings-section">
+            <h3>默认翻译提示词</h3>
+            <label>
+              默认提示词:
+              <select v-model="settings.translateDefaultPromptId" class="input-field">
+                <option value="">使用默认提示词</option>
+                <option v-for="prompt in translatePrompts" :key="prompt.id" :value="prompt.id">
+                  {{ prompt.name }}
+                </option>
+              </select>
+            </label>
+            <p class="hint-text">设置后，翻译页面将自动选择此提示词</p>
+          </section>
+
+          <section class="settings-section">
+            <h3>轮询设置</h3>
+            <label class="checkbox-label">
+              <input
+                type="checkbox"
+                v-model="settings.translatePollingEnabled"
+                :disabled="!isTranslateModelPollingSupported"
+              >
+              启用轮询
+            </label>
+            <p class="hint-text" v-if="!settings.translateDefaultModel">
+              请先选择默认翻译模型
+            </p>
+            <p class="hint-text" v-else-if="!isTranslateModelPollingSupported">
+              当前选择的模型不支持轮询功能
+            </p>
+            <p class="hint-text" v-else>
+              启用后，翻译时将使用轮询机制自动选择可用的提供商
+            </p>
+          </section>
+
+          <button @click="saveSettings" class="btn-save">保存设置</button>
+          <div v-if="saveMessage" class="save-message">{{ saveMessage }}</div>
+        </div>
+      </div>
+
+      <div v-else-if="selectedSetting === 'quickTranslations'" class="details-content">
+        <div class="details-header">
+          <h2>快捷转换设置</h2>
+        </div>
+
+        <div class="settings-form">
+          <section class="settings-section">
+            <h3>快捷转换按钮（最多5个）</h3>
+            <div class="quick-translations-list">
+              <div v-for="(qt, index) in settings.quickTranslations" :key="qt.id" class="quick-translation-item">
+                <input v-model="qt.name" class="input-field" placeholder="按钮名称（如：中→英）">
+                <select v-model="qt.sourceLanguage" class="input-field">
+                  <option value="">选择源语言</option>
+                  <option v-for="lang in sourceLanguages" :key="lang.id" :value="lang.name">
+                    {{ lang.name }}
+                  </option>
+                </select>
+                <select v-model="qt.targetLanguage" class="input-field">
+                  <option value="">选择目标语言</option>
+                  <option v-for="lang in targetLanguages" :key="lang.id" :value="lang.name">
+                    {{ lang.name }}
+                  </option>
+                </select>
+                <button @click="removeQuickTranslation(index)" class="btn-delete-small">删除</button>
+              </div>
+            </div>
+            <button
+              v-if="settings.quickTranslations.length < 5"
+              @click="addQuickTranslation"
+              class="btn-add"
+            >
+              + 添加快捷转换
+            </button>
+            <p class="hint-text" v-else>已达到最大数量（5个）</p>
+          </section>
+
+          <button @click="saveSettings" class="btn-save">保存设置</button>
+          <div v-if="saveMessage" class="save-message">{{ saveMessage }}</div>
+        </div>
+      </div>
+
       <div v-else-if="selectedSetting === 'proxy'" class="details-content">
         <div class="details-header">
           <h2>代理接口配置</h2>
@@ -189,12 +330,22 @@ const settings = ref({
   defaultParams: { temperature: 0.7, max_tokens: 2000, top_p: 1 },
   globalFrequency: 10,
   defaultModel: '',
-  defaultPromptId: ''
+  defaultPromptId: '',
+  translateDefaultModel: '',
+  translateDefaultPromptId: '',
+  translatePollingEnabled: false,
+  quickTranslations: [],
+  pollingConfig: { available: {}, excluded: {}, disabled: {} }
 })
 const saveMessage = ref('')
 const selectedSetting = ref('user')
 const allModels = ref([])
 const allPrompts = ref([])
+const translatePrompts = ref([])
+const sourceLanguages = ref([])
+const targetLanguages = ref([])
+const editingLanguage = ref(null)
+const languageForm = ref({ name: '', code: '' })
 
 // 动态获取API基础URL
 const apiBaseUrl = computed(() => {
@@ -211,6 +362,22 @@ const apiBaseUrl = computed(() => {
 const selectedPromptPreview = computed(() => {
   if (!settings.value.defaultPromptId) return null
   return allPrompts.value.find(p => p.id === settings.value.defaultPromptId)
+})
+
+// 检查翻译模型是否支持轮询
+const isTranslateModelPollingSupported = computed(() => {
+  if (!settings.value.translateDefaultModel) return false
+
+  // 从 "providerId::modelId" 格式中提取模型名称
+  const parts = settings.value.translateDefaultModel.split('::')
+  if (parts.length !== 2) return false
+
+  const modelName = parts[1]
+  const pollingConfig = settings.value.pollingConfig || { available: {} }
+  const availableProviders = pollingConfig.available?.[modelName] || []
+
+  // 如果该模型在轮询配置中有可用的提供商，则支持轮询
+  return Array.isArray(availableProviders) && availableProviders.length > 0
 })
 
 const settingsItems = ref([
@@ -231,6 +398,30 @@ const settingsItems = ref([
     name: '默认提示词',
     description: '聊天默认系统提示词',
     icon: '💬'
+  },
+  {
+    id: 'translateDefaults',
+    name: '翻译默认配置',
+    description: '翻译模型和提示词',
+    icon: '🌍'
+  },
+  {
+    id: 'quickTranslations',
+    name: '快捷转换设置',
+    description: '翻译快捷按钮',
+    icon: '⚡'
+  },
+  {
+    id: 'sourceLanguages',
+    name: '源语言管理',
+    description: '管理翻译源语言',
+    icon: '🌐'
+  },
+  {
+    id: 'targetLanguages',
+    name: '目标语言管理',
+    description: '管理翻译目标语言',
+    icon: '🎯'
   },
   {
     id: 'proxy',
@@ -276,10 +467,114 @@ async function loadPrompts() {
   try {
     const res = await axios.get('/api/prompts')
     allPrompts.value = res.data.prompts || []
+    // 加载翻译提示词
+    translatePrompts.value = (res.data.prompts || []).filter(p => {
+      const group = (res.data.groups || []).find(g => g.id === p.groupId)
+      return group && group.name.includes('翻译')
+    })
   } catch (error) {
     console.error('Error loading prompts:', error)
     allPrompts.value = []
+    translatePrompts.value = []
   }
+}
+
+async function loadLanguages() {
+  try {
+    const [sourceRes, targetRes] = await Promise.all([
+      axios.get('/api/source-languages'),
+      axios.get('/api/target-languages')
+    ])
+    sourceLanguages.value = sourceRes.data
+    targetLanguages.value = targetRes.data
+  } catch (error) {
+    console.error('Error loading languages:', error)
+  }
+}
+
+async function addSourceLanguage() {
+  try {
+    const res = await axios.post('/api/source-languages', {
+      name: '新语言',
+      code: ''
+    })
+    sourceLanguages.value.push(res.data)
+  } catch (error) {
+    console.error('Error adding source language:', error)
+    alert('添加源语言失败')
+  }
+}
+
+async function updateSourceLanguage(lang) {
+  try {
+    await axios.put(`/api/source-languages/${lang.id}`, lang)
+  } catch (error) {
+    console.error('Error updating source language:', error)
+    alert('更新源语言失败')
+  }
+}
+
+async function deleteSourceLanguage(id) {
+  if (!confirm('确定要删除此源语言吗？')) return
+
+  try {
+    await axios.delete(`/api/source-languages/${id}`)
+    sourceLanguages.value = sourceLanguages.value.filter(l => l.id !== id)
+  } catch (error) {
+    console.error('Error deleting source language:', error)
+    alert('删除源语言失败')
+  }
+}
+
+async function addTargetLanguage() {
+  try {
+    const res = await axios.post('/api/target-languages', {
+      name: '新语言',
+      code: ''
+    })
+    targetLanguages.value.push(res.data)
+  } catch (error) {
+    console.error('Error adding target language:', error)
+    alert('添加目标语言失败')
+  }
+}
+
+async function updateTargetLanguage(lang) {
+  try {
+    await axios.put(`/api/target-languages/${lang.id}`, lang)
+  } catch (error) {
+    console.error('Error updating target language:', error)
+    alert('更新目标语言失败')
+  }
+}
+
+async function deleteTargetLanguage(id) {
+  if (!confirm('确定要删除此目标语言吗？')) return
+
+  try {
+    await axios.delete(`/api/target-languages/${id}`)
+    targetLanguages.value = targetLanguages.value.filter(l => l.id !== id)
+  } catch (error) {
+    console.error('Error deleting target language:', error)
+    alert('删除目标语言失败')
+  }
+}
+
+function addQuickTranslation() {
+  if (settings.value.quickTranslations.length >= 5) {
+    alert('最多只能添加5个快捷转换')
+    return
+  }
+  settings.value.quickTranslations.push({
+    id: Date.now().toString(),
+    name: '',
+    sourceLanguage: '',
+    targetLanguage: ''
+  })
+}
+
+function removeQuickTranslation(index) {
+  settings.value.quickTranslations.splice(index, 1)
 }
 
 async function saveSettings() {
@@ -302,6 +597,7 @@ onMounted(() => {
   loadSettings()
   loadModels()
   loadPrompts()
+  loadLanguages()
 })
 </script>
 
@@ -610,5 +906,87 @@ onMounted(() => {
   background: white;
   padding: 12px;
   border-radius: 6px;
+}
+
+/* 语言列表样式 */
+.language-list {
+  margin-bottom: 1rem;
+}
+
+.language-item {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+  align-items: center;
+}
+
+.language-item .input-field {
+  flex: 1;
+}
+
+.btn-add {
+  padding: 0.5rem 1rem;
+  background: #0891b2;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight: 500;
+}
+
+.btn-add:hover {
+  background: #0e7490;
+}
+
+.btn-delete-small {
+  padding: 0.5rem 0.75rem;
+  background: #ef4444;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.btn-delete-small:hover {
+  background: #dc2626;
+}
+
+/* 快捷转换列表样式 */
+.quick-translations-list {
+  margin-bottom: 1rem;
+}
+
+.quick-translation-item {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+  align-items: center;
+}
+
+.quick-translation-item .input-field {
+  flex: 1;
+}
+
+/* 复选框标签样式 */
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 14px;
+  color: #333;
+}
+
+.checkbox-label input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  cursor: pointer;
+}
+
+.checkbox-label input[type="checkbox"]:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 </style>
