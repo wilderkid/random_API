@@ -167,7 +167,7 @@ async function initDataDir() {
   
   try {
     await fs.access(API_SETTINGS_FILE);
-    // 数据迁移：为旧的提供商添加apiType字段
+    // 数据迁移：为旧的提供商添加apiType字段和modelType字段
     const data = JSON.parse(await fs.readFile(API_SETTINGS_FILE, 'utf8'));
     let updated = false;
     if (data.providers) {
@@ -176,12 +176,26 @@ async function initDataDir() {
           provider.apiType = 'openai';
           updated = true;
         }
+        // 新增：添加modelType字段（默认为text）
+        if (provider.modelType === undefined) {
+          provider.modelType = 'text';
+          updated = true;
+        }
+        // 新增：为每个模型添加type字段
+        if (provider.models) {
+          provider.models.forEach(model => {
+            if (model.type === undefined) {
+              model.type = 'text';
+              updated = true;
+            }
+          });
+        }
       });
     }
     if (updated) {
       await safeWriteFile(API_SETTINGS_FILE, data);
       invalidateApiSettingsCache();
-      console.log('Data migration: Added apiType to existing providers.');
+      console.log('Data migration: Added apiType, modelType and model.type to existing providers.');
     }
   } catch {
     await safeWriteFile(API_SETTINGS_FILE, {
@@ -1223,8 +1237,29 @@ app.post('/api/chat', async (req, res) => {
 
         console.log(`Using model ID: ${modelId} from provider ${provider.name}`);
 
-        // 尝试调用该提供商
-        await streamChat(provider, messages, params, res, modelId, images, processedSystemPrompt);
+        // 识别模型类型并调用对应的处理函数
+        const modelType = getModelType(provider, modelId);
+        console.log(`[ModelType] Detected model type: ${modelType} for ${modelId}`);
+
+        if (modelType === 'image') {
+          // 提取提示词（最后一条用户消息的内容）
+          const lastUserMessage = messages[messages.length - 1];
+          const prompt = lastUserMessage?.content || '';
+
+          if (!prompt) {
+            errors.push({
+              provider: provider.name,
+              error: '生成图片需要提供提示词'
+            });
+            continue;
+          }
+
+          console.log(`[ImageGen] Generating image with prompt: ${prompt.substring(0, 50)}...`);
+          await generateImage(provider, prompt, params, res, modelId);
+        } else {
+          // 文本模型，使用原有的streamChat
+          await streamChat(provider, messages, params, res, modelId, images, processedSystemPrompt);
+        }
 
         // 如果成功，重置模型失败计数并保存轮询状态
         await resetModelFailCount(provider.id, modelName, userSettings);
@@ -1287,9 +1322,28 @@ app.post('/api/chat', async (req, res) => {
       res.write(`data: ${JSON.stringify({ error: 'Provider not found' })}\n\n`);
       return res.end();
     }
-    
+
     try {
-      await streamChat(provider, messages, params, res, modelId, images, processedSystemPrompt);
+      // 识别模型类型并调用对应的处理函数
+      const modelType = getModelType(provider, modelId);
+      console.log(`[ModelType] Detected model type: ${modelType} for ${modelId}`);
+
+      if (modelType === 'image') {
+        // 提取提示词（最后一条用户消息的内容）
+        const lastUserMessage = messages[messages.length - 1];
+        const prompt = lastUserMessage?.content || '';
+
+        if (!prompt) {
+          res.write(`data: ${JSON.stringify({ error: '生成图片需要提供提示词' })}\n\n`);
+          return res.end();
+        }
+
+        console.log(`[ImageGen] Generating image with prompt: ${prompt.substring(0, 50)}...`);
+        await generateImage(provider, prompt, params, res, modelId);
+      } else {
+        // 文本模型，使用原有的streamChat
+        await streamChat(provider, messages, params, res, modelId, images, processedSystemPrompt);
+      }
     } catch (error) {
       console.error(`Chat error:`, error.message);
       res.write(`data: ${JSON.stringify({ error: error.message })}\n\n`);
@@ -2340,6 +2394,219 @@ async function handleStreamingResponse(response, res, stream, selectedProvider, 
       res.end();
     }
   });
+}
+
+// ==================== 图像生成模型支持 ====================
+
+/**
+ * 识别模型类型（文本或图像生成）
+ * @param {Object} provider - 提供商对象
+ * @param {string} modelId - 模型ID
+ * @returns {string} - 'text' 或 'image'
+ */
+function getModelType(provider, modelId) {
+  // 1. 从provider配置读取
+  const model = provider.models?.find(m => m.id === modelId);
+  if (model?.type) {
+    log.debug(`[ModelType] Found type from config: ${model.type} for model ${modelId}`);
+    return model.type;
+  }
+
+  // 2. 从模型ID推断
+  const imageKeywords = ['dall-e', 'dalle', 'stable-diffusion', 'midjourney', 'imagen', 'sd-', 'sdxl'];
+  const isImageModel = imageKeywords.some(kw => modelId.toLowerCase().includes(kw));
+
+  if (isImageModel) {
+    log.debug(`[ModelType] Inferred as image model from ID: ${modelId}`);
+    return 'image';
+  }
+
+  log.debug(`[ModelType] Defaulting to text model for: ${modelId}`);
+  return 'text';
+}
+
+/**
+ * 构建图像生成API的URL
+ * @param {string} baseUrl - 基础URL
+ * @param {string} apiType - API类型
+ * @returns {string} - 完整的API URL
+ */
+function buildImageApiUrl(baseUrl, apiType) {
+  baseUrl = baseUrl.replace(/\/$/, '');
+
+  if (apiType === 'openai') {
+    return `${baseUrl}/v1/images/generations`;
+  }
+
+  // 其他API类型可以在这里扩展
+  // 默认使用OpenAI格式
+  return `${baseUrl}/v1/images/generations`;
+}
+
+/**
+ * 构建图像生成请求体
+ * @param {string} modelId - 模型ID
+ * @param {string} prompt - 提示词
+ * @param {Object} params - 参数
+ * @param {string} apiType - API类型
+ * @returns {Object} - 请求体
+ */
+function buildImageRequestBody(modelId, prompt, params, apiType) {
+  if (apiType === 'openai') {
+    const requestBody = {
+      model: modelId,
+      prompt: prompt,
+      n: params.n || 1,
+      size: params.size || '1024x1024'
+    };
+
+    // 只有DALL-E 3支持quality和style参数
+    if (modelId.toLowerCase().includes('dall-e-3')) {
+      if (params.quality) {
+        requestBody.quality = params.quality;
+      }
+      if (params.style) {
+        requestBody.style = params.style;
+      }
+    }
+
+    return requestBody;
+  }
+
+  // 其他API格式
+  return {
+    model: modelId,
+    prompt: prompt,
+    ...params
+  };
+}
+
+/**
+ * 解析图像生成响应
+ * @param {Object} data - API响应数据
+ * @param {string} apiType - API类型
+ * @returns {Object} - 标准化的图像数据
+ */
+function parseImageResponse(data, apiType) {
+  if (apiType === 'openai') {
+    return {
+      images: data.data.map(img => ({
+        url: img.url || img.b64_json,
+        revisedPrompt: img.revised_prompt
+      })),
+      metadata: {
+        created: data.created
+      }
+    };
+  }
+
+  // 其他API格式
+  return {
+    images: data.images || [],
+    metadata: {}
+  };
+}
+
+/**
+ * 生成图像（非流式）
+ * @param {Object} provider - 提供商对象
+ * @param {string} prompt - 提示词
+ * @param {Object} params - 参数
+ * @param {Object} res - 响应对象
+ * @param {string} modelId - 模型ID
+ */
+async function generateImage(provider, prompt, params, res, modelId) {
+  log.info(`[ImageGen] Starting image generation with provider: ${provider.name}, model: ${modelId}`);
+  log.verbose(`[ImageGen] Prompt: ${prompt.substring(0, 100)}...`);
+  log.verbose(`[ImageGen] Params:`, params);
+
+  const apiType = provider.apiType || 'openai';
+  const url = buildImageApiUrl(provider.baseUrl, apiType);
+
+  try {
+    // 构建请求体
+    const requestBody = buildImageRequestBody(modelId, prompt, params, apiType);
+    log.verbose(`[ImageGen] Request body:`, requestBody);
+
+    // 设置响应头（SSE格式）
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+
+    // 发送开始生成的消息
+    res.write(`data: ${JSON.stringify({
+      type: 'status',
+      message: '正在生成图片，请稍候...'
+    })}\n\n`);
+
+    // 调用API（非流式，等待完整响应）
+    const response = await axios.post(url, requestBody, {
+      headers: {
+        'Authorization': `Bearer ${provider.apiKey}`,
+        'Content-Type': 'application/json'
+      },
+      timeout: CONFIG.STREAM_TIMEOUT // 使用配置的超时时间（120秒）
+    });
+
+    log.info(`[ImageGen] Image generation successful, status: ${response.status}`);
+
+    // 解析响应
+    const imageData = parseImageResponse(response.data, apiType);
+    log.verbose(`[ImageGen] Generated ${imageData.images.length} image(s)`);
+
+    // 记录成功的API调用
+    await logApiCall(provider.name, modelId, true);
+
+    // 发送图片数据（模拟SSE流式响应）
+    res.write(`data: ${JSON.stringify({
+      type: 'image',
+      images: imageData.images,
+      metadata: {
+        model: modelId,
+        provider: provider.name,
+        timestamp: new Date().toISOString(),
+        parameters: {
+          size: params.size || '1024x1024',
+          quality: params.quality || 'standard',
+          n: params.n || 1
+        },
+        ...imageData.metadata
+      }
+    })}\n\n`);
+
+    // 发送完成标记
+    res.write(`data: [DONE]\n\n`);
+    res.end();
+
+    log.info(`[ImageGen] Response sent successfully`);
+
+  } catch (error) {
+    log.error(`[ImageGen] Error generating image:`, error.message);
+
+    // 使用高效的错误解析器
+    const errorMessage = parseErrorResponse(error);
+    log.verbose(`[ImageGen] Parsed error message:`, errorMessage);
+
+    // 记录失败的API调用
+    await logApiCall(provider.name, modelId, false, errorMessage);
+
+    // 发送错误消息
+    if (!res.headersSent) {
+      res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('Connection', 'keep-alive');
+    }
+
+    res.write(`data: ${JSON.stringify({
+      error: {
+        message: errorMessage,
+        type: 'image_generation_error'
+      }
+    })}\n\n`);
+    res.end();
+
+    throw error;
+  }
 }
 
 async function streamChat(provider, messages, params, res, modelId, images, systemPrompt) {
