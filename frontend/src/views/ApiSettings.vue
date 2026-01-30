@@ -106,7 +106,16 @@
             <input :value="selectedProvider.baseUrl" readonly class="input-field">
           </div>
         </div>
-        
+
+        <!-- 自动刷新设置 -->
+        <div class="config-section">
+          <label class="checkbox-label">
+            <input type="checkbox" v-model="selectedProvider.excludeAutoRefresh" @change="updateExcludeAutoRefresh">
+            <span>排除自动刷新</span>
+          </label>
+          <small class="hint">启用后，批量刷新所有模型时将跳过此提供商</small>
+        </div>
+
         <!-- 模型配置 -->
         <div class="models-config">
           <div class="models-toolbar">
@@ -449,13 +458,24 @@ async function fetchModels() {
 async function refreshAllModels() {
   if (isRefreshingAll.value) return
 
-  const activeProviders = providers.value.filter(p => !p.disabled)
+  const activeProviders = providers.value.filter(p => !p.disabled && !p.excludeAutoRefresh)
+  const excludedProviders = providers.value.filter(p => !p.disabled && p.excludeAutoRefresh)
+
   if (activeProviders.length === 0) {
     alert('没有可用的提供商')
     return
   }
 
-  if (!confirm(`确定要刷新所有 ${activeProviders.length} 个提供商的模型吗？\n\n这将自动获取最新的模型列表并覆盖现有配置。\n已禁用的提供商将被跳过。`)) {
+  let confirmMessage = `确定要刷新所有 ${activeProviders.length} 个提供商的模型吗？\n\n这将自动获取最新的模型列表并覆盖现有配置。\n已禁用的提供商将被跳过。`
+
+  if (excludedProviders.length > 0) {
+    confirmMessage += `\n\n已排除自动刷新的提供商 (${excludedProviders.length} 个):\n`
+    excludedProviders.forEach(p => {
+      confirmMessage += `  • ${p.name}\n`
+    })
+  }
+
+  if (!confirm(confirmMessage)) {
     return
   }
 
@@ -463,7 +483,7 @@ async function refreshAllModels() {
 
   try {
     const res = await axios.post('/api/providers/refresh-all-models')
-    const { success, failed, successCount, failedCount, total } = res.data
+    const { success, failed, skipped, successCount, failedCount, skippedCount, total } = res.data
 
     // 刷新提供商列表
     await loadProviders()
@@ -472,7 +492,13 @@ async function refreshAllModels() {
     let message = `刷新完成！\n\n`
     message += `总计: ${total} 个提供商\n`
     message += `成功: ${successCount} 个\n`
-    message += `失败: ${failedCount} 个\n\n`
+    message += `失败: ${failedCount} 个\n`
+
+    if (skippedCount > 0) {
+      message += `跳过: ${skippedCount} 个\n`
+    }
+
+    message += `\n`
 
     if (success.length > 0) {
       message += `成功的提供商:\n`
@@ -485,6 +511,13 @@ async function refreshAllModels() {
       message += `\n失败的提供商:\n`
       failed.forEach(item => {
         message += `  ✗ ${item.providerName}: ${item.error}\n`
+      })
+    }
+
+    if (skipped && skipped.length > 0) {
+      message += `\n跳过的提供商:\n`
+      skipped.forEach(item => {
+        message += `  ⊘ ${item.providerName}: ${item.reason}\n`
       })
     }
 
@@ -545,6 +578,11 @@ async function toggleVisibility(modelId) {
 
 async function toggleStatus() {
   selectedProvider.value.disabled = !selectedProvider.value.disabled
+  await axios.put(`/api/providers/${selectedProvider.value.id}`, selectedProvider.value)
+  await loadProviders()
+}
+
+async function updateExcludeAutoRefresh() {
   await axios.put(`/api/providers/${selectedProvider.value.id}`, selectedProvider.value)
   await loadProviders()
 }
@@ -1116,6 +1154,25 @@ onMounted(async () => {
   font-weight: 500;
   margin-bottom: 8px;
   color: #495057;
+}
+
+.checkbox-label {
+  display: flex !important;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-weight: 500;
+}
+
+.checkbox-label input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  cursor: pointer;
+  margin: 0;
+}
+
+.checkbox-label span {
+  user-select: none;
 }
 
 .hint {
