@@ -8,7 +8,9 @@
       "Bash(find:*)",
       "Bash(curl:*)",
       "Bash(netstat:*)",
-      "Bash(findstr:*)"
+      "Bash(findstr:*)",
+      "Bash(npm install proxy-agent)",
+      "Bash(node:*)"
     ]
   }
 }
