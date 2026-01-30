@@ -62,27 +62,40 @@ let promptsCacheTime = 0;
 let languagesCacheTime = 0;
 const CACHE_TTL = 5000; // 5秒缓存
 
-// Performance optimization: Enhanced HTTP agents with better configuration
-const httpAgent = new require('http').Agent({
-  keepAlive: true,
-  maxSockets: 100, // Increased from 50
-  maxFreeSockets: 10,
-  timeout: 30000,
-  freeSocketTimeout: 30000, // Free socket timeout
-  socketActiveTTL: 60000 // Socket active TTL
-});
-const httpsAgent = new require('https').Agent({
-  keepAlive: true,
-  maxSockets: 100, // Increased from 50
-  maxFreeSockets: 10,
-  timeout: 30000,
-  freeSocketTimeout: 30000, // Free socket timeout
-  socketActiveTTL: 60000 // Socket active TTL
-});
+// Performance optimization: Enhanced HTTP agents with proxy support
+// 自动检测系统代理设置和环境变量 (HTTP_PROXY, HTTPS_PROXY, NO_PROXY)
+const httpProxy = process.env.HTTP_PROXY || process.env.http_proxy;
+const httpsProxy = process.env.HTTPS_PROXY || process.env.https_proxy || httpProxy;
 
-// 配置 axios 默认设置
-axios.defaults.httpAgent = httpAgent;
-axios.defaults.httpsAgent = httpsAgent;
+// 配置axios代理
+if (httpProxy || httpsProxy) {
+  // 解析代理URL
+  const proxyUrl = new URL(httpsProxy || httpProxy);
+
+  // 使用axios的proxy配置对象（更可靠）
+  axios.defaults.proxy = {
+    protocol: proxyUrl.protocol.replace(':', ''),
+    host: proxyUrl.hostname,
+    port: parseInt(proxyUrl.port) || (proxyUrl.protocol === 'https:' ? 443 : 80),
+    auth: proxyUrl.username && proxyUrl.password ? {
+      username: proxyUrl.username,
+      password: proxyUrl.password
+    } : undefined
+  };
+
+  console.log('[Proxy] Proxy detected and configured:');
+  console.log(`[Proxy]   Protocol: ${proxyUrl.protocol.replace(':', '')}`);
+  console.log(`[Proxy]   Host: ${proxyUrl.hostname}`);
+  console.log(`[Proxy]   Port: ${proxyUrl.port || (proxyUrl.protocol === 'https:' ? 443 : 80)}`);
+
+  if (process.env.NO_PROXY || process.env.no_proxy) {
+    console.log(`[Proxy]   NO_PROXY: ${process.env.NO_PROXY || process.env.no_proxy}`);
+  }
+} else {
+  console.log('[Proxy] No proxy configured, using direct connection');
+}
+
+// 配置axios默认超时
 axios.defaults.timeout = 30000;
 
 // 初始化数据目录
