@@ -443,14 +443,28 @@ app.post('/api/providers/refresh-all-models', async (req, res) => {
   const results = {
     success: [],
     failed: [],
+    skipped: [],
     total: 0,
     successCount: 0,
-    failedCount: 0
+    failedCount: 0,
+    skippedCount: 0
   };
 
-  // 过滤掉已禁用的提供商
-  const activeProviders = data.providers.filter(p => !p.disabled);
+  // 过滤掉已禁用的提供商和排除自动刷新的提供商
+  const activeProviders = data.providers.filter(p => !p.disabled && !p.excludeAutoRefresh);
+  const skippedProviders = data.providers.filter(p => !p.disabled && p.excludeAutoRefresh);
+
   results.total = activeProviders.length;
+  results.skippedCount = skippedProviders.length;
+
+  // 记录被跳过的提供商
+  skippedProviders.forEach(provider => {
+    results.skipped.push({
+      providerId: provider.id,
+      providerName: provider.name,
+      reason: '已排除自动刷新'
+    });
+  });
 
   // 并发获取所有提供商的模型
   const promises = activeProviders.map(async (provider) => {
