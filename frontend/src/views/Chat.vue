@@ -17,11 +17,35 @@
     
     <div class="chat-main">
       <div class="chat-header">
-        <select v-model="currentModel" class="model-select" @change="onModelChange">
-          <option v-for="m in allModels" :key="m.value" :value="m.value">
-            {{ m.label }}
-          </option>
-        </select>
+        <div class="model-selector" ref="modelSelectorRef">
+          <div class="model-select-trigger" @click="toggleModelDropdown">
+            <span class="selected-model">{{ currentModelLabel || '选择模型' }}</span>
+            <span class="dropdown-arrow">{{ showModelDropdown ? '▲' : '▼' }}</span>
+          </div>
+          <div v-if="showModelDropdown" class="model-dropdown">
+            <input
+              v-model="modelSearchQuery"
+              @input="onModelSearch"
+              placeholder="搜索模型..."
+              class="model-search-input"
+              ref="modelSearchInput"
+              @click.stop
+            >
+            <div class="model-options">
+              <div
+                v-for="m in filteredModels"
+                :key="m.value"
+                :class="['model-option', { active: currentModel === m.value }]"
+                @click="selectModel(m.value)"
+              >
+                {{ m.label }}
+              </div>
+              <div v-if="filteredModels.length === 0" class="no-models">
+                未找到匹配的模型
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
       
       <div class="messages" ref="messagesContainer">
@@ -199,6 +223,110 @@
 </template>
 
 <style scoped>
+/* 模型选择器样式 */
+.model-selector {
+  position: relative;
+  width: 100%;
+  max-width: 400px;
+}
+
+.model-select-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  background: white;
+  border: 1px solid #dee2e6;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s;
+  user-select: none;
+}
+
+.model-select-trigger:hover {
+  border-color: #007bff;
+  box-shadow: 0 0 0 3px rgba(0, 123, 255, 0.1);
+}
+
+.selected-model {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #495057;
+  font-size: 14px;
+}
+
+.dropdown-arrow {
+  margin-left: 8px;
+  color: #6c757d;
+  font-size: 12px;
+  transition: transform 0.2s;
+}
+
+.model-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  background: white;
+  border: 1px solid #dee2e6;
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  z-index: 1000;
+  max-height: 400px;
+  display: flex;
+  flex-direction: column;
+}
+
+.model-search-input {
+  padding: 10px 12px;
+  border: none;
+  border-bottom: 1px solid #dee2e6;
+  outline: none;
+  font-size: 14px;
+  border-radius: 6px 6px 0 0;
+}
+
+.model-search-input:focus {
+  border-bottom-color: #007bff;
+}
+
+.model-options {
+  overflow-y: auto;
+  max-height: 350px;
+}
+
+.model-option {
+  padding: 10px 16px;
+  cursor: pointer;
+  transition: background-color 0.15s;
+  font-size: 14px;
+  color: #495057;
+  border-bottom: 1px solid #f8f9fa;
+}
+
+.model-option:last-child {
+  border-bottom: none;
+}
+
+.model-option:hover {
+  background-color: #f8f9fa;
+}
+
+.model-option.active {
+  background-color: #e7f3ff;
+  color: #007bff;
+  font-weight: 500;
+}
+
+.no-models {
+  padding: 20px;
+  text-align: center;
+  color: #6c757d;
+  font-size: 14px;
+}
+
 /* 图片预览容器样式 */
 .image-preview-container {
   display: flex;
@@ -679,7 +807,7 @@
 </style>
 
 <script setup>
-import { ref, computed, onMounted, nextTick, shallowRef, markRaw } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick, shallowRef, markRaw } from 'vue'
 import axios from 'axios'
 import { marked } from 'marked'
 
@@ -692,6 +820,10 @@ const inputText = ref('')
 const searchQuery = ref('')
 const currentModel = ref('')
 const allModels = shallowRef([])
+const showModelDropdown = ref(false)
+const modelSearchQuery = ref('')
+const modelSelectorRef = ref(null)
+const modelSearchInput = ref(null)
 const pollingEnabled = ref(false)
 const userSettings = ref({})
 const frequency = ref(10)
@@ -772,6 +904,24 @@ const filteredConversations = computed(() => {
 const selectedPrompt = computed(() => {
   if (!selectedPromptId.value) return null
   return prompts.value.find(p => p.id === selectedPromptId.value)
+})
+
+// 计算过滤后的模型列表
+const filteredModels = computed(() => {
+  const query = modelSearchQuery.value.toLowerCase().trim()
+  if (!query) return allModels.value
+
+  return allModels.value.filter(m =>
+    m.label.toLowerCase().includes(query) ||
+    m.value.toLowerCase().includes(query)
+  )
+})
+
+// 计算当前模型的显示标签
+const currentModelLabel = computed(() => {
+  if (!currentModel.value) return ''
+  const model = allModels.value.find(m => m.value === currentModel.value)
+  return model ? model.label : currentModel.value
 })
 
 // 计算当前模型是否可以启用轮询
@@ -946,6 +1096,37 @@ async function loadPrompts() {
     prompts.value = res.data.prompts || []
   } catch (error) {
     console.error('Error loading prompts:', error)
+  }
+}
+
+// 模型选择器相关方法
+function toggleModelDropdown() {
+  showModelDropdown.value = !showModelDropdown.value
+  if (showModelDropdown.value) {
+    nextTick(() => {
+      modelSearchInput.value?.focus()
+    })
+  } else {
+    modelSearchQuery.value = ''
+  }
+}
+
+function selectModel(value) {
+  currentModel.value = value
+  showModelDropdown.value = false
+  modelSearchQuery.value = ''
+  onModelChange()
+}
+
+function onModelSearch() {
+  // 搜索时自动触发过滤，由计算属性 filteredModels 处理
+}
+
+// 点击外部关闭下拉框
+function handleClickOutside(event) {
+  if (modelSelectorRef.value && !modelSelectorRef.value.contains(event.target)) {
+    showModelDropdown.value = false
+    modelSearchQuery.value = ''
   }
 }
 
@@ -1761,5 +1942,13 @@ onMounted(() => {
   loadProviders()
   loadSettings()
   loadPrompts()
+
+  // 添加点击外部关闭下拉框的事件监听
+  document.addEventListener('click', handleClickOutside)
+})
+
+onUnmounted(() => {
+  // 清理事件监听器
+  document.removeEventListener('click', handleClickOutside)
 })
 </script>
