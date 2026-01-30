@@ -10,7 +10,9 @@
       "Bash(netstat:*)",
       "Bash(findstr:*)",
       "Bash(npm install proxy-agent)",
-      "Bash(node:*)"
+      "Bash(node:*)",
+      "Bash(wc:*)",
+      "Bash(npm install:*)"
     ]
   }
 }

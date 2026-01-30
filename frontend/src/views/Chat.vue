@@ -810,6 +810,7 @@
 import { ref, computed, onMounted, onUnmounted, nextTick, shallowRef, markRaw } from 'vue'
 import axios from 'axios'
 import { marked } from 'marked'
+import DOMPurify from 'dompurify'
 
 // 性能优化：使用 shallowRef 减少深度响应式
 const conversations = shallowRef([])
@@ -1176,64 +1177,69 @@ async function deleteConversation(id) {
 
 // 延迟发送队列
 let delayedSendTimer = null
+// 发送锁，防止并发发送
+let isSending = ref(false)
 
 async function sendMessage() {
-  if (!inputText.value.trim() || !currentModel.value) return
-  
-  // 如果没有当前对话，自动创建一个
-  if (!currentConv.value) {
-    await createConversation()
-  }
-  
-  // 构建用户消息，包含文本和图片
-  const userMsg = {
-    role: 'user',
-    content: inputText.value
-  }
-  
-  // 如果有上传的图片，添加到消息中
-  if (uploadedImages.value.length > 0) {
-    userMsg.images = uploadedImages.value.map(img => ({
-      name: img.name,
-      dataUrl: img.dataUrl
-    }))
-  }
-  
-  // 如果有上传的文件，添加到消息中，并将文件内容添加到消息文本
-  if (uploadedFiles.value.length > 0) {
-    userMsg.files = uploadedFiles.value.map(f => ({
-      name: f.name,
-      size: f.size
-    }))
-    
-    // 构建包含文件内容的完整消息
-    let fullContent = userMsg.content
-    uploadedFiles.value.forEach(f => {
-      fullContent += `\n\n---\n📄 文件: ${f.name}\n\`\`\`\n${f.content}\n\`\`\`\n---`
-    })
-    userMsg.content = fullContent
-  }
-  
-  messages.value.push(userMsg)
-  
-  if (!currentConv.value.title) {
-    currentConv.value.title = inputText.value.slice(0, 30)
-  }
-  
-  const messageText = inputText.value
-  inputText.value = ''
-  
-  // 清空已上传的图片和文件
-  const sentImages = [...uploadedImages.value]
-  uploadedImages.value = []
-  uploadedFiles.value = []
-  
-  throttledScrollToBottom()
-  
-  const assistantMsg = { role: 'assistant', content: '', streaming: true }
-  messages.value.push(assistantMsg)
-  
+  if (!inputText.value.trim() || !currentModel.value || isSending.value) return
+
+  // 设置发送锁
+  isSending.value = true
+
   try {
+    // 如果没有当前对话，自动创建一个
+    if (!currentConv.value) {
+      await createConversation()
+    }
+
+    // 构建用户消息，包含文本和图片
+    const userMsg = {
+      role: 'user',
+      content: inputText.value
+    }
+
+    // 如果有上传的图片，添加到消息中
+    if (uploadedImages.value.length > 0) {
+      userMsg.images = uploadedImages.value.map(img => ({
+        name: img.name,
+        dataUrl: img.dataUrl
+      }))
+    }
+
+    // 如果有上传的文件，添加到消息中，并将文件内容添加到消息文本
+    if (uploadedFiles.value.length > 0) {
+      userMsg.files = uploadedFiles.value.map(f => ({
+        name: f.name,
+        size: f.size
+      }))
+
+      // 构建包含文件内容的完整消息
+      let fullContent = userMsg.content
+      uploadedFiles.value.forEach(f => {
+        fullContent += `\n\n---\n📄 文件: ${f.name}\n\`\`\`\n${f.content}\n\`\`\`\n---`
+      })
+      userMsg.content = fullContent
+    }
+
+    messages.value.push(userMsg)
+
+    if (!currentConv.value.title) {
+      currentConv.value.title = inputText.value.slice(0, 30)
+    }
+
+    const messageText = inputText.value
+    inputText.value = ''
+
+    // 清空已上传的图片和文件
+    const sentImages = [...uploadedImages.value]
+    uploadedImages.value = []
+    uploadedFiles.value = []
+
+    throttledScrollToBottom()
+
+    const assistantMsg = { role: 'assistant', content: '', streaming: true }
+    messages.value.push(assistantMsg)
+
     const response = await fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1246,12 +1252,12 @@ async function sendMessage() {
         systemPrompt: selectedPrompt.value ? selectedPrompt.value.content : undefined
       })
     })
-    
+
     // 检查HTTP状态码
     if (!response.ok) {
       const errorText = await response.text()
       let errorMessage = `HTTP ${response.status}: ${response.statusText}`
-      
+
       try {
         const errorData = JSON.parse(errorText)
         if (errorData.error) {
@@ -1263,10 +1269,10 @@ async function sendMessage() {
           errorMessage = errorText
         }
       }
-      
+
       throw new Error(errorMessage)
     }
-    
+
     // 检查是否需要延迟
     if (response.headers.get('content-type')?.includes('application/json')) {
       const data = await response.json()
@@ -1275,47 +1281,47 @@ async function sendMessage() {
         rateLimitInfo.value.isLimited = true
         rateLimitInfo.value.waitTime = data.delayTime
         rateLimitInfo.value.message = data.message
-        
+
         // 更新助手消息显示延迟信息
         assistantMsg.content = `⏳ ${data.message}`
         assistantMsg.streaming = false
-        
+
         // 开始倒计时
         const startCountdown = () => {
           if (delayedSendTimer) clearInterval(delayedSendTimer)
-          
+
           delayedSendTimer = setInterval(() => {
             rateLimitInfo.value.waitTime--
             assistantMsg.content = `⏳ 模型调用频率限制，还需等待 ${rateLimitInfo.value.waitTime} 秒...`
-            
+
             if (rateLimitInfo.value.waitTime <= 0) {
               clearInterval(delayedSendTimer)
               rateLimitInfo.value.isLimited = false
               rateLimitInfo.value.message = ''
-              
+
               // 重新发送请求
               executeDelayedRequest(assistantMsg)
             }
           }, 1000)
         }
-        
+
         startCountdown()
         return
       }
     }
-    
+
     // 处理流式响应
     await processStreamResponse(response, assistantMsg)
-    
+
   } catch (e) {
     console.error('Chat error:', e)
-    
+
     // 创建详细错误信息
     const errorDetails = createErrorDetails(e, currentModel.value)
-    
+
     // 详细的错误信息显示
     let errorMessage = '发送消息失败'
-    
+
     if (e.name === 'TypeError' && e.message.includes('fetch')) {
       errorMessage = '网络连接失败，请检查网络连接'
     } else if (e.name === 'SyntaxError' && e.message.includes('JSON')) {
@@ -1337,19 +1343,25 @@ async function sendMessage() {
     } else if (e.message) {
       errorMessage = e.message
     }
-    
-    assistantMsg.content = `❌ ${errorMessage}`
-    assistantMsg.streaming = false
-    assistantMsg.error = true
-    assistantMsg.errorDetails = errorDetails
-    
-    // 强制触发响应式更新，确保错误消息显示
-    messages.value = [...messages.value]
-    nextTick(() => {
-      throttledScrollToBottom()
-    })
+
+    const assistantMsg = messages.value[messages.value.length - 1]
+    if (assistantMsg && assistantMsg.role === 'assistant') {
+      assistantMsg.content = `❌ ${errorMessage}`
+      assistantMsg.streaming = false
+      assistantMsg.error = true
+      assistantMsg.errorDetails = errorDetails
+
+      // 强制触发响应式更新，确保错误消息显示
+      messages.value = [...messages.value]
+      nextTick(() => {
+        throttledScrollToBottom()
+      })
+    }
+  } finally {
+    // 释放发送锁
+    isSending.value = false
   }
-  
+
   // 保存对话
   await saveConversation()
 }
@@ -1427,19 +1439,22 @@ async function executeDelayedRequest(assistantMsg) {
     } else if (e.message) {
       errorMessage = e.message
     }
-    
+
     assistantMsg.content = `❌ ${errorMessage}`
     assistantMsg.streaming = false
     assistantMsg.error = true
     assistantMsg.errorDetails = errorDetails
-    
+
     // 强制触发响应式更新，确保错误消息显示
     messages.value = [...messages.value]
     nextTick(() => {
       throttledScrollToBottom()
     })
+  } finally {
+    // 释放发送锁
+    isSending.value = false
   }
-  
+
   // 保存对话
   await saveConversation()
 }
@@ -1589,13 +1604,16 @@ const throttledScrollToBottom = (() => {
 // 性能优化：优化 Markdown 渲染缓存
 function getRenderedContent(msg, index) {
   if (msg.rendered) return msg.rendered
-  
+
   // 为流式消息实时渲染，但不缓存
-  if (msg.streaming) return marked(msg.content)
-  
+  if (msg.streaming) {
+    const rawHtml = marked(msg.content)
+    return DOMPurify.sanitize(rawHtml)
+  }
+
   // 生成缓存键
   const cacheKey = `${msg.role}-${msg.content}`
-  
+
   // 检查缓存
   if (renderedCache.has(cacheKey)) {
     const rendered = renderedCache.get(cacheKey)
@@ -1603,16 +1621,17 @@ function getRenderedContent(msg, index) {
     msg.rendered = rendered
     return rendered
   }
-  
-  // 渲染并缓存
-  const rendered = marked(msg.content)
-  
+
+  // 渲染并清理HTML（防止XSS）
+  const rawHtml = marked(msg.content)
+  const rendered = DOMPurify.sanitize(rawHtml)
+
   // 缓存大小控制
   if (renderedCache.size >= maxCacheSize) {
     const firstKey = renderedCache.keys().next().value
     renderedCache.delete(firstKey)
   }
-  
+
   renderedCache.set(cacheKey, rendered)
   // 修复：直接修改对象属性而不是数组索引
   msg.rendered = rendered
