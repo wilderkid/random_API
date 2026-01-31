@@ -62,6 +62,18 @@ let promptsCacheTime = 0;
 let languagesCacheTime = 0;
 const CACHE_TTL = 5000; // 5秒缓存
 
+// 配置常量
+const CONFIG = {
+  CACHE_TTL: 5000, // 缓存过期时间（毫秒）
+  MAX_CONVERSATION_MAPPINGS: 1000, // 最大会话映射数量
+  SESSION_EXPIRATION_TIME: 24 * 60 * 60 * 1000, // 短会话过期时间（24小时）
+  EXTENDED_SESSION_EXPIRATION: 7 * 24 * 60 * 60 * 1000, // 长会话过期时间（7天）
+  MIN_MESSAGE_COUNT_FOR_EXTENDED: 3, // 保留更久的最小消息数
+  MODEL_FAIL_THRESHOLD: 3, // 模型失败阈值
+  STREAM_TIMEOUT: 120000, // 流式响应超时（2分钟）
+  REQUEST_TIMEOUT: 60000 // 普通请求超时（1分钟）
+};
+
 // Performance optimization: Enhanced HTTP agents with proxy support
 // 自动检测系统代理设置和环境变量 (HTTP_PROXY, HTTPS_PROXY, NO_PROXY)
 const httpProxy = process.env.HTTP_PROXY || process.env.http_proxy;
@@ -69,27 +81,33 @@ const httpsProxy = process.env.HTTPS_PROXY || process.env.https_proxy || httpPro
 
 // 配置axios代理
 if (httpProxy || httpsProxy) {
-  // 解析代理URL
-  const proxyUrl = new URL(httpsProxy || httpProxy);
+  try {
+    // 解析代理URL
+    const proxyUrl = new URL(httpsProxy || httpProxy);
 
-  // 使用axios的proxy配置对象（更可靠）
-  axios.defaults.proxy = {
-    protocol: proxyUrl.protocol.replace(':', ''),
-    host: proxyUrl.hostname,
-    port: parseInt(proxyUrl.port) || (proxyUrl.protocol === 'https:' ? 443 : 80),
-    auth: proxyUrl.username && proxyUrl.password ? {
-      username: proxyUrl.username,
-      password: proxyUrl.password
-    } : undefined
-  };
+    // 使用axios的proxy配置对象（更可靠）
+    axios.defaults.proxy = {
+      protocol: proxyUrl.protocol.replace(':', ''),
+      host: proxyUrl.hostname,
+      port: parseInt(proxyUrl.port) || (proxyUrl.protocol === 'https:' ? 443 : 80),
+      auth: proxyUrl.username && proxyUrl.password ? {
+        username: proxyUrl.username,
+        password: proxyUrl.password
+      } : undefined
+    };
 
-  console.log('[Proxy] Proxy detected and configured:');
-  console.log(`[Proxy]   Protocol: ${proxyUrl.protocol.replace(':', '')}`);
-  console.log(`[Proxy]   Host: ${proxyUrl.hostname}`);
-  console.log(`[Proxy]   Port: ${proxyUrl.port || (proxyUrl.protocol === 'https:' ? 443 : 80)}`);
+    console.log('[Proxy] Proxy detected and configured:');
+    console.log(`[Proxy]   Protocol: ${proxyUrl.protocol.replace(':', '')}`);
+    console.log(`[Proxy]   Host: ${proxyUrl.hostname}`);
+    console.log(`[Proxy]   Port: ${proxyUrl.port || (proxyUrl.protocol === 'https:' ? 443 : 80)}`);
 
-  if (process.env.NO_PROXY || process.env.no_proxy) {
-    console.log(`[Proxy]   NO_PROXY: ${process.env.NO_PROXY || process.env.no_proxy}`);
+    if (process.env.NO_PROXY || process.env.no_proxy) {
+      console.log(`[Proxy]   NO_PROXY: ${process.env.NO_PROXY || process.env.no_proxy}`);
+    }
+  } catch (error) {
+    console.warn('[Proxy] ⚠️  Failed to parse proxy URL:', error.message);
+    console.warn('[Proxy] ⚠️  Proxy configuration:', httpsProxy || httpProxy);
+    console.warn('[Proxy] ⚠️  Continuing without proxy. Please check your HTTP_PROXY/HTTPS_PROXY environment variables.');
   }
 } else {
   console.log('[Proxy] No proxy configured, using direct connection');
@@ -97,6 +115,49 @@ if (httpProxy || httpsProxy) {
 
 // 配置axios默认超时
 axios.defaults.timeout = 30000;
+
+// ==================== 文件写入队列机制 ====================
+// 解决并发写入导致的数据竞争问题
+class FileWriteQueue {
+  constructor() {
+    this.queues = new Map(); // filePath -> Promise chain
+  }
+
+  async write(filePath, data) {
+    // 获取或创建该文件的写入队列
+    let queue = this.queues.get(filePath) || Promise.resolve();
+
+    // 将新的写入操作加入队列
+    queue = queue
+      .then(() => fs.writeFile(filePath, data))
+      .catch(error => {
+        console.error(`[FileWriteQueue] Error writing to ${filePath}:`, error);
+        throw error;
+      });
+
+    this.queues.set(filePath, queue);
+
+    // 等待写入完成
+    try {
+      await queue;
+    } finally {
+      // 清理已完成的队列（延迟清理，避免立即删除）
+      setTimeout(() => {
+        if (this.queues.get(filePath) === queue) {
+          this.queues.delete(filePath);
+        }
+      }, 100);
+    }
+  }
+}
+
+const fileWriteQueue = new FileWriteQueue();
+
+// 封装的安全写入函数
+async function safeWriteFile(filePath, data) {
+  const jsonData = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
+  await fileWriteQueue.write(filePath, jsonData);
+}
 
 // 初始化数据目录
 async function initDataDir() {
@@ -106,7 +167,7 @@ async function initDataDir() {
   
   try {
     await fs.access(API_SETTINGS_FILE);
-    // 数据迁移：为旧的提供商添加apiType字段
+    // 数据迁移：为旧的提供商添加apiType字段和modelType字段
     const data = JSON.parse(await fs.readFile(API_SETTINGS_FILE, 'utf8'));
     let updated = false;
     if (data.providers) {
@@ -115,26 +176,40 @@ async function initDataDir() {
           provider.apiType = 'openai';
           updated = true;
         }
+        // 新增：添加modelType字段（默认为text）
+        if (provider.modelType === undefined) {
+          provider.modelType = 'text';
+          updated = true;
+        }
+        // 新增：为每个模型添加type字段
+        if (provider.models) {
+          provider.models.forEach(model => {
+            if (model.type === undefined) {
+              model.type = 'text';
+              updated = true;
+            }
+          });
+        }
       });
     }
     if (updated) {
-      await fs.writeFile(API_SETTINGS_FILE, JSON.stringify(data, null, 2));
+      await safeWriteFile(API_SETTINGS_FILE, data);
       invalidateApiSettingsCache();
-      console.log('Data migration: Added apiType to existing providers.');
+      console.log('Data migration: Added apiType, modelType and model.type to existing providers.');
     }
   } catch {
-    await fs.writeFile(API_SETTINGS_FILE, JSON.stringify({
+    await safeWriteFile(API_SETTINGS_FILE, {
       providers: [],
       groups: [
         { id: 'default', name: '默认分组', description: '未分组的提供商' }
       ]
-    }, null, 2));
+    });
   }
-  
+
   try {
     await fs.access(USER_SETTINGS_FILE);
   } catch {
-    await fs.writeFile(USER_SETTINGS_FILE, JSON.stringify({
+    await safeWriteFile(USER_SETTINGS_FILE, {
       defaultParams: { temperature: 0.7, max_tokens: 2000, top_p: 1 },
       globalFrequency: 10,
       defaultPromptId: '', // 默认提示词ID
@@ -151,28 +226,28 @@ async function initDataDir() {
       proxyApiKey: '', // 代理接口密钥（向后兼容）
       proxyApiKeys: {}, // 多API密钥管理
       conversationProviderMap: {} // 会话-提供商映射（用于对话连续性）
-    }, null, 2));
+    });
   }
 
   // 初始化提示词库文件
   try {
     await fs.access(PROMPTS_FILE);
   } catch {
-    await fs.writeFile(PROMPTS_FILE, JSON.stringify({
+    await safeWriteFile(PROMPTS_FILE, {
       prompts: [],
       groups: [
         { id: 'default', name: '默认分组', description: '未分组的提示词' },
         { id: 'translate', name: '翻译', description: '翻译相关的提示词' }
       ],
       tags: []
-    }, null, 2));
+    });
   }
 
   // 初始化语言文件
   try {
     await fs.access(LANGUAGES_FILE);
   } catch {
-    await fs.writeFile(LANGUAGES_FILE, JSON.stringify({
+    await safeWriteFile(LANGUAGES_FILE, {
       sourceLanguages: [
         { id: '1', name: '中文', code: 'zh' },
         { id: '2', name: '英语', code: 'en' },
@@ -193,7 +268,7 @@ async function initDataDir() {
         { id: '7', name: '俄语', code: 'ru' },
         { id: '8', name: '西班牙语', code: 'es' }
       ]
-    }, null, 2));
+    });
   }
 }
 
@@ -299,7 +374,7 @@ async function getLanguages() {
 
 // 保存语言数据
 async function saveLanguages(data) {
-  await fs.writeFile(LANGUAGES_FILE, JSON.stringify(data, null, 2));
+  await safeWriteFile(LANGUAGES_FILE, data);
   invalidateLanguagesCache();
 }
 
@@ -332,7 +407,7 @@ async function getPrompts() {
 
 // 保存提示词库
 async function savePrompts(data) {
-  await fs.writeFile(PROMPTS_FILE, JSON.stringify(data, null, 2));
+  await safeWriteFile(PROMPTS_FILE, data);
   invalidatePromptsCache();
 }
 
@@ -369,7 +444,7 @@ app.post('/api/providers/import', async (req, res) => {
         providers: oldFormatProviders,
         groups: [{ id: 'default', name: '默认分组', description: '未分组的提供商' }]
       };
-      await fs.writeFile(API_SETTINGS_FILE, JSON.stringify(newSettings, null, 2));
+      await safeWriteFile(API_SETTINGS_FILE, newSettings);
       invalidateApiSettingsCache();
       return res.json({ success: true, message: `成功导入 ${oldFormatProviders.length} 个提供商（旧格式）。` });
     }
@@ -385,7 +460,7 @@ app.post('/api/providers/import', async (req, res) => {
     }
 
     const newSettings = { providers, groups };
-    await fs.writeFile(API_SETTINGS_FILE, JSON.stringify(newSettings, null, 2));
+    await safeWriteFile(API_SETTINGS_FILE, newSettings);
     invalidateApiSettingsCache();
     res.json({ success: true, message: `成功导入 ${providers.length} 个提供商和 ${groups.length} 个分组。` });
   } catch (error) {
@@ -405,7 +480,7 @@ app.post('/api/providers', async (req, res) => {
     apiType: req.body.apiType || 'openai' // 默认为OpenAI兼容格式
   };
   data.providers.push(newProvider);
-  await fs.writeFile(API_SETTINGS_FILE, JSON.stringify(data, null, 2));
+  await safeWriteFile(API_SETTINGS_FILE, data);
   invalidateApiSettingsCache(); // 缓存失效
   res.json(newProvider);
 });
@@ -415,7 +490,7 @@ app.put('/api/providers/:id', async (req, res) => {
   const index = data.providers.findIndex(p => p.id === req.params.id);
   if (index !== -1) {
     data.providers[index] = { ...data.providers[index], ...req.body };
-    await fs.writeFile(API_SETTINGS_FILE, JSON.stringify(data, null, 2));
+    await safeWriteFile(API_SETTINGS_FILE, data);
     invalidateApiSettingsCache(); // 缓存失效
     res.json(data.providers[index]);
   } else {
@@ -426,7 +501,7 @@ app.put('/api/providers/:id', async (req, res) => {
 app.delete('/api/providers/:id', async (req, res) => {
   const data = await getApiSettings();
   data.providers = data.providers.filter(p => p.id !== req.params.id);
-  await fs.writeFile(API_SETTINGS_FILE, JSON.stringify(data, null, 2));
+  await safeWriteFile(API_SETTINGS_FILE, data);
   invalidateApiSettingsCache(); // 缓存失效
   res.json({ success: true });
 });
@@ -525,7 +600,7 @@ app.post('/api/providers/refresh-all-models', async (req, res) => {
   await Promise.all(promises);
 
   // 保存更新后的配置
-  await fs.writeFile(API_SETTINGS_FILE, JSON.stringify(data, null, 2));
+  await safeWriteFile(API_SETTINGS_FILE, data);
   invalidateApiSettingsCache();
 
   res.json(results);
@@ -579,7 +654,7 @@ app.post('/api/groups', async (req, res) => {
   }
   
   data.groups.push(newGroup);
-  await fs.writeFile(API_SETTINGS_FILE, JSON.stringify(data, null, 2));
+  await safeWriteFile(API_SETTINGS_FILE, data);
   invalidateApiSettingsCache();
   res.json(newGroup);
 });
@@ -607,7 +682,7 @@ app.put('/api/groups/:id', async (req, res) => {
     data.groups[index].description = description;
   }
   
-  await fs.writeFile(API_SETTINGS_FILE, JSON.stringify(data, null, 2));
+  await safeWriteFile(API_SETTINGS_FILE, data);
   invalidateApiSettingsCache();
   res.json(data.groups[index]);
 });
@@ -635,7 +710,7 @@ app.delete('/api/groups/:id', async (req, res) => {
   });
   
   data.groups.splice(groupIndex, 1);
-  await fs.writeFile(API_SETTINGS_FILE, JSON.stringify(data, null, 2));
+  await safeWriteFile(API_SETTINGS_FILE, data);
   invalidateApiSettingsCache();
   res.json({ success: true, message: '分组已删除，提供商已移至默认分组' });
 });
@@ -662,7 +737,7 @@ app.put('/api/providers/:id/group', async (req, res) => {
   }
   
   data.providers[providerIndex].groupId = groupId;
-  await fs.writeFile(API_SETTINGS_FILE, JSON.stringify(data, null, 2));
+  await safeWriteFile(API_SETTINGS_FILE, data);
   invalidateApiSettingsCache();
   res.json(data.providers[providerIndex]);
 });
@@ -678,7 +753,7 @@ app.get('/api/conversations', async (req, res) => {
 
 app.post('/api/conversations', async (req, res) => {
   const conversation = { id: Date.now().toString(), title: '', messages: [], model: req.body.model || '' };
-  await fs.writeFile(path.join(CONVERSATIONS_DIR, `${conversation.id}.json`), JSON.stringify(conversation, null, 2));
+  await safeWriteFile(path.join(CONVERSATIONS_DIR, `${conversation.id}.json`), conversation);
   res.json(conversation);
 });
 
@@ -693,7 +768,7 @@ app.get('/api/conversations/:id', async (req, res) => {
 
 app.put('/api/conversations/:id', async (req, res) => {
   const filePath = path.join(CONVERSATIONS_DIR, `${req.params.id}.json`);
-  await fs.writeFile(filePath, JSON.stringify(req.body, null, 2));
+  await safeWriteFile(filePath, req.body);
   res.json(req.body);
 });
 
@@ -1162,8 +1237,29 @@ app.post('/api/chat', async (req, res) => {
 
         console.log(`Using model ID: ${modelId} from provider ${provider.name}`);
 
-        // 尝试调用该提供商
-        await streamChat(provider, messages, params, res, modelId, images, processedSystemPrompt);
+        // 识别模型类型并调用对应的处理函数
+        const modelType = getModelType(provider, modelId);
+        console.log(`[ModelType] Detected model type: ${modelType} for ${modelId}`);
+
+        if (modelType === 'image') {
+          // 提取提示词（最后一条用户消息的内容）
+          const lastUserMessage = messages[messages.length - 1];
+          const prompt = lastUserMessage?.content || '';
+
+          if (!prompt) {
+            errors.push({
+              provider: provider.name,
+              error: '生成图片需要提供提示词'
+            });
+            continue;
+          }
+
+          console.log(`[ImageGen] Generating image with prompt: ${prompt.substring(0, 50)}...`);
+          await generateImage(provider, prompt, params, res, modelId);
+        } else {
+          // 文本模型，使用原有的streamChat
+          await streamChat(provider, messages, params, res, modelId, images, processedSystemPrompt);
+        }
 
         // 如果成功，重置模型失败计数并保存轮询状态
         await resetModelFailCount(provider.id, modelName, userSettings);
@@ -1226,9 +1322,28 @@ app.post('/api/chat', async (req, res) => {
       res.write(`data: ${JSON.stringify({ error: 'Provider not found' })}\n\n`);
       return res.end();
     }
-    
+
     try {
-      await streamChat(provider, messages, params, res, modelId, images, processedSystemPrompt);
+      // 识别模型类型并调用对应的处理函数
+      const modelType = getModelType(provider, modelId);
+      console.log(`[ModelType] Detected model type: ${modelType} for ${modelId}`);
+
+      if (modelType === 'image') {
+        // 提取提示词（最后一条用户消息的内容）
+        const lastUserMessage = messages[messages.length - 1];
+        const prompt = lastUserMessage?.content || '';
+
+        if (!prompt) {
+          res.write(`data: ${JSON.stringify({ error: '生成图片需要提供提示词' })}\n\n`);
+          return res.end();
+        }
+
+        console.log(`[ImageGen] Generating image with prompt: ${prompt.substring(0, 50)}...`);
+        await generateImage(provider, prompt, params, res, modelId);
+      } else {
+        // 文本模型，使用原有的streamChat
+        await streamChat(provider, messages, params, res, modelId, images, processedSystemPrompt);
+      }
     } catch (error) {
       console.error(`Chat error:`, error.message);
       res.write(`data: ${JSON.stringify({ error: error.message })}\n\n`);
@@ -1243,7 +1358,7 @@ app.get('/api/settings', async (req, res) => {
 });
 
 app.put('/api/settings', async (req, res) => {
-  await fs.writeFile(USER_SETTINGS_FILE, JSON.stringify(req.body, null, 2));
+  await safeWriteFile(USER_SETTINGS_FILE, req.body);
   invalidateUserSettingsCache(); // 缓存失效
   res.json(req.body);
 });
@@ -1533,41 +1648,59 @@ function saveConversationProvider(sessionIdentifier, modelName, providerId, user
   console.log(`[Session] Saved provider ${providerId} for conversation ${key}`);
 }
 
-// 清理过期的会话映射（超过24小时未使用）
+// 清理过期的会话映射（优化策略：按消息数量和时间综合判断）
 function cleanupExpiredConversations(userSettings) {
   if (!userSettings.conversationProviderMap) {
     return 0;
   }
-  
+
   const now = new Date();
-  const expirationTime = 24 * 60 * 60 * 1000; // 24小时
   let cleanedCount = 0;
-  
+
   for (const key in userSettings.conversationProviderMap) {
     const mapping = userSettings.conversationProviderMap[key];
     const lastUsed = new Date(mapping.lastUsed);
     const age = now - lastUsed;
-    
-    if (age > expirationTime) {
+    const messageCount = mapping.messageCount || 0;
+
+    // 根据消息数量决定过期时间
+    // 消息数量>=3的会话保留7天，否则保留24小时
+    const effectiveExpirationTime = messageCount >= CONFIG.MIN_MESSAGE_COUNT_FOR_EXTENDED
+      ? CONFIG.EXTENDED_SESSION_EXPIRATION
+      : CONFIG.SESSION_EXPIRATION_TIME;
+
+    if (age > effectiveExpirationTime) {
       delete userSettings.conversationProviderMap[key];
       cleanedCount++;
     }
   }
-  
-  // 限制映射表大小（最多保存1000条）
+
+  // 限制映射表大小
   const entries = Object.entries(userSettings.conversationProviderMap);
-  if (entries.length > 1000) {
-    // 按最后使用时间排序，删除最旧的
-    entries.sort((a, b) => new Date(b[1].lastUsed) - new Date(a[1].lastUsed));
-    const toKeep = entries.slice(0, 1000);
+  if (entries.length > CONFIG.MAX_CONVERSATION_MAPPINGS) {
+    // 按优先级排序：消息数量多的优先保留，其次是最近使用的
+    entries.sort((a, b) => {
+      const aMessageCount = a[1].messageCount || 0;
+      const bMessageCount = b[1].messageCount || 0;
+
+      // 首先按消息数量排序
+      if (aMessageCount !== bMessageCount) {
+        return bMessageCount - aMessageCount;
+      }
+
+      // 消息数量相同时，按最后使用时间排序
+      return new Date(b[1].lastUsed) - new Date(a[1].lastUsed);
+    });
+
+    const toKeep = entries.slice(0, CONFIG.MAX_CONVERSATION_MAPPINGS);
     userSettings.conversationProviderMap = Object.fromEntries(toKeep);
-    cleanedCount += entries.length - 1000;
+    cleanedCount += entries.length - CONFIG.MAX_CONVERSATION_MAPPINGS;
   }
-  
+
   if (cleanedCount > 0) {
     console.log(`[Session] Cleaned up ${cleanedCount} expired conversation mappings`);
   }
-  
+
   return cleanedCount;
 }
 
@@ -1697,7 +1830,7 @@ function getNextPollingProvider(providers, modelName, config, userSettings) {
 // 保存轮询状态到文件
 async function savePollingState(userSettings) {
   try {
-    await fs.writeFile(USER_SETTINGS_FILE, JSON.stringify(userSettings, null, 2));
+    await safeWriteFile(USER_SETTINGS_FILE, userSettings);
     invalidateUserSettingsCache(); // 缓存失效
     console.log('Polling state saved successfully');
   } catch (error) {
@@ -1720,8 +1853,7 @@ function incrementModelFailCount(providerId, modelName, userSettings) {
   console.log(`Model ${modelName} on provider ${providerId} fail count: ${userSettings.modelFailCounts[key]}`);
   
   // 如果失败次数达到阈值，禁用该模型在该提供商上的使用
-  const threshold = 3; // 失败3次后禁用
-  if (userSettings.modelFailCounts[key] >= threshold) {
+  if (userSettings.modelFailCounts[key] >= CONFIG.MODEL_FAIL_THRESHOLD) {
     if (!userSettings.disabledModels) {
       userSettings.disabledModels = {};
     }
@@ -1934,7 +2066,7 @@ async function incrementFailCount(providerId) {
       provider.disabled = true;
       console.log(`Provider ${provider.name} disabled after 3 failures`);
     }
-    await fs.writeFile(API_SETTINGS_FILE, JSON.stringify(data, null, 2));
+    await safeWriteFile(API_SETTINGS_FILE, data);
     invalidateApiSettingsCache(); // 缓存失效
   }
 }
@@ -1944,7 +2076,7 @@ async function resetFailCount(providerId) {
   const provider = data.providers.find(p => p.id === providerId);
   if (provider) {
     provider.failCount = 0;
-    await fs.writeFile(API_SETTINGS_FILE, JSON.stringify(data, null, 2));
+    await safeWriteFile(API_SETTINGS_FILE, data);
     invalidateApiSettingsCache(); // 缓存失效
   }
 }
@@ -2264,6 +2396,219 @@ async function handleStreamingResponse(response, res, stream, selectedProvider, 
   });
 }
 
+// ==================== 图像生成模型支持 ====================
+
+/**
+ * 识别模型类型（文本或图像生成）
+ * @param {Object} provider - 提供商对象
+ * @param {string} modelId - 模型ID
+ * @returns {string} - 'text' 或 'image'
+ */
+function getModelType(provider, modelId) {
+  // 1. 从provider配置读取
+  const model = provider.models?.find(m => m.id === modelId);
+  if (model?.type) {
+    log.debug(`[ModelType] Found type from config: ${model.type} for model ${modelId}`);
+    return model.type;
+  }
+
+  // 2. 从模型ID推断
+  const imageKeywords = ['dall-e', 'dalle', 'stable-diffusion', 'midjourney', 'imagen', 'sd-', 'sdxl'];
+  const isImageModel = imageKeywords.some(kw => modelId.toLowerCase().includes(kw));
+
+  if (isImageModel) {
+    log.debug(`[ModelType] Inferred as image model from ID: ${modelId}`);
+    return 'image';
+  }
+
+  log.debug(`[ModelType] Defaulting to text model for: ${modelId}`);
+  return 'text';
+}
+
+/**
+ * 构建图像生成API的URL
+ * @param {string} baseUrl - 基础URL
+ * @param {string} apiType - API类型
+ * @returns {string} - 完整的API URL
+ */
+function buildImageApiUrl(baseUrl, apiType) {
+  baseUrl = baseUrl.replace(/\/$/, '');
+
+  if (apiType === 'openai') {
+    return `${baseUrl}/v1/images/generations`;
+  }
+
+  // 其他API类型可以在这里扩展
+  // 默认使用OpenAI格式
+  return `${baseUrl}/v1/images/generations`;
+}
+
+/**
+ * 构建图像生成请求体
+ * @param {string} modelId - 模型ID
+ * @param {string} prompt - 提示词
+ * @param {Object} params - 参数
+ * @param {string} apiType - API类型
+ * @returns {Object} - 请求体
+ */
+function buildImageRequestBody(modelId, prompt, params, apiType) {
+  if (apiType === 'openai') {
+    const requestBody = {
+      model: modelId,
+      prompt: prompt,
+      n: params.n || 1,
+      size: params.size || '1024x1024'
+    };
+
+    // 只有DALL-E 3支持quality和style参数
+    if (modelId.toLowerCase().includes('dall-e-3')) {
+      if (params.quality) {
+        requestBody.quality = params.quality;
+      }
+      if (params.style) {
+        requestBody.style = params.style;
+      }
+    }
+
+    return requestBody;
+  }
+
+  // 其他API格式
+  return {
+    model: modelId,
+    prompt: prompt,
+    ...params
+  };
+}
+
+/**
+ * 解析图像生成响应
+ * @param {Object} data - API响应数据
+ * @param {string} apiType - API类型
+ * @returns {Object} - 标准化的图像数据
+ */
+function parseImageResponse(data, apiType) {
+  if (apiType === 'openai') {
+    return {
+      images: data.data.map(img => ({
+        url: img.url || img.b64_json,
+        revisedPrompt: img.revised_prompt
+      })),
+      metadata: {
+        created: data.created
+      }
+    };
+  }
+
+  // 其他API格式
+  return {
+    images: data.images || [],
+    metadata: {}
+  };
+}
+
+/**
+ * 生成图像（非流式）
+ * @param {Object} provider - 提供商对象
+ * @param {string} prompt - 提示词
+ * @param {Object} params - 参数
+ * @param {Object} res - 响应对象
+ * @param {string} modelId - 模型ID
+ */
+async function generateImage(provider, prompt, params, res, modelId) {
+  log.info(`[ImageGen] Starting image generation with provider: ${provider.name}, model: ${modelId}`);
+  log.verbose(`[ImageGen] Prompt: ${prompt.substring(0, 100)}...`);
+  log.verbose(`[ImageGen] Params:`, params);
+
+  const apiType = provider.apiType || 'openai';
+  const url = buildImageApiUrl(provider.baseUrl, apiType);
+
+  try {
+    // 构建请求体
+    const requestBody = buildImageRequestBody(modelId, prompt, params, apiType);
+    log.verbose(`[ImageGen] Request body:`, requestBody);
+
+    // 设置响应头（SSE格式）
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+
+    // 发送开始生成的消息
+    res.write(`data: ${JSON.stringify({
+      type: 'status',
+      message: '正在生成图片，请稍候...'
+    })}\n\n`);
+
+    // 调用API（非流式，等待完整响应）
+    const response = await axios.post(url, requestBody, {
+      headers: {
+        'Authorization': `Bearer ${provider.apiKey}`,
+        'Content-Type': 'application/json'
+      },
+      timeout: CONFIG.STREAM_TIMEOUT // 使用配置的超时时间（120秒）
+    });
+
+    log.info(`[ImageGen] Image generation successful, status: ${response.status}`);
+
+    // 解析响应
+    const imageData = parseImageResponse(response.data, apiType);
+    log.verbose(`[ImageGen] Generated ${imageData.images.length} image(s)`);
+
+    // 记录成功的API调用
+    await logApiCall(provider.name, modelId, true);
+
+    // 发送图片数据（模拟SSE流式响应）
+    res.write(`data: ${JSON.stringify({
+      type: 'image',
+      images: imageData.images,
+      metadata: {
+        model: modelId,
+        provider: provider.name,
+        timestamp: new Date().toISOString(),
+        parameters: {
+          size: params.size || '1024x1024',
+          quality: params.quality || 'standard',
+          n: params.n || 1
+        },
+        ...imageData.metadata
+      }
+    })}\n\n`);
+
+    // 发送完成标记
+    res.write(`data: [DONE]\n\n`);
+    res.end();
+
+    log.info(`[ImageGen] Response sent successfully`);
+
+  } catch (error) {
+    log.error(`[ImageGen] Error generating image:`, error.message);
+
+    // 使用高效的错误解析器
+    const errorMessage = parseErrorResponse(error);
+    log.verbose(`[ImageGen] Parsed error message:`, errorMessage);
+
+    // 记录失败的API调用
+    await logApiCall(provider.name, modelId, false, errorMessage);
+
+    // 发送错误消息
+    if (!res.headersSent) {
+      res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('Connection', 'keep-alive');
+    }
+
+    res.write(`data: ${JSON.stringify({
+      error: {
+        message: errorMessage,
+        type: 'image_generation_error'
+      }
+    })}\n\n`);
+    res.end();
+
+    throw error;
+  }
+}
+
 async function streamChat(provider, messages, params, res, modelId, images, systemPrompt) {
   log.verbose(`[DEBUG] streamChat: provider=${provider.name}, modelId=${modelId}, messages=${messages.length}, apiType=${provider.apiType}, systemPrompt=${systemPrompt ? 'yes' : 'no'}`);
 
@@ -2320,7 +2665,7 @@ async function streamChat(provider, messages, params, res, modelId, images, syst
     const response = await axios.post(url, requestBody, {
       headers,
       responseType: 'stream',
-      timeout: 60000 // Increase timeout to 60 seconds
+      timeout: CONFIG.REQUEST_TIMEOUT
     });
 
     log.verbose(`[DEBUG] streamChat: Request successful, response status: ${response.status}`);
@@ -2329,11 +2674,30 @@ async function streamChat(provider, messages, params, res, modelId, images, syst
     await logApiCall(provider.name, modelId || provider.defaultModel, true);
 
     // Performance optimization: Add error handling and timeout control
+    let streamClosed = false;
+
+    const cleanupStream = () => {
+      if (streamClosed) return;
+      streamClosed = true;
+
+      // 移除所有事件监听器，防止内存泄漏
+      response.data.removeAllListeners('data');
+      response.data.removeAllListeners('end');
+      response.data.removeAllListeners('error');
+
+      // 销毁流
+      if (!response.data.destroyed) {
+        response.data.destroy();
+      }
+    };
+
     const timeout = setTimeout(() => {
-      response.data.destroy();
-      res.write(`data: ${JSON.stringify({ error: 'Stream timeout' })}\n\n`);
+      cleanupStream();
+      if (!res.headersSent) {
+        res.write(`data: ${JSON.stringify({ error: 'Stream timeout' })}\n\n`);
+      }
       res.end();
-    }, 120000); // 2 minute timeout
+    }, CONFIG.STREAM_TIMEOUT);
 
     response.data.on('data', chunk => {
       try {
@@ -2341,18 +2705,21 @@ async function streamChat(provider, messages, params, res, modelId, images, syst
       } catch (error) {
         log.error('Error writing chunk:', error);
         clearTimeout(timeout);
+        cleanupStream();
         res.end();
       }
     });
 
     response.data.on('end', () => {
       clearTimeout(timeout);
+      cleanupStream();
       res.end();
     });
 
     response.data.on('error', (error) => {
       log.error('Stream error:', error);
       clearTimeout(timeout);
+      cleanupStream();
       res.write(`data: ${JSON.stringify({ error: 'Stream error: ' + error.message })}\n\n`);
       res.end();
     });
@@ -2438,7 +2805,7 @@ async function verifyProxyApiKey(req, res, next) {
     try {
       userSettings.proxyApiKeys[validKey.id].usageCount = (userSettings.proxyApiKeys[validKey.id].usageCount || 0) + 1;
       userSettings.proxyApiKeys[validKey.id].lastUsed = new Date().toISOString();
-      await fs.writeFile(USER_SETTINGS_FILE, JSON.stringify(userSettings, null, 2));
+      await safeWriteFile(USER_SETTINGS_FILE, userSettings);
       invalidateUserSettingsCache();
     } catch (error) {
       console.error('Error updating key usage stats:', error);
@@ -2924,12 +3291,19 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
 // ==================== 多API密钥管理接口 ====================
 
 // 生成随机API密钥
+// 生成随机API密钥（使用密码学安全的随机数生成器）
 function generateApiKey() {
+  // 使用crypto.randomBytes生成密码学安全的随机数
+  const bytes = crypto.randomBytes(36); // 36字节 = 48个base62字符
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
   let result = 'sk-';
+
   for (let i = 0; i < 48; i++) {
-    result += chars.charAt(Math.floor(Math.random() * chars.length));
+    // 使用随机字节作为索引
+    const randomIndex = bytes[i % bytes.length] % chars.length;
+    result += chars.charAt(randomIndex);
   }
+
   return result;
 }
 
@@ -2992,7 +3366,7 @@ app.post('/api/proxy-keys', async (req, res) => {
     
     userSettings.proxyApiKeys[keyId] = newKey;
     
-    await fs.writeFile(USER_SETTINGS_FILE, JSON.stringify(userSettings, null, 2));
+    await safeWriteFile(USER_SETTINGS_FILE, userSettings);
     invalidateUserSettingsCache();
     
     res.json({ id: keyId, ...newKey });
@@ -3020,7 +3394,7 @@ app.put('/api/proxy-keys/:id', async (req, res) => {
       ...allowedUpdates
     };
     
-    await fs.writeFile(USER_SETTINGS_FILE, JSON.stringify(userSettings, null, 2));
+    await safeWriteFile(USER_SETTINGS_FILE, userSettings);
     invalidateUserSettingsCache();
     
     res.json({ id: keyId, ...userSettings.proxyApiKeys[keyId] });
@@ -3043,7 +3417,7 @@ app.post('/api/proxy-keys/:id/regenerate', async (req, res) => {
     const newApiKey = generateApiKey();
     userSettings.proxyApiKeys[keyId].apiKey = newApiKey;
     
-    await fs.writeFile(USER_SETTINGS_FILE, JSON.stringify(userSettings, null, 2));
+    await safeWriteFile(USER_SETTINGS_FILE, userSettings);
     invalidateUserSettingsCache();
     
     res.json({ apiKey: newApiKey });
@@ -3065,7 +3439,7 @@ app.delete('/api/proxy-keys/:id', async (req, res) => {
     
     delete userSettings.proxyApiKeys[keyId];
     
-    await fs.writeFile(USER_SETTINGS_FILE, JSON.stringify(userSettings, null, 2));
+    await safeWriteFile(USER_SETTINGS_FILE, userSettings);
     invalidateUserSettingsCache();
     
     res.json({ success: true });

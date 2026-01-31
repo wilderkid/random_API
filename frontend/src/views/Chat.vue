@@ -51,7 +51,12 @@
       <div class="messages" ref="messagesContainer">
         <div v-for="(msg, i) in messages" :key="i" :class="['message', msg.role, { 'error': msg.error, 'streaming': msg.streaming }]">
           <div v-if="msg.images && msg.images.length > 0" class="message-images">
-            <img v-for="(img, idx) in msg.images" :key="idx" :src="img.dataUrl" :alt="img.name" class="message-image">
+            <img v-for="(img, idx) in msg.images" :key="idx"
+                 :src="img.dataUrl"
+                 :alt="img.name"
+                 class="message-image"
+                 @click="openImageViewer(img.dataUrl)"
+                 title="点击查看大图">
           </div>
           <div v-if="msg.files && msg.files.length > 0" class="message-files">
             <div v-for="(file, idx) in msg.files" :key="idx" class="message-file">
@@ -122,24 +127,62 @@
     <div v-if="showParams" class="modal" @click.self="showParams = false">
       <div class="modal-content">
         <h3>参数配置</h3>
-        <label>系统提示词:
-          <select v-model="selectedPromptId" class="prompt-select">
-            <option value="">无（不使用提示词）</option>
-            <option v-for="prompt in prompts" :key="prompt.id" :value="prompt.id">
-              {{ prompt.name }}
-            </option>
-          </select>
-        </label>
-        <div v-if="selectedPrompt" class="prompt-preview">
-          <div class="prompt-preview-header">
-            <strong>{{ selectedPrompt.name }}</strong>
-            <span class="prompt-preview-desc">{{ selectedPrompt.description }}</span>
+
+        <!-- 文本模型参数 -->
+        <div v-if="currentModelType === 'text'" class="text-params">
+          <label>系统提示词:
+            <select v-model="selectedPromptId" class="prompt-select">
+              <option value="">无（不使用提示词）</option>
+              <option v-for="prompt in prompts" :key="prompt.id" :value="prompt.id">
+                {{ prompt.name }}
+              </option>
+            </select>
+          </label>
+          <div v-if="selectedPrompt" class="prompt-preview">
+            <div class="prompt-preview-header">
+              <strong>{{ selectedPrompt.name }}</strong>
+              <span class="prompt-preview-desc">{{ selectedPrompt.description }}</span>
+            </div>
+            <div class="prompt-preview-content">{{ selectedPrompt.content }}</div>
           </div>
-          <div class="prompt-preview-content">{{ selectedPrompt.content }}</div>
+          <label>温度: <input v-model.number="params.temperature" type="number" step="0.1" min="0" max="2"></label>
+          <label>最大长度: <input v-model.number="params.max_tokens" type="number"></label>
+          <label>Top P: <input v-model.number="params.top_p" type="number" step="0.1" min="0" max="1"></label>
         </div>
-        <label>温度: <input v-model.number="params.temperature" type="number" step="0.1" min="0" max="2"></label>
-        <label>最大长度: <input v-model.number="params.max_tokens" type="number"></label>
-        <label>Top P: <input v-model.number="params.top_p" type="number" step="0.1" min="0" max="1"></label>
+
+        <!-- 生图模型参数 -->
+        <div v-if="currentModelType === 'image'" class="image-params">
+          <label>图片尺寸:
+            <select v-model="imageParams.size">
+              <option value="1024x1024">1024x1024 (方形)</option>
+              <option value="1024x1792">1024x1792 (竖版)</option>
+              <option value="1792x1024">1792x1024 (横版)</option>
+            </select>
+          </label>
+
+          <label>图片质量:
+            <select v-model="imageParams.quality">
+              <option value="standard">标准</option>
+              <option value="hd">高清</option>
+            </select>
+          </label>
+
+          <label>图片风格:
+            <select v-model="imageParams.style">
+              <option value="vivid">生动</option>
+              <option value="natural">自然</option>
+            </select>
+          </label>
+
+          <label>生成数量:
+            <input v-model.number="imageParams.n" type="number" min="1" max="4">
+          </label>
+
+          <div class="param-hint">
+            <small>💡 提示：DALL-E 3 支持高清质量和风格选择</small>
+          </div>
+        </div>
+
         <button @click="showParams = false" class="btn-close">关闭</button>
       </div>
     </div>
@@ -216,6 +259,32 @@
         <div class="error-modal-footer">
           <button @click="copyErrorDetails" class="btn-copy">📋 复制详情</button>
           <button @click="showErrorModal = false" class="btn-close-modal">关闭</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 图片查看器 -->
+    <div v-if="imageViewerVisible" class="image-viewer-modal" @click.self="closeImageViewer" @wheel.prevent="handleViewerWheel">
+      <div class="image-viewer-content">
+        <div class="image-viewer-header">
+          <div class="viewer-controls">
+            <button @click="zoomOut" class="viewer-btn" title="缩小 (-)">➖</button>
+            <span class="zoom-level">{{ Math.round(imageViewerScale * 100) }}%</span>
+            <button @click="zoomIn" class="viewer-btn" title="放大 (+)">➕</button>
+            <button @click="resetZoom" class="viewer-btn" title="重置 (0)">↺</button>
+          </div>
+          <button @click="closeImageViewer" class="viewer-close" title="关闭 (ESC)">✕</button>
+        </div>
+        <div class="image-viewer-body" @wheel.prevent="handleViewerWheel">
+          <img :src="currentViewImage"
+               :style="{ transform: `scale(${imageViewerScale})` }"
+               class="viewer-image"
+               alt="Full size image"
+               draggable="false">
+        </div>
+        <div class="image-viewer-footer">
+          <span class="viewer-hint">滚轮缩放 | ESC关闭 | +/- 缩放 | 0 重置</span>
+          <a :href="currentViewImage" download="image.png" class="viewer-download">📥 下载原图</a>
         </div>
       </div>
     </div>
@@ -395,16 +464,18 @@
 }
 
 .message-image {
-  max-width: 200px;
-  max-height: 200px;
+  max-width: 150px;
+  max-height: 150px;
   border-radius: 8px;
   border: 1px solid #dee2e6;
   cursor: pointer;
-  transition: transform 0.2s;
+  transition: transform 0.2s, box-shadow 0.2s;
+  object-fit: cover;
 }
 
 .message-image:hover {
   transform: scale(1.05);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
 }
 
 .rate-limit-warning {
@@ -804,12 +875,395 @@
   white-space: pre-wrap;
   word-wrap: break-word;
 }
+
+/* ==================== 生图模型样式 ==================== */
+
+/* 生图参数配置 */
+.image-params {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.image-params label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 14px;
+  color: #495057;
+}
+
+.image-params select,
+.image-params input {
+  padding: 8px 12px;
+  border: 1px solid #dee2e6;
+  border-radius: 4px;
+  font-size: 14px;
+  background: white;
+  transition: border-color 0.2s;
+}
+
+.image-params select:focus,
+.image-params input:focus {
+  outline: none;
+  border-color: #007bff;
+  box-shadow: 0 0 0 3px rgba(0, 123, 255, 0.1);
+}
+
+.param-hint {
+  padding: 8px 12px;
+  background: #e7f3ff;
+  border-left: 3px solid #007bff;
+  border-radius: 4px;
+  margin-top: 8px;
+}
+
+.param-hint small {
+  color: #0056b3;
+  font-size: 12px;
+}
+
+/* 文本参数配置 */
+.text-params {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* 生图加载状态 */
+.message.assistant.streaming .message-content:has(.generated-images-container) {
+  position: relative;
+}
+
+.message.assistant.streaming .message-content:has(.generated-images-container)::before {
+  content: "🎨 正在生成图片，请稍候...";
+  display: block;
+  padding: 20px;
+  text-align: center;
+  color: #6c757d;
+  font-style: italic;
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+</style>
+
+<!-- 非 scoped 样式，用于 v-html 动态生成的内容 -->
+<style>
+/* ==================== 消息内容中的图片通用样式 ==================== */
+
+/* 为消息内容中的所有图片添加缩略图样式 */
+.message-content img {
+  max-width: 200px;
+  max-height: 200px;
+  border-radius: 8px;
+  border: 2px solid #dee2e6;
+  cursor: pointer;
+  transition: transform 0.2s, box-shadow 0.2s;
+  object-fit: cover;
+  margin: 8px 4px;
+  display: inline-block;
+}
+
+.message-content img:hover {
+  transform: scale(1.05);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+  border-color: #007bff;
+}
+
+/* ==================== 生成图片容器样式（非scoped，用于v-html） ==================== */
+
+.generated-images-container {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 300px));
+  gap: 16px;
+  margin: 12px 0;
+}
+
+.generated-image-item {
+  border: 1px solid #dee2e6;
+  border-radius: 8px;
+  overflow: hidden;
+  background: white;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  transition: box-shadow 0.2s;
+  max-width: 300px;
+}
+
+.generated-image-item:hover {
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
+}
+
+/* 图片预览包装器 */
+.image-preview-wrapper {
+  position: relative;
+  cursor: pointer;
+  overflow: hidden;
+  border-radius: 8px 8px 0 0;
+  max-height: 250px;
+}
+
+/* 生成的图片预览 - 缩略图样式 */
+.generated-image-preview {
+  width: 100%;
+  height: auto;
+  max-height: 250px;
+  object-fit: cover;
+  display: block;
+  transition: transform 0.3s ease;
+}
+
+/* 悬停遮罩层 */
+.image-preview-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.image-preview-wrapper:hover .image-preview-overlay {
+  opacity: 1;
+}
+
+.image-preview-wrapper:hover .generated-image-preview {
+  transform: scale(1.05);
+}
+
+.preview-icon {
+  font-size: 32px;
+  margin-bottom: 8px;
+}
+
+.preview-text {
+  color: #fff;
+  font-size: 14px;
+}
+
+/* 图片操作按钮区域 */
+.image-actions {
+  padding: 10px;
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  background: #f8f9fa;
+}
+
+.btn-view {
+  padding: 6px 12px;
+  background: #28a745;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  transition: background 0.2s;
+}
+
+.btn-view:hover {
+  background: #218838;
+}
+
+.btn-download {
+  padding: 6px 12px;
+  background: #007bff;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  text-decoration: none;
+  font-size: 13px;
+  transition: background 0.2s;
+  display: inline-block;
+}
+
+.btn-download:hover {
+  background: #0056b3;
+}
+
+/* 修订后的提示词 */
+.revised-prompt {
+  padding: 8px 10px;
+  margin: 0;
+  font-size: 11px;
+  color: #6c757d;
+  background: #f8f9fa;
+  border-top: 1px solid #dee2e6;
+  line-height: 1.4;
+  max-height: 60px;
+  overflow-y: auto;
+}
+
+/* 图片元数据 */
+.image-metadata {
+  padding: 8px 10px;
+  background: #f8f9fa;
+  border-top: 1px solid #dee2e6;
+  font-size: 11px;
+  color: #6c757d;
+}
+
+/* ==================== 图片查看器样式（非scoped） ==================== */
+
+.image-viewer-modal {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.92);
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: viewerFadeIn 0.2s ease;
+}
+
+@keyframes viewerFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.image-viewer-content {
+  display: flex;
+  flex-direction: column;
+  max-width: 95vw;
+  max-height: 95vh;
+  background: #1a1a1a;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+}
+
+.image-viewer-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  background: #2a2a2a;
+  border-bottom: 1px solid #3a3a3a;
+}
+
+.viewer-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.viewer-btn {
+  padding: 8px 14px;
+  background: #3a3a3a;
+  border: none;
+  border-radius: 6px;
+  color: #fff;
+  cursor: pointer;
+  font-size: 14px;
+  transition: background 0.2s;
+}
+
+.viewer-btn:hover {
+  background: #4a4a4a;
+}
+
+.zoom-level {
+  color: #aaa;
+  font-size: 14px;
+  min-width: 60px;
+  text-align: center;
+  padding: 0 8px;
+}
+
+.viewer-close {
+  width: 36px;
+  height: 36px;
+  background: #dc3545;
+  border: none;
+  border-radius: 50%;
+  color: #fff;
+  cursor: pointer;
+  font-size: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.2s, transform 0.2s;
+}
+
+.viewer-close:hover {
+  background: #c82333;
+  transform: scale(1.1);
+}
+
+.image-viewer-body {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: auto;
+  padding: 20px;
+  min-height: 400px;
+  min-width: 500px;
+  max-height: calc(95vh - 130px);
+  background: #111;
+}
+
+.viewer-image {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  transition: transform 0.2s ease;
+  border-radius: 4px;
+  user-select: none;
+}
+
+.image-viewer-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  background: #2a2a2a;
+  border-top: 1px solid #3a3a3a;
+}
+
+.viewer-hint {
+  color: #888;
+  font-size: 12px;
+}
+
+.viewer-download {
+  padding: 10px 20px;
+  background: #007bff;
+  color: #fff;
+  text-decoration: none;
+  border-radius: 6px;
+  font-size: 14px;
+  transition: background 0.2s;
+}
+
+.viewer-download:hover {
+  background: #0056b3;
+  color: #fff;
+}
 </style>
 
 <script setup>
 import { ref, computed, onMounted, onUnmounted, nextTick, shallowRef, markRaw } from 'vue'
 import axios from 'axios'
 import { marked } from 'marked'
+import DOMPurify from 'dompurify'
 
 // 性能优化：使用 shallowRef 减少深度响应式
 const conversations = shallowRef([])
@@ -854,6 +1308,19 @@ const rateLimitInfo = ref({
 // 错误详情弹窗状态
 const showErrorModal = ref(false)
 const currentErrorDetails = ref(null)
+
+// 生图参数配置
+const imageParams = ref({
+  size: '1024x1024',
+  quality: 'standard',
+  style: 'vivid',
+  n: 1
+})
+
+// 图片查看器状态
+const imageViewerVisible = ref(false)
+const currentViewImage = ref(null)
+const imageViewerScale = ref(1)
 
 // 性能优化：Markdown 渲染缓存
 const renderedCache = new Map()
@@ -1004,6 +1471,34 @@ function extractModelName(modelId) {
   // 普通格式
   return modelId.includes('/') ? modelId.split('/').pop() : modelId
 }
+
+// 检测模型类型（文本或图像生成）
+function getModelTypeFromValue(modelValue) {
+  if (!modelValue) return 'text'
+
+  // 从提供商配置中读取
+  const provider = providers.value.find(p => modelValue.startsWith(p.id))
+  if (provider) {
+    const modelId = modelValue.split('::')[1]
+    const modelConfig = provider.models?.find(m => m.id === modelId)
+    if (modelConfig?.type) {
+      return modelConfig.type
+    }
+  }
+
+  // 从模型ID推断
+  const imageKeywords = ['dall-e', 'dalle', 'stable-diffusion', 'midjourney', 'imagen', 'sd-', 'sdxl']
+  if (imageKeywords.some(kw => modelValue.toLowerCase().includes(kw))) {
+    return 'image'
+  }
+
+  return 'text'
+}
+
+// 计算当前模型类型
+const currentModelType = computed(() => {
+  return getModelTypeFromValue(currentModel.value)
+})
 
 async function loadConversations() {
   try {
@@ -1176,82 +1671,90 @@ async function deleteConversation(id) {
 
 // 延迟发送队列
 let delayedSendTimer = null
+// 发送锁，防止并发发送
+let isSending = ref(false)
 
 async function sendMessage() {
-  if (!inputText.value.trim() || !currentModel.value) return
-  
-  // 如果没有当前对话，自动创建一个
-  if (!currentConv.value) {
-    await createConversation()
-  }
-  
-  // 构建用户消息，包含文本和图片
-  const userMsg = {
-    role: 'user',
-    content: inputText.value
-  }
-  
-  // 如果有上传的图片，添加到消息中
-  if (uploadedImages.value.length > 0) {
-    userMsg.images = uploadedImages.value.map(img => ({
-      name: img.name,
-      dataUrl: img.dataUrl
-    }))
-  }
-  
-  // 如果有上传的文件，添加到消息中，并将文件内容添加到消息文本
-  if (uploadedFiles.value.length > 0) {
-    userMsg.files = uploadedFiles.value.map(f => ({
-      name: f.name,
-      size: f.size
-    }))
-    
-    // 构建包含文件内容的完整消息
-    let fullContent = userMsg.content
-    uploadedFiles.value.forEach(f => {
-      fullContent += `\n\n---\n📄 文件: ${f.name}\n\`\`\`\n${f.content}\n\`\`\`\n---`
-    })
-    userMsg.content = fullContent
-  }
-  
-  messages.value.push(userMsg)
-  
-  if (!currentConv.value.title) {
-    currentConv.value.title = inputText.value.slice(0, 30)
-  }
-  
-  const messageText = inputText.value
-  inputText.value = ''
-  
-  // 清空已上传的图片和文件
-  const sentImages = [...uploadedImages.value]
-  uploadedImages.value = []
-  uploadedFiles.value = []
-  
-  throttledScrollToBottom()
-  
-  const assistantMsg = { role: 'assistant', content: '', streaming: true }
-  messages.value.push(assistantMsg)
-  
+  if (!inputText.value.trim() || !currentModel.value || isSending.value) return
+
+  // 设置发送锁
+  isSending.value = true
+
   try {
+    // 如果没有当前对话，自动创建一个
+    if (!currentConv.value) {
+      await createConversation()
+    }
+
+    // 构建用户消息，包含文本和图片
+    const userMsg = {
+      role: 'user',
+      content: inputText.value
+    }
+
+    // 如果有上传的图片，添加到消息中
+    if (uploadedImages.value.length > 0) {
+      userMsg.images = uploadedImages.value.map(img => ({
+        name: img.name,
+        dataUrl: img.dataUrl
+      }))
+    }
+
+    // 如果有上传的文件，添加到消息中，并将文件内容添加到消息文本
+    if (uploadedFiles.value.length > 0) {
+      userMsg.files = uploadedFiles.value.map(f => ({
+        name: f.name,
+        size: f.size
+      }))
+
+      // 构建包含文件内容的完整消息
+      let fullContent = userMsg.content
+      uploadedFiles.value.forEach(f => {
+        fullContent += `\n\n---\n📄 文件: ${f.name}\n\`\`\`\n${f.content}\n\`\`\`\n---`
+      })
+      userMsg.content = fullContent
+    }
+
+    messages.value.push(userMsg)
+
+    if (!currentConv.value.title) {
+      currentConv.value.title = inputText.value.slice(0, 30)
+    }
+
+    const messageText = inputText.value
+    inputText.value = ''
+
+    // 清空已上传的图片和文件
+    const sentImages = [...uploadedImages.value]
+    uploadedImages.value = []
+    uploadedFiles.value = []
+
+    throttledScrollToBottom()
+
+    const assistantMsg = { role: 'assistant', content: '', streaming: true }
+    messages.value.push(assistantMsg)
+
+    // 根据模型类型选择参数
+    const requestParams = currentModelType.value === 'image' ? imageParams.value : params.value
+
     const response = await fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         messages: messages.value.slice(0, -1),
         model: currentModel.value,
-        params: params.value,
+        params: requestParams,
         polling: pollingEnabled.value,
         images: sentImages.length > 0 ? sentImages : undefined,
         systemPrompt: selectedPrompt.value ? selectedPrompt.value.content : undefined
       })
     })
-    
+
     // 检查HTTP状态码
     if (!response.ok) {
       const errorText = await response.text()
       let errorMessage = `HTTP ${response.status}: ${response.statusText}`
-      
+
       try {
         const errorData = JSON.parse(errorText)
         if (errorData.error) {
@@ -1263,10 +1766,10 @@ async function sendMessage() {
           errorMessage = errorText
         }
       }
-      
+
       throw new Error(errorMessage)
     }
-    
+
     // 检查是否需要延迟
     if (response.headers.get('content-type')?.includes('application/json')) {
       const data = await response.json()
@@ -1275,47 +1778,47 @@ async function sendMessage() {
         rateLimitInfo.value.isLimited = true
         rateLimitInfo.value.waitTime = data.delayTime
         rateLimitInfo.value.message = data.message
-        
+
         // 更新助手消息显示延迟信息
         assistantMsg.content = `⏳ ${data.message}`
         assistantMsg.streaming = false
-        
+
         // 开始倒计时
         const startCountdown = () => {
           if (delayedSendTimer) clearInterval(delayedSendTimer)
-          
+
           delayedSendTimer = setInterval(() => {
             rateLimitInfo.value.waitTime--
             assistantMsg.content = `⏳ 模型调用频率限制，还需等待 ${rateLimitInfo.value.waitTime} 秒...`
-            
+
             if (rateLimitInfo.value.waitTime <= 0) {
               clearInterval(delayedSendTimer)
               rateLimitInfo.value.isLimited = false
               rateLimitInfo.value.message = ''
-              
+
               // 重新发送请求
               executeDelayedRequest(assistantMsg)
             }
           }, 1000)
         }
-        
+
         startCountdown()
         return
       }
     }
-    
+
     // 处理流式响应
     await processStreamResponse(response, assistantMsg)
-    
+
   } catch (e) {
     console.error('Chat error:', e)
-    
+
     // 创建详细错误信息
     const errorDetails = createErrorDetails(e, currentModel.value)
-    
+
     // 详细的错误信息显示
     let errorMessage = '发送消息失败'
-    
+
     if (e.name === 'TypeError' && e.message.includes('fetch')) {
       errorMessage = '网络连接失败，请检查网络连接'
     } else if (e.name === 'SyntaxError' && e.message.includes('JSON')) {
@@ -1337,19 +1840,25 @@ async function sendMessage() {
     } else if (e.message) {
       errorMessage = e.message
     }
-    
-    assistantMsg.content = `❌ ${errorMessage}`
-    assistantMsg.streaming = false
-    assistantMsg.error = true
-    assistantMsg.errorDetails = errorDetails
-    
-    // 强制触发响应式更新，确保错误消息显示
-    messages.value = [...messages.value]
-    nextTick(() => {
-      throttledScrollToBottom()
-    })
+
+    const assistantMsg = messages.value[messages.value.length - 1]
+    if (assistantMsg && assistantMsg.role === 'assistant') {
+      assistantMsg.content = `❌ ${errorMessage}`
+      assistantMsg.streaming = false
+      assistantMsg.error = true
+      assistantMsg.errorDetails = errorDetails
+
+      // 强制触发响应式更新，确保错误消息显示
+      messages.value = [...messages.value]
+      nextTick(() => {
+        throttledScrollToBottom()
+      })
+    }
+  } finally {
+    // 释放发送锁
+    isSending.value = false
   }
-  
+
   // 保存对话
   await saveConversation()
 }
@@ -1427,19 +1936,22 @@ async function executeDelayedRequest(assistantMsg) {
     } else if (e.message) {
       errorMessage = e.message
     }
-    
+
     assistantMsg.content = `❌ ${errorMessage}`
     assistantMsg.streaming = false
     assistantMsg.error = true
     assistantMsg.errorDetails = errorDetails
-    
+
     // 强制触发响应式更新，确保错误消息显示
     messages.value = [...messages.value]
     nextTick(() => {
       throttledScrollToBottom()
     })
+  } finally {
+    // 释放发送锁
+    isSending.value = false
   }
-  
+
   // 保存对话
   await saveConversation()
 }
@@ -1464,9 +1976,29 @@ async function processStreamResponse(response, assistantMsg) {
         try {
           const json = JSON.parse(data)
           if (json.error) {
-            throw new Error(json.error)
+            throw new Error(json.error.message || json.error)
           }
-          if (json.choices?.[0]?.delta?.content) {
+
+          // 处理生图响应
+          if (json.type === 'image') {
+            assistantMsg.messageType = 'image-response'
+            assistantMsg.generatedImages = json.images
+            assistantMsg.metadata = json.metadata
+            assistantMsg.content = '已为您生成图片'
+            assistantMsg.streaming = false
+            // 强制触发响应式更新
+            messages.value = [...messages.value]
+            nextTick(() => {
+              throttledScrollToBottom()
+            })
+          }
+          // 处理状态消息（生图进度提示）
+          else if (json.type === 'status') {
+            assistantMsg.content = json.message
+            messages.value = [...messages.value]
+          }
+          // 处理文本响应
+          else if (json.choices?.[0]?.delta?.content) {
             // 直接更新消息内容，确保实时显示
             assistantMsg.content += json.choices[0].delta.content
             // 强制触发响应式更新
@@ -1588,14 +2120,58 @@ const throttledScrollToBottom = (() => {
 
 // 性能优化：优化 Markdown 渲染缓存
 function getRenderedContent(msg, index) {
+  // 生图响应特殊渲染
+  if (msg.messageType === 'image-response' && msg.generatedImages) {
+    let html = '<div class="generated-images-container">'
+
+    msg.generatedImages.forEach((img, idx) => {
+      // 使用data属性存储图片URL，通过事件委托处理点击
+      html += `
+        <div class="generated-image-item">
+          <div class="image-preview-wrapper" data-image-url="${DOMPurify.sanitize(img.url)}" style="cursor: pointer;">
+            <img src="${img.url}" alt="Generated Image ${idx + 1}"
+                 class="generated-image-preview" loading="lazy">
+            <div class="image-preview-overlay">
+              <span class="preview-icon">🔍</span>
+              <span class="preview-text">点击查看大图</span>
+            </div>
+          </div>
+          <div class="image-actions">
+            <button class="btn-view" data-image-url="${DOMPurify.sanitize(img.url)}">👁️ 查看</button>
+            <a href="${img.url}" download="image-${idx + 1}.png"
+               class="btn-download">📥 下载</a>
+          </div>
+          ${img.revisedPrompt ?
+            `<p class="revised-prompt">提示词: ${DOMPurify.sanitize(img.revisedPrompt)}</p>` : ''}
+        </div>
+      `
+    })
+
+    html += '</div>'
+
+    // 添加元数据显示
+    if (msg.metadata) {
+      html += `<div class="image-metadata">
+        <small>模型: ${msg.metadata.model || '未知'} |
+        尺寸: ${msg.metadata.parameters?.size || '未知'} |
+        质量: ${msg.metadata.parameters?.quality || '标准'}</small>
+      </div>`
+    }
+
+    return html
+  }
+
   if (msg.rendered) return msg.rendered
-  
+
   // 为流式消息实时渲染，但不缓存
-  if (msg.streaming) return marked(msg.content)
-  
+  if (msg.streaming) {
+    const rawHtml = marked(msg.content)
+    return DOMPurify.sanitize(rawHtml)
+  }
+
   // 生成缓存键
   const cacheKey = `${msg.role}-${msg.content}`
-  
+
   // 检查缓存
   if (renderedCache.has(cacheKey)) {
     const rendered = renderedCache.get(cacheKey)
@@ -1603,16 +2179,17 @@ function getRenderedContent(msg, index) {
     msg.rendered = rendered
     return rendered
   }
-  
-  // 渲染并缓存
-  const rendered = marked(msg.content)
-  
+
+  // 渲染并清理HTML（防止XSS）
+  const rawHtml = marked(msg.content)
+  const rendered = DOMPurify.sanitize(rawHtml)
+
   // 缓存大小控制
   if (renderedCache.size >= maxCacheSize) {
     const firstKey = renderedCache.keys().next().value
     renderedCache.delete(firstKey)
   }
-  
+
   renderedCache.set(cacheKey, rendered)
   // 修复：直接修改对象属性而不是数组索引
   msg.rendered = rendered
@@ -1758,6 +2335,99 @@ ${details.suggestions.map((s, i) => `${i + 1}. ${s}`).join('\n')}
   }).catch(err => {
     console.error('复制失败:', err)
   })
+}
+
+// 图片查看器相关函数
+function openImageViewer(imageUrl) {
+  currentViewImage.value = imageUrl
+  imageViewerVisible.value = true
+  imageViewerScale.value = 1
+  // 禁止body滚动
+  document.body.style.overflow = 'hidden'
+  // 添加键盘事件监听
+  document.addEventListener('keydown', handleViewerKeydown)
+}
+
+function closeImageViewer() {
+  imageViewerVisible.value = false
+  currentViewImage.value = null
+  imageViewerScale.value = 1
+  // 恢复body滚动
+  document.body.style.overflow = ''
+  // 移除键盘事件监听
+  document.removeEventListener('keydown', handleViewerKeydown)
+}
+
+// 处理图片查看器键盘事件
+function handleViewerKeydown(e) {
+  if (!imageViewerVisible.value) return
+
+  switch (e.key) {
+    case 'Escape':
+      closeImageViewer()
+      break
+    case '+':
+    case '=':
+      zoomIn()
+      break
+    case '-':
+      zoomOut()
+      break
+    case '0':
+      resetZoom()
+      break
+  }
+}
+
+// 处理鼠标滚轮缩放
+function handleViewerWheel(e) {
+  if (!imageViewerVisible.value) return
+
+  e.preventDefault()
+  if (e.deltaY < 0) {
+    zoomIn()
+  } else {
+    zoomOut()
+  }
+}
+
+function zoomIn() {
+  if (imageViewerScale.value < 3) {
+    imageViewerScale.value += 0.25
+  }
+}
+
+function zoomOut() {
+  if (imageViewerScale.value > 0.25) {
+    imageViewerScale.value -= 0.25
+  }
+}
+
+function resetZoom() {
+  imageViewerScale.value = 1
+}
+
+// 处理生成图片的点击事件（事件委托）
+function handleGeneratedImageClick(event) {
+  // 检查是否点击了图片元素
+  const imgElement = event.target.closest('img')
+  if (imgElement && imgElement.src) {
+    // 确保图片在消息内容中
+    const messageContent = imgElement.closest('.message-content')
+    if (messageContent) {
+      openImageViewer(imgElement.src)
+      return
+    }
+  }
+
+  // 兼容旧的 data-image-url 方式
+  const target = event.target.closest('[data-image-url]')
+  if (target) {
+    const imageUrl = target.getAttribute('data-image-url')
+    if (imageUrl) {
+      openImageViewer(imageUrl)
+    }
+  }
 }
 
 // 处理图片上传
@@ -1945,10 +2615,30 @@ onMounted(() => {
 
   // 添加点击外部关闭下拉框的事件监听
   document.addEventListener('click', handleClickOutside)
+
+  // 添加消息容器的点击事件监听（用于处理生成图片的点击）
+  if (messagesContainer.value) {
+    messagesContainer.value.addEventListener('click', handleGeneratedImageClick)
+  }
+
+  // 注册全局图片查看器函数（保留以防其他地方使用）
+  window.openImageViewer = openImageViewer
 })
 
 onUnmounted(() => {
   // 清理事件监听器
   document.removeEventListener('click', handleClickOutside)
+  document.removeEventListener('keydown', handleViewerKeydown)
+
+  // 清理消息容器的点击事件监听
+  if (messagesContainer.value) {
+    messagesContainer.value.removeEventListener('click', handleGeneratedImageClick)
+  }
+
+  // 清理全局函数
+  delete window.openImageViewer
+
+  // 恢复body滚动
+  document.body.style.overflow = ''
 })
 </script>
