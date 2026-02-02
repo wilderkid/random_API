@@ -513,7 +513,7 @@ app.get('/api/providers/:id/models', async (req, res) => {
 
   try {
     const apiType = provider.apiType || 'openai';
-    const url = buildApiUrl(provider.baseUrl, 'models', apiType);
+    const url = buildApiUrl(provider.baseUrl, 'models', apiType, provider.customEndpoints);
     const response = await axios.get(url, {
       headers: { 'Authorization': `Bearer ${provider.apiKey}` },
       timeout: 10000 // 增加超时时间
@@ -558,7 +558,7 @@ app.post('/api/providers/refresh-all-models', async (req, res) => {
   const promises = activeProviders.map(async (provider) => {
     try {
       const apiType = provider.apiType || 'openai';
-      const url = buildApiUrl(provider.baseUrl, 'models', apiType);
+      const url = buildApiUrl(provider.baseUrl, 'models', apiType, provider.customEndpoints);
       const response = await axios.get(url, {
         headers: { 'Authorization': `Bearer ${provider.apiKey}` },
         timeout: 10000
@@ -613,7 +613,7 @@ app.get('/api/providers/:id/test', async (req, res) => {
   
   try {
     const apiType = provider.apiType || 'openai';
-    const url = buildApiUrl(provider.baseUrl, 'models', apiType);
+    const url = buildApiUrl(provider.baseUrl, 'models', apiType, provider.customEndpoints);
     await axios.get(url, {
       headers: { 'Authorization': `Bearer ${provider.apiKey}` },
       timeout: 8000 // 增加超时时间
@@ -1390,10 +1390,24 @@ function replacePromptVariables(prompt, context) {
   return result;
 }
 
-function buildApiUrl(baseUrl, endpoint, apiType = 'openai') {
-  log.verbose(`[DEBUG] buildApiUrl called with: baseUrl=${baseUrl}, endpoint=${endpoint}, apiType=${apiType}`);
+function buildApiUrl(baseUrl, endpoint, apiType = 'openai', customEndpoints = null) {
+  log.verbose(`[DEBUG] buildApiUrl called with: baseUrl=${baseUrl}, endpoint=${endpoint}, apiType=${apiType}, customEndpoints=${JSON.stringify(customEndpoints)}`);
 
   baseUrl = baseUrl.replace(/\/$/, '');
+
+  // Priority: use custom endpoints if provided
+  if (customEndpoints) {
+    if (endpoint === 'chat/completions' && customEndpoints.chat) {
+      const finalUrl = `${baseUrl}${customEndpoints.chat}`;
+      log.verbose(`[DEBUG] Using custom chat endpoint, final URL: ${finalUrl}`);
+      return finalUrl;
+    }
+    if (endpoint === 'models' && customEndpoints.models) {
+      const finalUrl = `${baseUrl}${customEndpoints.models}`;
+      log.verbose(`[DEBUG] Using custom models endpoint, final URL: ${finalUrl}`);
+      return finalUrl;
+    }
+  }
 
   // If baseUrl already contains version, directly append endpoint
   if (/\/v\d+$/.test(baseUrl)) {
@@ -2098,7 +2112,7 @@ async function getProviderModelId(provider, modelName) {
 
     // 如果在provider.models中找不到，尝试从API获取
     const apiType = provider.apiType || 'openai';
-    const url = buildApiUrl(provider.baseUrl, 'models', apiType);
+    const url = buildApiUrl(provider.baseUrl, 'models', apiType, provider.customEndpoints);
     const response = await axios.get(url, {
       headers: { 'Authorization': `Bearer ${provider.apiKey}` },
       timeout: 10000
@@ -2431,8 +2445,12 @@ function getModelType(provider, modelId) {
  * @param {string} apiType - API类型
  * @returns {string} - 完整的API URL
  */
-function buildImageApiUrl(baseUrl, apiType) {
+function buildImageApiUrl(baseUrl, apiType, customEndpoints = null) {
   baseUrl = baseUrl.replace(/\/$/, '');
+
+  if (customEndpoints && customEndpoints.images) {
+    return `${baseUrl}${customEndpoints.images}`;
+  }
 
   if (apiType === 'openai') {
     return `${baseUrl}/v1/images/generations`;
@@ -2521,7 +2539,7 @@ async function generateImage(provider, prompt, params, res, modelId) {
   log.verbose(`[ImageGen] Params:`, params);
 
   const apiType = provider.apiType || 'openai';
-  const url = buildImageApiUrl(provider.baseUrl, apiType);
+  const url = buildImageApiUrl(provider.baseUrl, apiType, provider.customEndpoints);
 
   try {
     // 构建请求体
@@ -2613,7 +2631,7 @@ async function streamChat(provider, messages, params, res, modelId, images, syst
   log.verbose(`[DEBUG] streamChat: provider=${provider.name}, modelId=${modelId}, messages=${messages.length}, apiType=${provider.apiType}, systemPrompt=${systemPrompt ? 'yes' : 'no'}`);
 
   const apiType = provider.apiType || 'openai';
-  const url = buildApiUrl(provider.baseUrl, 'chat/completions', apiType);
+  const url = buildApiUrl(provider.baseUrl, 'chat/completions', apiType, provider.customEndpoints);
 
   // Process image messages if needed
   let processedMessages = messages;
@@ -3159,7 +3177,7 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
 
       const apiType = selectedProvider.apiType || 'openai';
       console.log(`[DEBUG] Provider API type: ${apiType}`);
-      const url = buildApiUrl(selectedProvider.baseUrl, 'chat/completions', apiType);
+      const url = buildApiUrl(selectedProvider.baseUrl, 'chat/completions', apiType, selectedProvider.customEndpoints);
 
       if (stream) {
         // ==================== 流式响应（带故障转移） ====================

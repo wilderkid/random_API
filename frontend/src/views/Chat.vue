@@ -116,8 +116,11 @@
             <button @click="removeFile(index)" class="btn-remove-file">×</button>
           </div>
         </div>
-        <textarea v-model="inputText" @keydown="handleKeydown"
-                  placeholder="输入消息... (Enter 发送, Shift+Enter 换行)" class="input-box"></textarea>
+        <textarea v-model="inputText"
+                  @keydown="handleKeydown"
+                  @paste="handlePaste"
+                  placeholder="输入消息... (Enter 发送, Shift+Enter 换行, Ctrl+V 粘贴图片)"
+                  class="input-box"></textarea>
         <button @click="sendMessage" :disabled="!inputText.trim() || !currentModel || rateLimitInfo.isLimited" class="btn-send">
           {{ rateLimitInfo.isLimited ? `等待 ${rateLimitInfo.waitTime}s` : '发送' }}
         </button>
@@ -2604,6 +2607,54 @@ function handleKeydown(e) {
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault()
     sendMessage()
+  }
+}
+
+// 处理粘贴事件
+function handlePaste(event) {
+  const clipboardData = event.clipboardData || window.clipboardData
+  if (!clipboardData) return
+
+  const items = clipboardData.items
+  if (!items) return
+
+  let hasImage = false
+
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i]
+
+    if (item.type.indexOf('image') !== -1) {
+      hasImage = true
+      event.preventDefault()
+
+      const file = item.getAsFile()
+      if (!file) continue
+
+      const maxSize = 5 * 1024 * 1024
+      if (file.size > maxSize) {
+        alert(`图片文件过大，请选择小于5MB的图片。当前文件大小：${(file.size / 1024 / 1024).toFixed(2)}MB`)
+        continue
+      }
+
+      const fileName = file.name || `pasted-image-${Date.now()}.png`
+
+      const reader = new FileReader()
+      reader.onload = (e) => {
+        compressImage(e.target.result, fileName, (compressedDataUrl) => {
+          uploadedImages.value.push({
+            name: fileName,
+            dataUrl: compressedDataUrl,
+            file: file
+          })
+        })
+      }
+
+      reader.onerror = () => {
+        alert(`读取图片失败: ${fileName}`)
+      }
+
+      reader.readAsDataURL(file)
+    }
   }
 }
 

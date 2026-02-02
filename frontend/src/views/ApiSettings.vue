@@ -210,6 +210,28 @@
             </option>
           </select>
         </label>
+        <!-- 高级设置折叠面板 -->
+        <div class="advanced-settings">
+          <div class="advanced-toggle" @click="showAdvanced = !showAdvanced">
+            <span>高级设置（自定义端点路径）</span>
+            <span>{{ showAdvanced ? '▲' : '▼' }}</span>
+          </div>
+          <div v-show="showAdvanced" class="advanced-content">
+            <small class="hint">留空则使用默认路径，路径需以 / 开头</small>
+            <label>
+              聊天端点路径
+              <input v-model="providerForm.customEndpoints.chat" class="input-field" placeholder="例如: /api/paas/v4/chat/completions">
+            </label>
+            <label>
+              模型列表端点路径
+              <input v-model="providerForm.customEndpoints.models" class="input-field" placeholder="例如: /api/paas/v4/models">
+            </label>
+            <label>
+              图像生成端点路径
+              <input v-model="providerForm.customEndpoints.images" class="input-field" placeholder="例如: /v1/images/generations">
+            </label>
+          </div>
+        </div>
         <div class="modal-actions">
           <button @click="saveProvider" class="btn-save">保存</button>
           <button @click="closeModal" class="btn-cancel">取消</button>
@@ -301,7 +323,8 @@ const expandedGroupsCache = ref({}) // 缓存每个提供商的展开状态
 const expandedGroups = ref({}) // 分组展开状态
 const showAddProvider = ref(false)
 const editingProvider = ref(null)
-const providerForm = ref({ name: '', baseUrl: '', apiKey: '', groupId: 'default', apiType: 'openai' })
+const providerForm = ref({ name: '', baseUrl: '', apiKey: '', groupId: 'default', apiType: 'openai', customEndpoints: { chat: '', models: '', images: '' } })
+const showAdvanced = ref(false)
 const showApiKey = ref(false)
 const showAddModelModal = ref(false)
 const addModelForm = ref({ modelId: '', visible: true })
@@ -589,13 +612,16 @@ async function updateExcludeAutoRefresh() {
 
 function editProvider() {
   editingProvider.value = selectedProvider.value
+  const ce = selectedProvider.value.customEndpoints || {}
   providerForm.value = {
     name: selectedProvider.value.name,
     baseUrl: selectedProvider.value.baseUrl,
     apiKey: selectedProvider.value.apiKey,
     groupId: selectedProvider.value.groupId || 'default',
-    apiType: selectedProvider.value.apiType || 'openai'
+    apiType: selectedProvider.value.apiType || 'openai',
+    customEndpoints: { chat: ce.chat || '', models: ce.models || '', images: ce.images || '' }
   }
+  showAdvanced.value = !!(ce.chat || ce.models || ce.images)
 }
 
 async function saveProvider() {
@@ -658,7 +684,8 @@ function getModelIcon(modelId) {
 function closeModal() {
   showAddProvider.value = false
   editingProvider.value = null
-  providerForm.value = { name: '', baseUrl: '', apiKey: '', groupId: 'default', apiType: 'openai' }
+  providerForm.value = { name: '', baseUrl: '', apiKey: '', groupId: 'default', apiType: 'openai', customEndpoints: { chat: '', models: '', images: '' } }
+  showAdvanced.value = false
 }
 
 function closeAddModelModal() {
@@ -811,8 +838,21 @@ async function updateProviderApiType() {
 function getFullApiUrl(provider) {
   if (!provider) return ''
   const baseUrl = provider.baseUrl.replace(/\/$/, '')
+
+  // 优先使用自定义端点
+  if (provider.customEndpoints?.chat) {
+    return `${baseUrl}${provider.customEndpoints.chat}`
+  }
+
   const apiType = provider.apiType || 'openai'
-  
+
+  if (/\/v\d+$/.test(baseUrl)) {
+    if (apiType === 'anthropic') {
+      return `${baseUrl}/messages`
+    }
+    return `${baseUrl}/chat/completions`
+  }
+
   if (apiType === 'anthropic') {
     return `${baseUrl}/v1/messages`
   } else {
@@ -827,6 +867,44 @@ onMounted(async () => {
 </script>
 
 <style scoped>
+.advanced-settings {
+  margin-top: 12px;
+  border: 1px solid #e0e0e0;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.advanced-toggle {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 12px;
+  cursor: pointer;
+  background: #f5f5f5;
+  font-size: 13px;
+  color: #555;
+  user-select: none;
+}
+
+.advanced-toggle:hover {
+  background: #ebebeb;
+}
+
+.advanced-content {
+  padding: 12px;
+  border-top: 1px solid #e0e0e0;
+}
+
+.advanced-content .hint {
+  display: block;
+  margin-bottom: 8px;
+}
+
+.advanced-content label {
+  display: block;
+  margin-top: 8px;
+}
+
 .api-settings-container {
   display: flex;
   height: 100vh;
