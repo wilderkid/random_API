@@ -338,8 +338,8 @@
 
 .model-selector {
   position: relative;
-  min-width: 200px;
-  max-width: 400px;
+  min-width: 500px;
+  max-width: 600px;
   flex-shrink: 0;
 }
 
