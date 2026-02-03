@@ -4,7 +4,22 @@ const fs = require('fs').promises;
 const path = require('path');
 const axios = require('axios');
 const crypto = require('crypto');
-const { logApiCall, logSystemEvent, readLogs, parseLogsForStats, deleteLogs, clearAllLogs } = require('./logger');
+const {
+  logApiCall,
+  logSystemEvent,
+  readLogs,
+  searchLogs,
+  parseLogsForStats,
+  deleteLogs,
+  clearAllLogs,
+  archiveOldLogs,
+  getAvailableLogDates,
+  exportToCSV,
+  exportToJSON,
+  addLogListener,
+  LogLevel,
+  LogType
+} = require('./logger');
 
 const app = express();
 const PORT = 3000;
@@ -3469,31 +3484,31 @@ app.delete('/api/proxy-keys/:id', async (req, res) => {
 
 // ==================== 日志查询接口 ====================
 
-// 获取日志统计数据
+// 获取日志统计数据（增强版）
 app.get('/api/logs/stats', async (req, res) => {
   try {
     const { startDate, endDate } = req.query;
-    
+
     // 如果没有提供日期范围，默认查询当天
     const today = new Date();
     const start = startDate || today.toISOString().split('T')[0];
     const end = endDate || today.toISOString().split('T')[0];
-    
+
     // 验证日期范围
     const startDateObj = new Date(start);
     const endDateObj = new Date(end);
     const daysDiff = Math.ceil((endDateObj - startDateObj) / (1000 * 60 * 60 * 24));
-    
+
     if (daysDiff > 7) {
       return res.status(400).json({ error: '日期范围不能超过7天' });
     }
-    
-    // 读取日志内容
-    const logsContent = await readLogs(start, end);
-    
+
+    // 读取并解析日志
+    const logEntries = await readLogs(start, end);
+
     // 解析日志生成统计数据
-    const stats = parseLogsForStats(logsContent);
-    
+    const stats = parseLogsForStats(logEntries);
+
     res.json({
       dateRange: { start, end },
       stats
@@ -3504,34 +3519,213 @@ app.get('/api/logs/stats', async (req, res) => {
   }
 });
 
-// 获取原始日志内容
-app.get('/api/logs/raw', async (req, res) => {
+// 获取可用的日志日期列表
+app.get('/api/logs/available', async (req, res) => {
   try {
-    const { startDate, endDate } = req.query;
-    
+    const dates = await getAvailableLogDates();
+    res.json({ dates });
+  } catch (error) {
+    console.error('Error getting available log dates:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 搜索日志（支持多条件过滤和分页）
+app.get('/api/logs', async (req, res) => {
+  try {
+    const {
+      startDate,
+      endDate,
+      level,
+      type,
+      userId,
+      traceId,
+      keyword,
+      limit = 100,
+      offset = 0
+    } = req.query;
+
     // 如果没有提供日期范围，默认查询当天
     const today = new Date();
     const start = startDate || today.toISOString().split('T')[0];
     const end = endDate || today.toISOString().split('T')[0];
-    
+
     // 验证日期范围
     const startDateObj = new Date(start);
     const endDateObj = new Date(end);
     const daysDiff = Math.ceil((endDateObj - startDateObj) / (1000 * 60 * 60 * 24));
-    
+
     if (daysDiff > 7) {
       return res.status(400).json({ error: '日期范围不能超过7天' });
     }
-    
-    // 读取日志内容
-    const logsContent = await readLogs(start, end);
-    
+
+    // 验证限制参数
+    const parsedLimit = parseInt(limit);
+    const parsedOffset = parseInt(offset);
+
+    if (isNaN(parsedLimit) || parsedLimit < 1 || parsedLimit > 1000) {
+      return res.status(400).json({ error: 'limit必须在1到1000之间' });
+    }
+
+    if (isNaN(parsedOffset) || parsedOffset < 0) {
+      return res.status(400).json({ error: 'offset必须大于等于0' });
+    }
+
+    // 验证级别和类型
+    const validLevels = Object.values(LogLevel);
+    const validTypes = Object.values(LogType);
+
+    if (level && !validLevels.includes(level)) {
+      return res.status(400).json({ error: `无效的日志级别，可选值: ${validLevels.join(', ')}` });
+    }
+
+    if (type && !validTypes.includes(type)) {
+      return res.status(400).json({ error: `无效的日志类型，可选值: ${validTypes.join(', ')}` });
+    }
+
+    // 搜索日志
+    const result = await searchLogs({
+      startDate: start,
+      endDate: end,
+      level,
+      type,
+      userId,
+      traceId,
+      keyword,
+      limit: parsedLimit,
+      offset: parsedOffset
+    });
+
     res.json({
       dateRange: { start, end },
-      content: logsContent
+      logs: result.logs,
+      pagination: result.pagination
     });
   } catch (error) {
-    console.error('Error getting raw logs:', error);
+    console.error('Error searching logs:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 导出日志
+app.get('/api/logs/export', async (req, res) => {
+  try {
+    const { startDate, endDate, format = 'json' } = req.query;
+
+    // 验证导出格式
+    if (!['json', 'csv'].includes(format)) {
+      return res.status(400).json({ error: '无效的导出格式，可选值: json, csv' });
+    }
+
+    // 如果没有提供日期范围，默认查询当天
+    const today = new Date();
+    const start = startDate || today.toISOString().split('T')[0];
+    const end = endDate || today.toISOString().split('T')[0];
+
+    // 验证日期范围
+    const startDateObj = new Date(start);
+    const endDateObj = new Date(end);
+    const daysDiff = Math.ceil((endDateObj - startDateObj) / (1000 * 60 * 60 * 24));
+
+    if (daysDiff > 30) {
+      return res.status(400).json({ error: '导出的日期范围不能超过30天' });
+    }
+
+    // 读取日志
+    const logEntries = await readLogs(start, end);
+
+    // 根据格式导出
+    let exportData;
+    let contentType;
+    let filename;
+
+    if (format === 'csv') {
+      exportData = exportToCSV(logEntries);
+      contentType = 'text/csv; charset=utf-8';
+      filename = `logs_${start}_${end}.csv`;
+    } else {
+      exportData = exportToJSON(logEntries);
+      contentType = 'application/json; charset=utf-8';
+      filename = `logs_${start}_${end}.json`;
+    }
+
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(exportData);
+  } catch (error) {
+    console.error('Error exporting logs:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 实时日志流（Server-Sent Events）
+app.get('/api/logs/stream', async (req, res) => {
+  try {
+    // 设置 SSE 响应头
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+
+    const { level, type } = req.query;
+
+    // 验证级别和类型
+    const validLevels = Object.values(LogLevel);
+    const validTypes = Object.values(LogType);
+
+    if (level && !validLevels.includes(level)) {
+      return res.status(400).json({ error: `无效的日志级别，可选值: ${validLevels.join(', ')}` });
+    }
+
+    if (type && !validTypes.includes(type)) {
+      return res.status(400).json({ error: `无效的日志类型，可选值: ${validTypes.join(', ')}` });
+    }
+
+    // 添加日志监听器
+    const removeListener = addLogListener((logEntry) => {
+      // 根据过滤条件决定是否发送
+      if (level && logEntry.level !== level) return;
+      if (type && logEntry.type !== type) return;
+
+      res.write(`data: ${JSON.stringify(logEntry)}\n\n`);
+    });
+
+    // 发送初始连接消息
+    res.write(`data: ${JSON.stringify({ type: 'connected', message: '实时日志流已连接' })}\n\n`);
+
+    // 客户端断开连接时移除监听器
+    req.on('close', () => {
+      removeListener();
+    });
+
+    req.on('end', () => {
+      removeListener();
+    });
+  } catch (error) {
+    console.error('Error setting up log stream:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 归档旧日志
+app.post('/api/logs/archive', async (req, res) => {
+  try {
+    const { daysToKeep = 30 } = req.body;
+
+    // 验证参数
+    if (daysToKeep < 1 || daysToKeep > 365) {
+      return res.status(400).json({ error: 'daysToKeep必须在1到365之间' });
+    }
+
+    const result = await archiveOldLogs(daysToKeep);
+
+    res.json({
+      success: true,
+      archivedCount: result.archivedCount,
+      errors: result.errors
+    });
+  } catch (error) {
+    console.error('Error archiving logs:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -3540,13 +3734,13 @@ app.get('/api/logs/raw', async (req, res) => {
 app.delete('/api/logs', async (req, res) => {
   try {
     const { startDate, endDate } = req.query;
-    
+
     if (!startDate || !endDate) {
       return res.status(400).json({ error: '必须提供开始日期和结束日期' });
     }
-    
+
     const result = await deleteLogs(startDate, endDate);
-    
+
     res.json({
       success: true,
       deletedCount: result.deletedCount,
@@ -3562,7 +3756,7 @@ app.delete('/api/logs', async (req, res) => {
 app.delete('/api/logs/all', async (req, res) => {
   try {
     const result = await clearAllLogs();
-    
+
     res.json({
       success: true,
       deletedCount: result.deletedCount,

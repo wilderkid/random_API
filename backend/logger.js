@@ -1,15 +1,46 @@
 const fs = require('fs').promises;
 const path = require('path');
+const crypto = require('crypto');
 
 const LOGS_DIR = path.join(__dirname, '../data/logs');
+const ARCHIVE_DIR = path.join(__dirname, '../data/logs/archive');
+
+// 日志级别枚举
+const LogLevel = {
+  DEBUG: 'DEBUG',
+  INFO: 'INFO',
+  WARN: 'WARN',
+  ERROR: 'ERROR',
+  CRITICAL: 'CRITICAL'
+};
+
+// 日志类型枚举
+const LogType = {
+  API_CALL: 'API_CALL',
+  SYSTEM: 'SYSTEM',
+  USER_ACTION: 'USER_ACTION',
+  AUTH: 'AUTH',
+  DATABASE: 'DATABASE',
+  PERFORMANCE: 'PERFORMANCE',
+  SECURITY: 'SECURITY'
+};
+
+// 实时日志监听器
+const logListeners = new Set();
 
 // 确保日志目录存在
 async function ensureLogsDir() {
   try {
     await fs.mkdir(LOGS_DIR, { recursive: true });
+    await fs.mkdir(ARCHIVE_DIR, { recursive: true });
   } catch (error) {
     console.error('Error creating logs directory:', error);
   }
+}
+
+// 生成请求追踪ID
+function generateTraceId() {
+  return crypto.randomBytes(16).toString('hex');
 }
 
 // 获取当前日期的日志文件名
@@ -17,133 +48,533 @@ function getLogFileName(date = new Date()) {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, '0');
   const day = String(date.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}.log`;
+  return `${year}-${month}-${day}.jsonl`;
 }
 
-// 格式化时间戳
-function formatTimestamp(date = new Date()) {
+// 获取归档文件名
+function getArchiveFileName(date = new Date()) {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, '0');
   const day = String(date.getDate()).padStart(2, '0');
-  const hours = String(date.getHours()).padStart(2, '0');
-  const minutes = String(date.getMinutes()).padStart(2, '0');
-  const seconds = String(date.getSeconds()).padStart(2, '0');
-  const ms = String(date.getMilliseconds()).padStart(3, '0');
-  return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}.${ms}`;
+  return `${year}-${month}-${day}.jsonl.gz`;
 }
 
-// 写入日志
+// 格式化时间戳（ISO格式）
+function formatTimestamp(date = new Date()) {
+  return date.toISOString();
+}
+
+// 创建日志条目对象
+function createLogEntry({
+  level = LogLevel.INFO,
+  type,
+  message,
+  data = {},
+  userId = null,
+  traceId = null,
+  metadata = {}
+}) {
+  return {
+    timestamp: formatTimestamp(),
+    level,
+    type,
+    message,
+    userId,
+    traceId: traceId || generateTraceId(),
+    data,
+    metadata,
+    hostname: require('os').hostname(),
+    pid: process.pid
+  };
+}
+
+// 写入日志（JSON格式）
 async function writeLog(logEntry) {
   try {
     await ensureLogsDir();
     const logFileName = getLogFileName();
     const logFilePath = path.join(LOGS_DIR, logFileName);
-    
-    const timestamp = formatTimestamp();
-    const logLine = `${timestamp} | ${logEntry}\n`;
-    
+
+    const logLine = JSON.stringify(logEntry) + '\n';
+
     await fs.appendFile(logFilePath, logLine, 'utf8');
+
+    // 通知实时监听器
+    notifyListeners(logEntry);
+
+    return logEntry;
   } catch (error) {
     console.error('Error writing log:', error);
   }
 }
 
-// 记录API调用
-async function logApiCall(provider, model, success, errorMessage = null) {
-  const status = success ? 'SUCCESS' : 'FAILED';
-  const error = errorMessage ? ` | Error: ${errorMessage}` : '';
-  const logEntry = `API_CALL | Provider: ${provider} | Model: ${model} | Status: ${status}${error}`;
-  await writeLog(logEntry);
+// 通知实时监听器
+function notifyListeners(logEntry) {
+  logListeners.forEach(listener => {
+    try {
+      listener(logEntry);
+    } catch (error) {
+      console.error('Error notifying log listener:', error);
+    }
+  });
 }
 
-// 记录系统事件
-async function logSystemEvent(event, details = '') {
-  const logEntry = `SYSTEM | Event: ${event} | ${details}`;
-  await writeLog(logEntry);
+// 添加实时日志监听器
+function addLogListener(listener) {
+  logListeners.add(listener);
+  return () => logListeners.delete(listener);
 }
 
-// 读取日志文件
+// ==================== 日志记录函数 ====================
+
+// 记录API调用（增强版，支持旧签名向后兼容）
+// 旧签名: logApiCall(provider, model, success, errorMessage)
+// 新签名: logApiCall({ provider, model, success, errorMessage, ... })
+async function logApiCall(...args) {
+  // 判断使用旧签名还是新签名
+  let params;
+  if (args.length === 1 && typeof args[0] === 'object') {
+    // 新签名（对象参数）
+    params = args[0];
+  } else if (args.length >= 3) {
+    // 旧签名（位置参数）
+    params = {
+      provider: args[0],
+      model: args[1],
+      success: args[2],
+      errorMessage: args[3] || null
+    };
+  } else {
+    throw new Error('logApiCall: 无效的参数格式');
+  }
+
+  const {
+    provider,
+    model,
+    success,
+    errorMessage = null,
+    errorCode = null,
+    userId = null,
+    traceId = null,
+    duration = null,
+    requestSize = null,
+    responseSize = null,
+    metadata = {}
+  } = params;
+
+  const logEntry = createLogEntry({
+    level: success ? LogLevel.INFO : LogLevel.ERROR,
+    type: LogType.API_CALL,
+    message: success ? `API调用成功: ${provider}/${model}` : `API调用失败: ${provider}/${model}`,
+    userId,
+    traceId,
+    data: {
+      provider,
+      model,
+      status: success ? 'SUCCESS' : 'FAILED',
+      errorMessage,
+      errorCode,
+      duration,
+      requestSize,
+      responseSize
+    },
+    metadata
+  });
+
+  return await writeLog(logEntry);
+}
+
+// 记录系统事件（增强版，支持旧签名向后兼容）
+// 旧签名: logSystemEvent(event, details)
+// 新签名: logSystemEvent({ event, details, level, ... })
+async function logSystemEvent(...args) {
+  // 判断使用旧签名还是新签名
+  let params;
+  if (args.length === 1 && typeof args[0] === 'object') {
+    // 新签名（对象参数）
+    params = args[0];
+  } else if (args.length >= 1) {
+    // 旧签名（位置参数）
+    params = {
+      event: args[0],
+      details: args[1] || null
+    };
+  } else {
+    throw new Error('logSystemEvent: 无效的参数格式');
+  }
+
+  const {
+    event,
+    details = null,
+    level = LogLevel.INFO,
+    userId = null,
+    traceId = null,
+    metadata = {}
+  } = params;
+
+  const logEntry = createLogEntry({
+    level,
+    type: LogType.SYSTEM,
+    message: `系统事件: ${event}`,
+    userId,
+    traceId,
+    data: {
+      event,
+      details
+    },
+    metadata
+  });
+
+  return await writeLog(logEntry);
+}
+
+// 记录用户操作
+async function logUserAction({
+  action,
+  userId,
+  details = null,
+  traceId = null,
+  metadata = {}
+}) {
+  const logEntry = createLogEntry({
+    level: LogLevel.INFO,
+    type: LogType.USER_ACTION,
+    message: `用户操作: ${action}`,
+    userId,
+    traceId,
+    data: {
+      action,
+      details
+    },
+    metadata
+  });
+
+  return await writeLog(logEntry);
+}
+
+// 记录认证事件
+async function logAuthEvent({
+  event,
+  userId = null,
+  success = true,
+  errorMessage = null,
+  ip = null,
+  userAgent = null,
+  traceId = null,
+  metadata = {}
+}) {
+  const logEntry = createLogEntry({
+    level: success ? LogLevel.INFO : LogLevel.WARN,
+    type: LogType.AUTH,
+    message: `认证事件: ${event} - ${success ? '成功' : '失败'}`,
+    userId,
+    traceId,
+    data: {
+      event,
+      success,
+      errorMessage,
+      ip,
+      userAgent
+    },
+    metadata
+  });
+
+  return await writeLog(logEntry);
+}
+
+// 记录数据库操作
+async function logDatabaseEvent({
+  operation,
+  table,
+  success = true,
+  errorMessage = null,
+  duration = null,
+  userId = null,
+  traceId = null,
+  metadata = {}
+}) {
+  const logEntry = createLogEntry({
+    level: success ? LogLevel.DEBUG : LogLevel.ERROR,
+    type: LogType.DATABASE,
+    message: `数据库操作: ${operation} on ${table}`,
+    userId,
+    traceId,
+    data: {
+      operation,
+      table,
+      success,
+      errorMessage,
+      duration
+    },
+    metadata
+  });
+
+  return await writeLog(logEntry);
+}
+
+// 记录性能指标
+async function logPerformance({
+  metric,
+  value,
+  unit = 'ms',
+  threshold = null,
+  userId = null,
+  traceId = null,
+  metadata = {}
+}) {
+  const level = threshold && value > threshold ? LogLevel.WARN : LogLevel.DEBUG;
+
+  const logEntry = createLogEntry({
+    level,
+    type: LogType.PERFORMANCE,
+    message: `性能指标: ${metric} = ${value}${unit}`,
+    userId,
+    traceId,
+    data: {
+      metric,
+      value,
+      unit,
+      threshold
+    },
+    metadata
+  });
+
+  return await writeLog(logEntry);
+}
+
+// 记录安全事件
+async function logSecurityEvent({
+  event,
+  severity = 'medium', // low, medium, high, critical
+  userId = null,
+  ip = null,
+  details = null,
+  traceId = null,
+  metadata = {}
+}) {
+  const severityLevelMap = {
+    low: LogLevel.INFO,
+    medium: LogLevel.WARN,
+    high: LogLevel.ERROR,
+    critical: LogLevel.CRITICAL
+  };
+
+  const logEntry = createLogEntry({
+    level: severityLevelMap[severity] || LogLevel.WARN,
+    type: LogType.SECURITY,
+    message: `安全事件: ${event}`,
+    userId,
+    traceId,
+    data: {
+      event,
+      severity,
+      ip,
+      details
+    },
+    metadata
+  });
+
+  return await writeLog(logEntry);
+}
+
+// 通用日志记录函数
+async function log({
+  level = LogLevel.INFO,
+  type = LogType.SYSTEM,
+  message,
+  data = {},
+  userId = null,
+  traceId = null,
+  metadata = {}
+}) {
+  const logEntry = createLogEntry({
+    level,
+    type,
+    message,
+    userId,
+    traceId,
+    data,
+    metadata
+  });
+
+  return await writeLog(logEntry);
+}
+
+// ==================== 日志查询函数 ====================
+
+// 读取并解析日志文件
 async function readLogs(startDate, endDate) {
   try {
     await ensureLogsDir();
-    
+
     const start = new Date(startDate);
     const end = new Date(endDate);
-    
-    // 验证日期范围（最多7天）
-    const daysDiff = Math.ceil((end - start) / (1000 * 60 * 60 * 24));
-    if (daysDiff > 7) {
-      throw new Error('日期范围不能超过7天');
-    }
-    
+
     const logFiles = [];
     const currentDate = new Date(start);
-    
+
     while (currentDate <= end) {
       logFiles.push(getLogFileName(currentDate));
       currentDate.setDate(currentDate.getDate() + 1);
     }
-    
-    const logsContent = [];
-    
+
+    const logEntries = [];
+
     for (const logFile of logFiles) {
       const logFilePath = path.join(LOGS_DIR, logFile);
       try {
         const content = await fs.readFile(logFilePath, 'utf8');
-        logsContent.push(content);
+        const lines = content.split('\n').filter(line => line.trim());
+
+        for (const line of lines) {
+          try {
+            const entry = JSON.parse(line);
+            logEntries.push(entry);
+          } catch (parseError) {
+            console.error(`Error parsing log line: ${parseError.message}`);
+          }
+        }
       } catch (error) {
-        // 文件不存在，跳过
         if (error.code !== 'ENOENT') {
           console.error(`Error reading log file ${logFile}:`, error);
         }
       }
     }
-    
-    return logsContent.join('');
+
+    // 按时间戳排序（最新的在前）
+    logEntries.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+
+    return logEntries;
   } catch (error) {
     console.error('Error reading logs:', error);
     throw error;
   }
 }
 
-// 解析日志内容，生成统计数据
+// 搜索日志（支持多条件过滤）
+async function searchLogs({
+  startDate,
+  endDate,
+  level = null,
+  type = null,
+  userId = null,
+  traceId = null,
+  keyword = null,
+  limit = 100,
+  offset = 0
+}) {
+  try {
+    const allLogs = await readLogs(startDate, endDate);
+
+    let filteredLogs = allLogs;
+
+    // 按级别过滤
+    if (level) {
+      filteredLogs = filteredLogs.filter(log => log.level === level);
+    }
+
+    // 按类型过滤
+    if (type) {
+      filteredLogs = filteredLogs.filter(log => log.type === type);
+    }
+
+    // 按用户ID过滤
+    if (userId) {
+      filteredLogs = filteredLogs.filter(log => log.userId === userId);
+    }
+
+    // 按追踪ID过滤
+    if (traceId) {
+      filteredLogs = filteredLogs.filter(log => log.traceId === traceId);
+    }
+
+    // 按关键词搜索（消息或数据中包含关键词）
+    if (keyword) {
+      const keywordLower = keyword.toLowerCase();
+      filteredLogs = filteredLogs.filter(log => {
+        const messageMatch = log.message && log.message.toLowerCase().includes(keywordLower);
+        const dataMatch = JSON.stringify(log.data).toLowerCase().includes(keywordLower);
+        return messageMatch || dataMatch;
+      });
+    }
+
+    // 分页
+    const total = filteredLogs.length;
+    const paginatedLogs = filteredLogs.slice(offset, offset + limit);
+
+    return {
+      logs: paginatedLogs,
+      pagination: {
+        total,
+        limit,
+        offset,
+        hasMore: offset + limit < total
+      }
+    };
+  } catch (error) {
+    console.error('Error searching logs:', error);
+    throw error;
+  }
+}
+
+// 获取日志统计（兼容旧版，增强版）
 function parseLogsForStats(logsContent) {
+  // 如果传入的是字符串（旧格式），尝试解析
+  if (typeof logsContent === 'string') {
+    return parseLegacyLogs(logsContent);
+  }
+
+  // 如果传入的是日志数组（新格式）
+  if (Array.isArray(logsContent)) {
+    return parseModernLogs(logsContent);
+  }
+
+  return {
+    totalApiCalls: 0,
+    successfulCalls: 0,
+    failedCalls: 0,
+    providerStats: {}
+  };
+}
+
+// 解析旧格式日志（兼容性）
+function parseLegacyLogs(logsContent) {
   const lines = logsContent.split('\n').filter(line => line.trim());
-  
+
   const stats = {
     totalApiCalls: 0,
     successfulCalls: 0,
     failedCalls: 0,
-    providerStats: {}, // { providerName: { total, success, failed, models: { modelName: { total, success, failed, errors: [] } } } }
+    providerStats: {},
+    levelStats: {},
+    typeStats: {}
   };
-  
+
   for (const line of lines) {
     if (line.includes('API_CALL')) {
       stats.totalApiCalls++;
-      
-      // 解析日志行
+
       const timestampMatch = line.match(/^([^|]+)\|/);
       const providerMatch = line.match(/Provider: ([^|]+)/);
       const modelMatch = line.match(/Model: ([^|]+)/);
       const statusMatch = line.match(/Status: (\w+)/);
       const errorMatch = line.match(/Error: (.+)$/);
-      
+
       if (providerMatch && modelMatch && statusMatch) {
         const timestamp = timestampMatch ? timestampMatch[1].trim() : '';
         const provider = providerMatch[1].trim();
         const model = modelMatch[1].trim();
         const status = statusMatch[1].trim();
         const errorMessage = errorMatch ? errorMatch[1].trim() : '';
-        
+
         const isSuccess = status === 'SUCCESS';
-        
+
         if (isSuccess) {
           stats.successfulCalls++;
         } else {
           stats.failedCalls++;
         }
-        
-        // 初始化供应商统计
+
         if (!stats.providerStats[provider]) {
           stats.providerStats[provider] = {
             total: 0,
@@ -152,30 +583,28 @@ function parseLogsForStats(logsContent) {
             models: {}
           };
         }
-        
+
         stats.providerStats[provider].total++;
         if (isSuccess) {
           stats.providerStats[provider].success++;
         } else {
           stats.providerStats[provider].failed++;
         }
-        
-        // 初始化模型统计
+
         if (!stats.providerStats[provider].models[model]) {
           stats.providerStats[provider].models[model] = {
             total: 0,
             success: 0,
             failed: 0,
-            errors: [] // 存储错误详情
+            errors: []
           };
         }
-        
+
         stats.providerStats[provider].models[model].total++;
         if (isSuccess) {
           stats.providerStats[provider].models[model].success++;
         } else {
           stats.providerStats[provider].models[model].failed++;
-          // 记录错误详情
           stats.providerStats[provider].models[model].errors.push({
             timestamp,
             message: errorMessage
@@ -184,42 +613,138 @@ function parseLogsForStats(logsContent) {
       }
     }
   }
-  
+
   return stats;
 }
+
+// 解析新格式日志
+function parseModernLogs(logEntries) {
+  const stats = {
+    totalApiCalls: 0,
+    successfulCalls: 0,
+    failedCalls: 0,
+    providerStats: {},
+    levelStats: {},
+    typeStats: {}
+  };
+
+  // 初始化级别统计
+  Object.values(LogLevel).forEach(level => {
+    stats.levelStats[level] = 0;
+  });
+
+  // 初始化类型统计
+  Object.values(LogType).forEach(type => {
+    stats.typeStats[type] = 0;
+  });
+
+  for (const entry of logEntries) {
+    // 统计级别
+    if (entry.level && stats.levelStats[entry.level] !== undefined) {
+      stats.levelStats[entry.level]++;
+    }
+
+    // 统计类型
+    if (entry.type && stats.typeStats[entry.type] !== undefined) {
+      stats.typeStats[entry.type]++;
+    }
+
+    // API调用统计
+    if (entry.type === LogType.API_CALL) {
+      stats.totalApiCalls++;
+
+      const { provider, model, status } = entry.data || {};
+      const isSuccess = status === 'SUCCESS';
+
+      if (isSuccess) {
+        stats.successfulCalls++;
+      } else {
+        stats.failedCalls++;
+      }
+
+      if (provider) {
+        if (!stats.providerStats[provider]) {
+          stats.providerStats[provider] = {
+            total: 0,
+            success: 0,
+            failed: 0,
+            models: {}
+          };
+        }
+
+        stats.providerStats[provider].total++;
+        if (isSuccess) {
+          stats.providerStats[provider].success++;
+        } else {
+          stats.providerStats[provider].failed++;
+        }
+
+        if (model) {
+          if (!stats.providerStats[provider].models[model]) {
+            stats.providerStats[provider].models[model] = {
+              total: 0,
+              success: 0,
+              failed: 0,
+              errors: []
+            };
+          }
+
+          stats.providerStats[provider].models[model].total++;
+          if (isSuccess) {
+            stats.providerStats[provider].models[model].success++;
+          } else {
+            stats.providerStats[provider].models[model].failed++;
+            if (entry.data.errorMessage) {
+              stats.providerStats[provider].models[model].errors.push({
+                timestamp: entry.timestamp,
+                message: entry.data.errorMessage,
+                errorCode: entry.data.errorCode,
+                traceId: entry.traceId,
+                userId: entry.userId
+              });
+            }
+          }
+        }
+      }
+    }
+  }
+
+  return stats;
+}
+
+// ==================== 日志管理函数 ====================
 
 // 删除日志文件
 async function deleteLogs(startDate, endDate) {
   try {
     await ensureLogsDir();
-    
+
     const start = new Date(startDate);
     const end = new Date(endDate);
-    
+
     const logFiles = [];
     const currentDate = new Date(start);
-    
+
     while (currentDate <= end) {
       logFiles.push(getLogFileName(currentDate));
       currentDate.setDate(currentDate.getDate() + 1);
     }
-    
+
     let deletedCount = 0;
     const errors = [];
-    
+
     for (const logFile of logFiles) {
       const logFilePath = path.join(LOGS_DIR, logFile);
       try {
         await fs.unlink(logFilePath);
         deletedCount++;
       } catch (error) {
-        // 文件不存在，跳过
         if (error.code !== 'ENOENT') {
           errors.push({ file: logFile, error: error.message });
         }
       }
     }
-    
+
     return { deletedCount, errors };
   } catch (error) {
     console.error('Error deleting logs:', error);
@@ -231,13 +756,13 @@ async function deleteLogs(startDate, endDate) {
 async function clearAllLogs() {
   try {
     await ensureLogsDir();
-    
+
     const files = await fs.readdir(LOGS_DIR);
-    const logFiles = files.filter(file => file.endsWith('.log'));
-    
+    const logFiles = files.filter(file => file.endsWith('.jsonl') || file.endsWith('.log'));
+
     let deletedCount = 0;
     const errors = [];
-    
+
     for (const logFile of logFiles) {
       const logFilePath = path.join(LOGS_DIR, logFile);
       try {
@@ -247,7 +772,7 @@ async function clearAllLogs() {
         errors.push({ file: logFile, error: error.message });
       }
     }
-    
+
     return { deletedCount, errors };
   } catch (error) {
     console.error('Error clearing all logs:', error);
@@ -255,12 +780,135 @@ async function clearAllLogs() {
   }
 }
 
+// 归档旧日志（超过30天）
+async function archiveOldLogs(daysToKeep = 30) {
+  try {
+    await ensureLogsDir();
+
+    const files = await fs.readdir(LOGS_DIR);
+    const logFiles = files.filter(file => file.endsWith('.jsonl'));
+
+    const cutoffDate = new Date();
+    cutoffDate.setDate(cutoffDate.getDate() - daysToKeep);
+
+    let archivedCount = 0;
+    const errors = [];
+
+    for (const logFile of logFiles) {
+      // 从文件名提取日期
+      const dateMatch = logFile.match(/^(\d{4}-\d{2}-\d{2})\.jsonl$/);
+      if (!dateMatch) continue;
+
+      const fileDate = new Date(dateMatch[1]);
+
+      if (fileDate < cutoffDate) {
+        const sourcePath = path.join(LOGS_DIR, logFile);
+        const destPath = path.join(ARCHIVE_DIR, logFile);
+
+        try {
+          await fs.rename(sourcePath, destPath);
+          archivedCount++;
+        } catch (error) {
+          errors.push({ file: logFile, error: error.message });
+        }
+      }
+    }
+
+    return { archivedCount, errors };
+  } catch (error) {
+    console.error('Error archiving logs:', error);
+    throw error;
+  }
+}
+
+// 获取可用的日志日期列表
+async function getAvailableLogDates() {
+  try {
+    await ensureLogsDir();
+
+    const files = await fs.readdir(LOGS_DIR);
+    const logFiles = files.filter(file => file.endsWith('.jsonl'));
+
+    const dates = [];
+    for (const logFile of logFiles) {
+      const dateMatch = logFile.match(/^(\d{4}-\d{2}-\d{2})\.jsonl$/);
+      if (dateMatch) {
+        dates.push(dateMatch[1]);
+      }
+    }
+
+    return dates.sort().reverse();
+  } catch (error) {
+    console.error('Error getting available log dates:', error);
+    return [];
+  }
+}
+
+// 导出日志为CSV格式
+function exportToCSV(logEntries) {
+  if (!logEntries || logEntries.length === 0) {
+    return '';
+  }
+
+  // CSV头部
+  const headers = ['Timestamp', 'Level', 'Type', 'Message', 'User ID', 'Trace ID', 'Data'];
+
+  // CSV行
+  const rows = logEntries.map(entry => {
+    return [
+      entry.timestamp,
+      entry.level,
+      entry.type,
+      `"${(entry.message || '').replace(/"/g, '""')}"`,
+      entry.userId || '',
+      entry.traceId || '',
+      `"${JSON.stringify(entry.data || {}).replace(/"/g, '""')}"`
+    ].join(',');
+  });
+
+  return [headers.join(','), ...rows].join('\n');
+}
+
+// 导出日志为JSON格式
+function exportToJSON(logEntries) {
+  return JSON.stringify(logEntries, null, 2);
+}
+
 module.exports = {
+  // 枚举
+  LogLevel,
+  LogType,
+
+  // 日志记录函数
   logApiCall,
   logSystemEvent,
+  logUserAction,
+  logAuthEvent,
+  logDatabaseEvent,
+  logPerformance,
+  logSecurityEvent,
+  log,
+
+  // 日志查询函数
   readLogs,
+  searchLogs,
   parseLogsForStats,
+  getAvailableLogDates,
+
+  // 日志管理函数
   ensureLogsDir,
   deleteLogs,
-  clearAllLogs
+  clearAllLogs,
+  archiveOldLogs,
+
+  // 导出函数
+  exportToCSV,
+  exportToJSON,
+
+  // 实时日志
+  addLogListener,
+
+  // 工具函数
+  generateTraceId,
+  formatTimestamp
 };
