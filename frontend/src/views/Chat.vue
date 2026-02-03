@@ -17,31 +17,57 @@
     
     <div class="chat-main">
       <div class="chat-header">
-        <div class="model-selector" ref="modelSelectorRef">
-          <div class="model-select-trigger" @click="toggleModelDropdown">
-            <span class="selected-model">{{ currentModelLabel || '选择模型' }}</span>
-            <span class="dropdown-arrow">{{ showModelDropdown ? '▲' : '▼' }}</span>
-          </div>
-          <div v-if="showModelDropdown" class="model-dropdown">
-            <input
-              v-model="modelSearchQuery"
-              @input="onModelSearch"
-              placeholder="搜索模型..."
-              class="model-search-input"
-              ref="modelSearchInput"
-              @click.stop
-            >
-            <div class="model-options">
-              <div
-                v-for="m in filteredModels"
-                :key="m.value"
-                :class="['model-option', { active: currentModel === m.value }]"
-                @click="selectModel(m.value)"
+        <div class="header-controls">
+          <div class="model-selector" ref="modelSelectorRef">
+            <div class="model-select-trigger" @click="toggleModelDropdown">
+              <span class="selected-model">{{ currentModelLabel || '选择模型' }}</span>
+              <span class="dropdown-arrow">{{ showModelDropdown ? '▲' : '▼' }}</span>
+            </div>
+            <div v-if="showModelDropdown" class="model-dropdown">
+              <input
+                v-model="modelSearchQuery"
+                @input="onModelSearch"
+                placeholder="搜索模型..."
+                class="model-search-input"
+                ref="modelSearchInput"
+                @click.stop
               >
-                {{ m.label }}
+              <div class="model-options">
+                <div
+                  v-for="m in filteredModels"
+                  :key="m.value"
+                  :class="['model-option', { active: currentModel === m.value }]"
+                  @click="selectModel(m.value)"
+                >
+                  {{ m.label }}
+                </div>
+                <div v-if="filteredModels.length === 0" class="no-models">
+                  未找到匹配的模型
+                </div>
               </div>
-              <div v-if="filteredModels.length === 0" class="no-models">
-                未找到匹配的模型
+            </div>
+          </div>
+
+          <!-- 风格选择器 -->
+          <div class="style-selector" ref="styleSelectorRef">
+            <div class="style-select-trigger" @click="toggleStyleDropdown">
+              <span class="style-icon">{{ currentStyleConfig?.icon || '📝' }}</span>
+              <span class="selected-style">{{ currentStyleConfig?.name || '默认' }}</span>
+              <span class="dropdown-arrow">{{ showStyleDropdown ? '▲' : '▼' }}</span>
+            </div>
+            <div v-if="showStyleDropdown" class="style-dropdown">
+              <div class="style-options">
+                <div
+                  v-for="style in availableStyles"
+                  :key="style.id"
+                  :class="['style-option', { active: currentStyle === style.id }]"
+                  @click="selectStyle(style.id)"
+                  :title="style.description"
+                >
+                  <span class="style-option-icon">{{ style.icon }}</span>
+                  <span class="style-option-name">{{ style.name }}</span>
+                  <span class="style-option-desc">{{ style.description }}</span>
+                </div>
               </div>
             </div>
           </div>
@@ -64,7 +90,7 @@
               <span class="file-name">{{ file.name }}</span>
             </div>
           </div>
-          <div class="message-content" v-html="getRenderedContent(msg, i)"></div>
+          <div class="message-content" :class="getMessageStyleClass(msg)" v-html="getRenderedContent(msg, i)"></div>
           <div v-if="msg.error && msg.errorDetails" class="error-details-btn" @click="showErrorDetails(msg.errorDetails)">
             <span class="details-icon">🔍</span>
             <span>查看详情</span>
@@ -296,10 +322,151 @@
 
 <style scoped>
 /* 模型选择器样式 */
+.chat-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.header-controls {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex: 1;
+  min-width: 0;
+}
+
 .model-selector {
   position: relative;
-  width: 100%;
+  min-width: 200px;
   max-width: 400px;
+  flex-shrink: 0;
+}
+
+/* 风格选择器样式 */
+.style-selector {
+  position: relative;
+  min-width: 200px;
+  max-width: 280px;
+  flex-shrink: 0;
+}
+
+.style-select-trigger {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 10px 14px;
+  background: white;
+  border: 1px solid #dee2e6;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s;
+  user-select: none;
+}
+
+.style-select-trigger:hover {
+  border-color: #0891b2;
+  box-shadow: 0 0 0 3px rgba(8, 145, 178, 0.1);
+}
+
+.style-icon {
+  font-size: 16px;
+  line-height: 1;
+}
+
+.selected-style {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #495057;
+  font-size: 14px;
+}
+
+.style-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  min-width: 280px;
+  width: max-content;
+  background: white;
+  border: 1px solid #dee2e6;
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  z-index: 1000;
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.style-options {
+  display: flex;
+  flex-direction: column;
+}
+
+.style-option {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 12px 16px;
+  cursor: pointer;
+  transition: background-color 0.15s;
+  border-bottom: 1px solid #f8f9fa;
+}
+
+.style-option:last-child {
+  border-bottom: none;
+}
+
+.style-option:hover {
+  background-color: #f8f9fa;
+}
+
+.style-option.active {
+  background-color: #e0f2fe;
+  color: #0891b2;
+  font-weight: 500;
+}
+
+.style-option-icon {
+  font-size: 18px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.style-option-name {
+  flex: 1;
+  font-size: 14px;
+  font-weight: 500;
+  color: #495057;
+}
+
+.style-option-desc {
+  font-size: 12px;
+  color: #6c757d;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 200px;
+}
+
+/* 适配小屏幕 */
+@media (max-width: 768px) {
+  .header-controls {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.5rem;
+  }
+
+  .model-selector,
+  .style-selector {
+    min-width: auto;
+    max-width: none;
+  }
+
+  .style-option-desc {
+    display: none;
+  }
 }
 
 .model-select-trigger {
@@ -1267,6 +1434,11 @@ import { ref, computed, onMounted, onUnmounted, nextTick, shallowRef, markRaw } 
 import axios from 'axios'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
+import contentStyleManager from '../utils/contentStyleManager.js'
+import '../styles/notion-style.css'
+import '../styles/konayuki-style.css'
+import '../styles/everforest-style.css'
+import '../styles/happysimple-style.css'
 
 // 性能优化：使用 shallowRef 减少深度响应式
 const conversations = shallowRef([])
@@ -1297,6 +1469,12 @@ const providers = ref([])
 // 提示词相关
 const prompts = ref([])
 const selectedPromptId = ref('')
+
+// 风格选择器相关
+const showStyleDropdown = ref(false)
+const styleSelectorRef = ref(null)
+// 从风格管理器获取初始风格，确保状态同步
+const currentStyle = ref(contentStyleManager.getCurrentStyle())
 
 // 支持的文件类型
 const supportedFileTypes = '.txt,.md,.json,.js,.ts,.jsx,.tsx,.vue,.py,.java,.c,.cpp,.h,.hpp,.cs,.go,.rs,.rb,.php,.html,.css,.scss,.less,.xml,.yaml,.yml,.toml,.ini,.conf,.sh,.bat,.ps1,.sql,.csv,.log'
@@ -1392,6 +1570,16 @@ const currentModelLabel = computed(() => {
   if (!currentModel.value) return ''
   const model = allModels.value.find(m => m.value === currentModel.value)
   return model ? model.label : currentModel.value
+})
+
+// 风格相关计算属性
+const currentStyleConfig = computed(() => {
+  // 基于当前选择的风格ID获取配置
+  return contentStyleManager.getStyle(currentStyle.value)
+})
+
+const availableStyles = computed(() => {
+  return contentStyleManager.getAvailableStyles()
 })
 
 // 计算当前模型是否可以启用轮询
@@ -1583,6 +1771,13 @@ async function loadSettings() {
     if (res.data.defaultPromptId) {
       selectedPromptId.value = res.data.defaultPromptId
     }
+
+    // 设置默认风格（支持两种字段名：defaultStyle 或 defaultContentStyle）
+    const defaultStyle = res.data.defaultStyle || res.data.defaultContentStyle
+    if (defaultStyle) {
+      currentStyle.value = defaultStyle
+      contentStyleManager.setCurrentStyle(defaultStyle)
+    }
   } catch (error) {
     console.error('Error loading settings:', error)
   }
@@ -1620,11 +1815,41 @@ function onModelSearch() {
   // 搜索时自动触发过滤，由计算属性 filteredModels 处理
 }
 
+// 风格选择器相关方法
+function toggleStyleDropdown() {
+  showStyleDropdown.value = !showStyleDropdown.value
+}
+
+function selectStyle(styleId) {
+  currentStyle.value = styleId
+  contentStyleManager.setCurrentStyle(styleId)
+  showStyleDropdown.value = false
+  // 清除渲染缓存，确保使用新风格重新渲染
+  renderedCache.clear()
+  // 重新渲染所有消息
+  messages.value = [...messages.value]
+  nextTick(() => {
+    throttledScrollToBottom()
+  })
+}
+
+function getMessageStyleClass(msg) {
+  // 只为 assistant 消息应用风格
+  if (msg.role === 'assistant') {
+    const styleClass = contentStyleManager.getStyleClass(currentStyle.value)
+    return styleClass || ''
+  }
+  return ''
+}
+
 // 点击外部关闭下拉框
 function handleClickOutside(event) {
   if (modelSelectorRef.value && !modelSelectorRef.value.contains(event.target)) {
     showModelDropdown.value = false
     modelSearchQuery.value = ''
+  }
+  if (styleSelectorRef.value && !styleSelectorRef.value.contains(event.target)) {
+    showStyleDropdown.value = false
   }
 }
 
@@ -2164,28 +2389,26 @@ function getRenderedContent(msg, index) {
     return html
   }
 
-  if (msg.rendered) return msg.rendered
+  if (msg.rendered && !msg.streaming) return msg.rendered
 
   // 为流式消息实时渲染，但不缓存
   if (msg.streaming) {
-    const rawHtml = marked(msg.content)
-    return DOMPurify.sanitize(rawHtml)
+    // 使用风格管理器处理内容
+    return contentStyleManager.processContent(msg.content, marked, DOMPurify.sanitize, currentStyle.value)
   }
 
-  // 生成缓存键
-  const cacheKey = `${msg.role}-${msg.content}`
+  // 生成缓存键（包含风格ID）
+  const cacheKey = `${msg.role}-${msg.content}-${currentStyle.value}`
 
   // 检查缓存
   if (renderedCache.has(cacheKey)) {
     const rendered = renderedCache.get(cacheKey)
-    // 修复：直接修改对象属性而不是数组索引
     msg.rendered = rendered
     return rendered
   }
 
-  // 渲染并清理HTML（防止XSS）
-  const rawHtml = marked(msg.content)
-  const rendered = DOMPurify.sanitize(rawHtml)
+  // 使用风格管理器处理内容
+  const rendered = contentStyleManager.processContent(msg.content, marked, DOMPurify.sanitize, currentStyle.value)
 
   // 缓存大小控制
   if (renderedCache.size >= maxCacheSize) {
@@ -2194,7 +2417,6 @@ function getRenderedContent(msg, index) {
   }
 
   renderedCache.set(cacheKey, rendered)
-  // 修复：直接修改对象属性而不是数组索引
   msg.rendered = rendered
   return rendered
 }

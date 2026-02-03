@@ -1,0 +1,402 @@
+/*
+ * Konayuki 风格 - 消息内容样式
+ * 基于 Konayuki.css 改编
+ */
+
+/* ==================== Konayuki 风格根变量 ==================== */
+.message-content.style-konayuki,
+.message-content.style-konayuki * {
+  --konayuki-bg-color: #fffdf8;
+  --konayuki-text-color: #2c3e50;
+  --konayuki-text-muted: #7f8c8d;
+  --konayuki-text-faint: #95a5a6;
+  --konayuki-primary-color: #4a90e2;
+  --konayuki-primary-hover: #3a7bc8;
+  --konayuki-border-color: #e9e3d8;
+  --konayuki-table-border: #e2ddd3;
+  --konayuki-code-bg: #f7f4ef;
+  --konayuki-code-text: #3b2f2a;
+  --konayuki-radius-small: 6px;
+  --konayuki-radius-medium: 8px;
+  --konayuki-radius-large: 12px;
+  --konayuki-shadow-small: 0 2px 8px rgba(0, 0, 0, 0.08);
+  --konayuki-font-body: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", "Source Han Sans SC", sans-serif;
+  --konayuki-font-mono: 'Maple Mono NF CN', 'Fira Code', 'Consolas', 'Monaco',
+    'Courier New', monospace;
+}
+
+/* ==================== Konayuki 风格基础样式 ==================== */
+.message-content.style-konayuki {
+  font-family: var(--konayuki-font-body);
+  font-size: 16px;
+  line-height: 1.8;
+  color: var(--konayuki-text-color);
+  padding: 0.5rem 0;
+  background: transparent;
+}
+
+/* ==================== 标题样式 ==================== */
+.message-content.style-konayuki h1,
+.message-content.style-konayuki h2,
+.message-content.style-konayuki h3,
+.message-content.style-konayuki h4,
+.message-content.style-konayuki h5,
+.message-content.style-konayuki h6 {
+  font-weight: 700;
+  color: var(--konayuki-text-color);
+  line-height: 1.25;
+  margin: 2.2rem 0 1rem;
+}
+
+.message-content.style-konayuki h1 {
+  font-size: 2.1rem;
+  padding-bottom: 0.5em;
+  border-bottom: 2px solid var(--konayuki-primary-color);
+  margin-top: 0;
+}
+
+.message-content.style-konayuki h1:first-child {
+  margin-top: 0;
+}
+
+.message-content.style-konayuki h2 {
+  font-size: 1.8rem;
+  padding-bottom: 0.35rem;
+  border-bottom: 1px solid var(--konayuki-border-color);
+}
+
+.message-content.style-konayuki h3 {
+  font-size: 1.5rem;
+  padding-bottom: 0.25rem;
+  border-bottom: 1px solid var(--konayuki-border-color);
+}
+
+.message-content.style-konayuki h4 {
+  font-size: 1.25rem;
+  margin-top: 1.5rem;
+}
+
+.message-content.style-konayuki h5 {
+  font-size: 1.1rem;
+  margin-top: 1.2rem;
+}
+
+.message-content.style-konayuki h6 {
+  font-size: 1rem;
+  color: var(--konayuki-text-muted);
+  margin-top: 1rem;
+}
+
+/* ==================== 段落样式 ==================== */
+.message-content.style-konayuki p {
+  margin: 1em 0;
+  line-height: 1.8;
+}
+
+/* ==================== 列表样式 ==================== */
+.message-content.style-konayuki ul,
+.message-content.style-konayuki ol {
+  padding-left: 2em;
+  margin: 1em 0;
+}
+
+.message-content.style-konayuki ul {
+  list-style-type: disc;
+}
+
+.message-content.style-konayuki ul ul {
+  list-style-type: circle;
+  margin: 0.5em 0;
+}
+
+.message-content.style-konayuki ol {
+  list-style-type: decimal;
+}
+
+.message-content.style-konayuki ol ol {
+  list-style-type: lower-alpha;
+  margin: 0.5em 0;
+}
+
+.message-content.style-konayuki li {
+  margin: 0.5em 0;
+  line-height: 1.6;
+}
+
+/* 任务列表 */
+.message-content.style-konayuki .task-list {
+  list-style-type: none;
+  padding-left: 0;
+}
+
+.message-content.style-konayuki .task-list-item {
+  position: relative;
+  padding-left: 2.1rem;
+  margin: 0.45rem 0;
+}
+
+.message-content.style-konayuki .task-list-item input[type="checkbox"] {
+  position: absolute;
+  left: 0;
+  top: 0.14em;
+  width: 1.3em;
+  height: 1.3em;
+  appearance: none;
+  -webkit-appearance: none;
+  border-radius: 6px;
+  border: 2px solid var(--konayuki-primary-color);
+  background: transparent;
+  margin: 0;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.message-content.style-konayuki .task-list-item input[type="checkbox"]:checked {
+  background-color: var(--konayuki-primary-color);
+  border-color: var(--konayuki-primary-color);
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 16 16' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M3.5 8.5l3 3 6-6' stroke='%23ffffff' stroke-width='2'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 70%;
+}
+
+.message-content.style-konayuki .task-list-item input[type="checkbox"]:hover {
+  box-shadow: 0 0 0 3px rgba(74, 144, 226, 0.2);
+}
+
+/* ==================== 引用块样式 ==================== */
+.message-content.style-konayuki blockquote {
+  margin: 1.25rem 0;
+  padding: 0.9rem 1rem;
+  padding-left: 1rem;
+  border-left: 4px solid var(--konayuki-primary-color);
+  background: linear-gradient(90deg, rgba(74, 144, 226, 0.1), transparent);
+  border-radius: var(--konayuki-radius-small);
+  box-shadow: var(--konayuki-shadow-small);
+}
+
+.message-content.style-konayuki blockquote p {
+  margin: 0.5em 0;
+}
+
+/* ==================== 分割线样式 ==================== */
+.message-content.style-konayuki hr {
+  border: none;
+  border-top: 1px solid var(--konayuki-border-color);
+  margin: 2.5em 0;
+  position: relative;
+}
+
+.message-content.style-konayuki hr:after {
+  content: '✦';
+  position: absolute;
+  top: -10px;
+  left: 50%;
+  transform: translateX(-50%);
+  background-color: var(--konayuki-bg-color);
+  color: var(--konayuki-primary-color);
+  padding: 0 1em;
+  font-size: 14px;
+}
+
+/* ==================== 代码样式 ==================== */
+
+/* 行内代码 */
+.message-content.style-konayuki code {
+  font-family: var(--konayuki-font-mono);
+  font-size: 0.9em;
+  color: var(--konayuki-code-text);
+  background-color: var(--konayuki-code-bg);
+  padding: 0.2em 0.4em;
+  border-radius: var(--konayuki-radius-small);
+  line-height: normal;
+}
+
+/* 代码块容器 */
+.message-content.style-konayuki pre {
+  background-color: var(--konayuki-code-bg);
+  border-radius: var(--konayuki-radius-medium);
+  padding: 1.2em;
+  margin: 1.5em 0;
+  overflow-x: auto;
+  border: 1px solid var(--konayuki-border-color);
+  box-shadow: var(--konayuki-shadow-small);
+  font-family: var(--konayuki-font-mono);
+  font-size: 0.9em;
+  line-height: 1.6;
+  color: var(--konayuki-code-text);
+}
+
+.message-content.style-konayuki pre code {
+  background-color: transparent;
+  padding: 0;
+  border-radius: 0;
+  font-size: 1em;
+  color: inherit;
+}
+
+/* 语法高亮颜色（Konayuki warm light palette） */
+.message-content.style-konayuki pre code .token.comment {
+  color: #9a7b66;
+  font-style: italic;
+}
+
+.message-content.style-konayuki pre code .token.keyword {
+  color: #8f3f2a;
+  font-weight: 600;
+}
+
+.message-content.style-konayuki pre code .token.string,
+.message-content.style-konayuki pre code .token.string-2 {
+  color: #4d7c0f;
+}
+
+.message-content.style-konayuki pre code .token.number {
+  color: #b45309;
+}
+
+.message-content.style-konayuki pre code .token.function {
+  color: #9a3412;
+}
+
+.message-content.style-konayuki pre code .token.tag {
+  color: #a11b1b;
+}
+
+.message-content.style-konayuki pre code .token.attr-name {
+  color: #b45309;
+}
+
+/* ==================== 表格样式 ==================== */
+.message-content.style-konayuki table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  margin: 1.5em 0;
+  background-color: var(--konayuki-bg-color);
+  border-radius: var(--konayuki-radius-medium);
+  overflow: hidden;
+  box-shadow: var(--konayuki-shadow-small);
+  border: 1px solid var(--konayuki-table-border);
+  font-size: 0.95em;
+}
+
+.message-content.style-konayuki thead {
+  background-color: var(--konayuki-code-bg);
+}
+
+.message-content.style-konayuki th {
+  padding: 0.8em 1em;
+  text-align: left;
+  font-weight: 600;
+  color: var(--konayuki-text-color);
+  border-bottom: 2px solid var(--konayuki-table-border);
+  border-right: 1px solid var(--konayuki-table-border);
+}
+
+.message-content.style-konayuki td {
+  padding: 0.8em 1em;
+  border-bottom: 1px solid var(--konayuki-table-border);
+  border-right: 1px solid var(--konayuki-table-border);
+}
+
+.message-content.style-konayuki tr > :last-child {
+  border-right: none;
+}
+
+.message-content.style-konayuki tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.message-content.style-konayuki tbody tr:hover {
+  background-color: rgba(74, 144, 226, 0.05);
+}
+
+/* ==================== 链接样式 ==================== */
+.message-content.style-konayuki a {
+  color: var(--konayuki-primary-color);
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+  transition: all 0.2s ease;
+}
+
+.message-content.style-konayuki a:hover {
+  color: var(--konayuki-primary-hover);
+  border-bottom-color: var(--konayuki-primary-hover);
+}
+
+/* ==================== 图片样式 ==================== */
+.message-content.style-konayuki img {
+  max-width: 100%;
+  height: auto;
+  margin: 1.5em 0;
+  border-radius: var(--konayuki-radius-medium);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+}
+
+/* ==================== 强调样式 ==================== */
+.message-content.style-konayuki strong {
+  font-weight: 600;
+  color: var(--konayuki-text-color);
+}
+
+.message-content.style-konayuki em {
+  font-style: italic;
+  color: var(--konayuki-text-color);
+}
+
+.message-content.style-konayuki mark {
+  background-color: #fff3cd;
+  color: var(--konayuki-text-color);
+  padding: 0.2em 0.4em;
+  border-radius: var(--konayuki-radius-small);
+}
+
+.message-content.style-konayuki del {
+  color: var(--konayuki-text-faint);
+  text-decoration: line-through;
+}
+
+/* ==================== 上标下标 ==================== */
+.message-content.style-konayuki sup,
+.message-content.style-konayuki sub {
+  font-size: 0.75em;
+  line-height: 0;
+}
+
+.message-content.style-konayuki sup {
+  vertical-align: super;
+}
+
+.message-content.style-konayuki sub {
+  vertical-align: sub;
+}
+
+/* ==================== 响应式调整 ==================== */
+@media (max-width: 768px) {
+  .message-content.style-konayuki {
+    font-size: 15px;
+  }
+
+  .message-content.style-konayuki h1 {
+    font-size: 1.75rem;
+  }
+
+  .message-content.style-konayuki h2 {
+    font-size: 1.5rem;
+  }
+
+  .message-content.style-konayuki h3 {
+    font-size: 1.3rem;
+  }
+
+  .message-content.style-konayuki table {
+    font-size: 0.85em;
+  }
+
+  .message-content.style-konayuki th,
+  .message-content.style-konayuki td {
+    padding: 0.6em 0.8em;
+  }
+}
