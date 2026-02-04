@@ -17,6 +17,11 @@ const LogLevel = {
 // 日志类型枚举
 const LogType = {
   API_CALL: 'API_CALL',
+  API_REQUEST: 'API_REQUEST',       // 新增：完整的API请求记录
+  PROVIDER_SWITCH: 'PROVIDER_SWITCH', // 新增：提供商切换事件
+  SESSION_BIND: 'SESSION_BIND',     // 新增：会话绑定事件
+  TOKEN_USAGE: 'TOKEN_USAGE',       // 新增：Token使用汇总
+  COST_TRACKING: 'COST_TRACKING',   // 新增：成本追踪
   SYSTEM: 'SYSTEM',
   USER_ACTION: 'USER_ACTION',
   AUTH: 'AUTH',
@@ -182,6 +187,196 @@ async function logApiCall(...args) {
   });
 
   return await writeLog(logEntry);
+}
+
+// ==================== API请求追踪（新增）====================
+
+// 性能追踪器（轻量级，用于追踪请求耗时）
+class PerformanceTracker {
+  constructor(traceId) {
+    this.traceId = traceId;
+    this.checkpoints = new Map();
+    this.startTime = Date.now();
+  }
+
+  // 记录检查点
+  checkpoint(name) {
+    this.checkpoints.set(name, Date.now());
+  }
+
+  // 获取从开始到某个检查点的耗时（毫秒）
+  getDuration(checkpointName) {
+    const checkpoint = this.checkpoints.get(checkpointName);
+    if (!checkpoint) return null;
+    return checkpoint - this.startTime;
+  }
+
+  // 获取两个检查点之间的耗时
+  getDurationBetween(start, end) {
+    const startCheckpoint = this.checkpoints.get(start);
+    const endCheckpoint = this.checkpoints.get(end);
+    if (!startCheckpoint || !endCheckpoint) return null;
+    return endCheckpoint - startCheckpoint;
+  }
+
+  // 获取总耗时
+  getTotalDuration() {
+    return Date.now() - this.startTime;
+  }
+
+  // 获取所有检查点数据
+  getMetrics() {
+    const metrics = {
+      traceId: this.traceId,
+      startTime: this.startTime,
+      totalDuration: this.getTotalDuration(),
+      checkpoints: {}
+    };
+
+    let lastCheckpoint = this.startTime;
+    for (const [name, time] of this.checkpoints) {
+      metrics.checkpoints[name] = {
+        time,
+        durationFromStart: time - this.startTime,
+        durationFromLast: time - lastCheckpoint
+      };
+      lastCheckpoint = time;
+    }
+
+    return metrics;
+  }
+}
+
+// 记录完整的API请求（性能优先，异步非阻塞）
+async function logApiRequest({
+  traceId,
+  clientIp,
+  userAgent,
+  apiKeyName,
+  sessionId,
+  isPolling,
+  isNewConversation,
+  request,
+  providers,
+  result,
+  metadata = {}
+}) {
+  const logEntry = createLogEntry({
+    level: result.status === 'failed' ? LogLevel.ERROR : LogLevel.INFO,
+    type: LogType.API_REQUEST,
+    message: `API请求: ${request.model} - ${result.status}`,
+    traceId,
+    data: {
+      request: {
+        clientIp,
+        userAgent,
+        apiKeyName,
+        sessionId,
+        isPolling,
+        isNewConversation,
+        model: request.model,
+        stream: request.stream,
+        messageCount: request.messages?.length || 0
+      },
+      providers: providers.map(p => ({
+        attempt: p.attempt,
+        providerId: p.providerId,
+        providerName: p.providerName,
+        status: p.status,
+        statusCode: p.statusCode,
+        duration: p.duration,
+        error: p.error
+      })),
+      result: {
+        status: result.status,
+        successfulProvider: result.successfulProvider,
+        totalAttempts: result.totalAttempts,
+        totalDuration: result.totalDuration,
+        tokenUsage: result.tokenUsage,
+        estimatedCost: result.estimatedCost
+      }
+    },
+    metadata
+  });
+
+  // 异步写入日志，不阻塞请求处理
+  setImmediate(async () => {
+    try {
+      await writeLog(logEntry);
+    } catch (error) {
+      console.error('[Logger] Error writing API request log:', error.message);
+    }
+  });
+
+  return logEntry;
+}
+
+// 记录提供商切换事件
+async function logProviderSwitch({
+  traceId,
+  fromProvider,
+  toProvider,
+  reason,
+  metadata = {}
+}) {
+  const logEntry = createLogEntry({
+    level: LogLevel.INFO,
+    type: LogType.PROVIDER_SWITCH,
+    message: `提供商切换: ${fromProvider} -> ${toProvider} (${reason})`,
+    traceId,
+    data: {
+      fromProvider,
+      toProvider,
+      reason
+    },
+    metadata
+  });
+
+  // 异步写入，不阻塞
+  setImmediate(async () => {
+    try {
+      await writeLog(logEntry);
+    } catch (error) {
+      console.error('[Logger] Error writing provider switch log:', error.message);
+    }
+  });
+
+  return logEntry;
+}
+
+// 记录会话绑定事件
+async function logSessionBind({
+  traceId,
+  sessionId,
+  model,
+  providerId,
+  providerName,
+  metadata = {}
+}) {
+  const logEntry = createLogEntry({
+    level: LogLevel.INFO,
+    type: LogType.SESSION_BIND,
+    message: `会话绑定: ${sessionId} -> ${providerName}`,
+    traceId,
+    data: {
+      sessionId,
+      model,
+      providerId,
+      providerName
+    },
+    metadata
+  });
+
+  // 异步写入，不阻塞
+  setImmediate(async () => {
+    try {
+      await writeLog(logEntry);
+    } catch (error) {
+      console.error('[Logger] Error writing session bind log:', error.message);
+    }
+  });
+
+  return logEntry;
 }
 
 // 记录系统事件（增强版，支持旧签名向后兼容）
@@ -639,77 +834,242 @@ function parseModernLogs(logEntries) {
   });
 
   for (const entry of logEntries) {
-    // 统计级别
-    if (entry.level && stats.levelStats[entry.level] !== undefined) {
-      stats.levelStats[entry.level]++;
-    }
+    try {
+      // 统计级别
+      if (entry.level && stats.levelStats[entry.level] !== undefined) {
+        stats.levelStats[entry.level]++;
+      }
 
-    // 统计类型
-    if (entry.type && stats.typeStats[entry.type] !== undefined) {
-      stats.typeStats[entry.type]++;
-    }
+      // 统计类型
+      if (entry.type && stats.typeStats[entry.type] !== undefined) {
+        stats.typeStats[entry.type]++;
+      }
 
-    // API调用统计
-    if (entry.type === LogType.API_CALL) {
+      // API调用统计
+      if (entry.type === LogType.API_CALL) {
+        stats.totalApiCalls++;
+
+        const { provider, model, status } = entry.data || {};
+        const isSuccess = status === 'SUCCESS';
+
+        if (isSuccess) {
+          stats.successfulCalls++;
+        } else {
+          stats.failedCalls++;
+        }
+
+        if (provider) {
+          if (!stats.providerStats[provider]) {
+            stats.providerStats[provider] = {
+              total: 0,
+              success: 0,
+              failed: 0,
+              models: {}
+            };
+          }
+
+          stats.providerStats[provider].total++;
+          if (isSuccess) {
+            stats.providerStats[provider].success++;
+          } else {
+            stats.providerStats[provider].failed++;
+          }
+
+          if (model) {
+            if (!stats.providerStats[provider].models[model]) {
+              stats.providerStats[provider].models[model] = {
+                total: 0,
+                success: 0,
+                failed: 0,
+                errors: []
+              };
+            }
+
+            stats.providerStats[provider].models[model].total++;
+            if (isSuccess) {
+              stats.providerStats[provider].models[model].success++;
+            } else {
+              stats.providerStats[provider].models[model].failed++;
+              if (entry.data.errorMessage) {
+                stats.providerStats[provider].models[model].errors.push({
+                  timestamp: entry.timestamp,
+                  message: entry.data.errorMessage,
+                  errorCode: entry.data.errorCode,
+                  traceId: entry.traceId,
+                  userId: entry.userId
+                });
+              }
+            }
+          }
+        }
+      }
+
+    // API请求统计（新增强版）
+    if (entry.type === LogType.API_REQUEST) {
+      const { request, providers, result } = entry.data || {};
+
+      // 基础统计
       stats.totalApiCalls++;
-
-      const { provider, model, status } = entry.data || {};
-      const isSuccess = status === 'SUCCESS';
-
-      if (isSuccess) {
+      if (result?.status === 'success') {
         stats.successfulCalls++;
       } else {
         stats.failedCalls++;
       }
 
-      if (provider) {
-        if (!stats.providerStats[provider]) {
-          stats.providerStats[provider] = {
-            total: 0,
-            success: 0,
-            failed: 0,
-            models: {}
-          };
-        }
+      // 提供商统计
+      if (providers && Array.isArray(providers)) {
+        for (const provider of providers) {
+          const providerName = provider.providerName;
+          if (!providerName) continue;
 
-        stats.providerStats[provider].total++;
-        if (isSuccess) {
-          stats.providerStats[provider].success++;
-        } else {
-          stats.providerStats[provider].failed++;
-        }
-
-        if (model) {
-          if (!stats.providerStats[provider].models[model]) {
-            stats.providerStats[provider].models[model] = {
+          // 确保提供商对象存在
+          if (!stats.providerStats[providerName]) {
+            stats.providerStats[providerName] = {
               total: 0,
               success: 0,
               failed: 0,
-              errors: []
+              avgDuration: 0,
+              totalDuration: 0,
+              models: {},
+              apiKeys: {}
             };
           }
 
-          stats.providerStats[provider].models[model].total++;
-          if (isSuccess) {
-            stats.providerStats[provider].models[model].success++;
+          stats.providerStats[providerName].total++;
+          if (provider.status === 'success') {
+            stats.providerStats[providerName].success++;
           } else {
-            stats.providerStats[provider].models[model].failed++;
-            if (entry.data.errorMessage) {
-              stats.providerStats[provider].models[model].errors.push({
-                timestamp: entry.timestamp,
-                message: entry.data.errorMessage,
-                errorCode: entry.data.errorCode,
-                traceId: entry.traceId,
-                userId: entry.userId
-              });
+            stats.providerStats[providerName].failed++;
+          }
+
+          // 性能统计
+          if (provider.duration) {
+            stats.providerStats[providerName].totalDuration += provider.duration;
+            stats.providerStats[providerName].avgDuration =
+              stats.providerStats[providerName].totalDuration /
+              stats.providerStats[providerName].total;
+          }
+
+          // 模型统计
+          if (request?.model) {
+            const modelName = request.model;
+
+            // 确保 models 对象存在
+            if (!stats.providerStats[providerName].models) {
+              stats.providerStats[providerName].models = {};
+            }
+
+            if (!stats.providerStats[providerName].models[modelName]) {
+              stats.providerStats[providerName].models[modelName] = {
+                total: 0,
+                success: 0,
+                failed: 0,
+                avgDuration: 0,
+                totalDuration: 0
+              };
+            }
+
+            stats.providerStats[providerName].models[modelName].total++;
+            if (provider.status === 'success') {
+              stats.providerStats[providerName].models[modelName].success++;
+            } else {
+              stats.providerStats[providerName].models[modelName].failed++;
+            }
+
+            if (provider.duration) {
+              stats.providerStats[providerName].models[modelName].totalDuration += provider.duration;
+              stats.providerStats[providerName].models[modelName].avgDuration =
+                stats.providerStats[providerName].models[modelName].totalDuration /
+                stats.providerStats[providerName].models[modelName].total;
+            }
+          }
+
+          // API密钥统计
+          if (request?.apiKeyName) {
+            const apiKeyName = request.apiKeyName;
+
+            // 确保 apiKeys 对象存在
+            if (!stats.providerStats[providerName].apiKeys) {
+              stats.providerStats[providerName].apiKeys = {};
+            }
+
+            if (!stats.providerStats[providerName].apiKeys[apiKeyName]) {
+              stats.providerStats[providerName].apiKeys[apiKeyName] = {
+                total: 0,
+                success: 0,
+                failed: 0
+              };
+            }
+
+            stats.providerStats[providerName].apiKeys[apiKeyName].total++;
+            if (provider.status === 'success') {
+              stats.providerStats[providerName].apiKeys[apiKeyName].success++;
+            } else {
+              stats.providerStats[providerName].apiKeys[apiKeyName].failed++;
             }
           }
         }
       }
-    }
-  }
 
-  return stats;
+      // Token使用统计
+      if (result?.tokenUsage) {
+        if (!stats.tokenStats) {
+          stats.tokenStats = {
+            totalPromptTokens: 0,
+            totalCompletionTokens: 0,
+            totalTokens: 0
+          };
+        }
+
+        stats.tokenStats.totalPromptTokens += result.tokenUsage.promptTokens || 0;
+        stats.tokenStats.totalCompletionTokens += result.tokenUsage.completionTokens || 0;
+        stats.tokenStats.totalTokens += result.tokenUsage.totalTokens || 0;
+      }
+
+      // 性能统计
+      if (result?.totalDuration) {
+        if (!stats.performanceStats) {
+          stats.performanceStats = {
+            totalDuration: 0,
+            avgDuration: 0,
+            minDuration: Infinity,
+            maxDuration: 0
+          };
+        }
+
+        stats.performanceStats.totalDuration += result.totalDuration;
+        stats.performanceStats.avgDuration = stats.performanceStats.totalDuration / stats.totalApiCalls;
+        stats.performanceStats.minDuration = Math.min(
+          stats.performanceStats.minDuration,
+          result.totalDuration
+        );
+        stats.performanceStats.maxDuration = Math.max(
+          stats.performanceStats.maxDuration,
+          result.totalDuration
+        );
+      }
+
+      // 成本统计
+      if (result?.estimatedCost?.amount) {
+        if (!stats.costStats) {
+          stats.costStats = {
+            totalCost: 0,
+            currency: 'USD'
+          };
+        }
+
+        stats.costStats.totalCost += result.estimatedCost.amount;
+        stats.costStats.currency = result.estimatedCost.currency || 'USD';
+      }
+    }
+  } catch (err) {
+    // 忽略无法解析的日志条目，继续处理下一个
+    console.error('[Logger] Error parsing log entry:', err.message);
+    console.error('[Logger] Log entry:', JSON.stringify(entry).substring(0, 200));
+  }
+}
+
+return stats;
 }
 
 // ==================== 日志管理函数 ====================
@@ -881,6 +1241,9 @@ module.exports = {
 
   // 日志记录函数
   logApiCall,
+  logApiRequest,        // 新增
+  logProviderSwitch,    // 新增
+  logSessionBind,       // 新增
   logSystemEvent,
   logUserAction,
   logAuthEvent,
@@ -888,6 +1251,9 @@ module.exports = {
   logPerformance,
   logSecurityEvent,
   log,
+
+  // 类
+  PerformanceTracker,   // 新增
 
   // 日志查询函数
   readLogs,

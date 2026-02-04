@@ -61,8 +61,10 @@
       <div class="toolbar-actions">
         <button @click="applyFilters" class="btn-action">刷新</button>
         <button @click="loadToday" class="btn-action btn-today">今日</button>
+        <button @click="loadRecent7Days" class="btn-action btn-recent">最近七天</button>
         <button @click="exportLogs('json')" class="btn-action btn-export">导出JSON</button>
         <button @click="exportLogs('csv')" class="btn-action btn-export">导出CSV</button>
+        <button @click="showDeleteOldLogsDialog" class="btn-action btn-delete-old">删除七天前</button>
         <button @click="showDeleteDialog" class="btn-action btn-delete" :disabled="!canDelete">清除日志</button>
       </div>
     </div>
@@ -188,6 +190,24 @@
         </div>
       </div>
     </div>
+
+    <!-- 删除7天前日志对话框 -->
+    <div v-if="deleteOldLogsDialog.show" class="dialog-overlay" @click="closeDeleteOldLogsDialog">
+      <div class="dialog-box" @click.stop>
+        <h3>清理旧日志</h3>
+        <p class="dialog-message">
+          确定要删除 <strong>{{ deleteOldLogsDialog.startDate }}</strong> 到 <strong>{{ deleteOldLogsDialog.endDate }}</strong> 的所有日志吗？
+        </p>
+        <p class="dialog-info">此操作将删除7天前的所有日志，仅保留最近7天的日志。</p>
+        <p class="dialog-warning">此操作不可恢复！</p>
+        <div class="dialog-actions">
+          <button @click="closeDeleteOldLogsDialog" class="btn-cancel">取消</button>
+          <button @click="confirmDeleteOldLogs" class="btn-confirm-delete" :disabled="deleteOldLogsDialog.deleting">
+            {{ deleteOldLogsDialog.deleting ? '删除中...' : '确认删除' }}
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -260,6 +280,13 @@ const deleteDialog = ref({
   deleting: false
 })
 
+const deleteOldLogsDialog = ref({
+  show: false,
+  deleting: false,
+  startDate: '',
+  endDate: ''
+})
+
 // 计算属性
 const canDelete = computed(() => {
   return filters.value.startDate && filters.value.endDate
@@ -267,7 +294,11 @@ const canDelete = computed(() => {
 
 // 初始化日期范围
 function initDateRange() {
-  const today = new Date().toISOString().split('T')[0]
+  const now = new Date()
+  const year = now.getFullYear()
+  const month = String(now.getMonth() + 1).padStart(2, '0')
+  const day = String(now.getDate()).padStart(2, '0')
+  const today = `${year}-${month}-${day}`
   filters.value.startDate = today
   filters.value.endDate = today
 }
@@ -285,9 +316,30 @@ async function applyFilters() {
 }
 
 // 加载今日日志
-function loadToday() {
+async function loadToday() {
   initDateRange()
-  applyFilters()
+  await applyFilters()
+}
+
+// 加载最近七天日志
+async function loadRecent7Days() {
+  const now = new Date()
+  const year = now.getFullYear()
+  const month = String(now.getMonth() + 1).padStart(2, '0')
+  const day = String(now.getDate()).padStart(2, '0')
+  const today = `${year}-${month}-${day}`
+
+  // 计算7天前的日期
+  const sevenDaysAgo = new Date(now)
+  sevenDaysAgo.setDate(now.getDate() - 6)  // 今天+往前6天=共7天
+  const pastYear = sevenDaysAgo.getFullYear()
+  const pastMonth = String(sevenDaysAgo.getMonth() + 1).padStart(2, '0')
+  const pastDay = String(sevenDaysAgo.getDate()).padStart(2, '0')
+  const startDate = `${pastYear}-${pastMonth}-${pastDay}`
+
+  filters.value.startDate = startDate
+  filters.value.endDate = today
+  await applyFilters()
 }
 
 // 加载日志数据
@@ -481,6 +533,51 @@ function closeDeleteDialog() {
   }
 }
 
+// 删除7天前日志对话框
+function showDeleteOldLogsDialog() {
+  const now = new Date()
+  const sevenDaysAgo = new Date(now)
+  sevenDaysAgo.setDate(now.getDate() - 7)
+
+  const year = sevenDaysAgo.getFullYear()
+  const month = String(sevenDaysAgo.getMonth() + 1).padStart(2, '0')
+  const day = String(sevenDaysAgo.getDate()).padStart(2, '0')
+  const endDate = `${year}-${month}-${day}`
+
+  deleteOldLogsDialog.value.endDate = endDate
+  deleteOldLogsDialog.value.startDate = '2024-01-01'  // 设置一个很早的起始日期
+  deleteOldLogsDialog.value.show = true
+}
+
+function closeDeleteOldLogsDialog() {
+  if (!deleteOldLogsDialog.value.deleting) {
+    deleteOldLogsDialog.value.show = false
+  }
+}
+
+async function confirmDeleteOldLogs() {
+  deleteOldLogsDialog.value.deleting = true
+
+  try {
+    const response = await axios.delete(`${API_BASE}/api/logs`, {
+      params: {
+        startDate: deleteOldLogsDialog.value.startDate,
+        endDate: deleteOldLogsDialog.value.endDate
+      }
+    })
+
+    if (response.data.success) {
+      alert(`成功删除 ${response.data.deletedCount} 个日志文件`)
+      deleteOldLogsDialog.value.show = false
+      await loadLogs()
+    }
+  } catch (err) {
+    alert('删除日志失败: ' + (err.response?.data?.error || err.message))
+  } finally {
+    deleteOldLogsDialog.value.deleting = false
+  }
+}
+
 async function confirmDelete() {
   deleteDialog.value.deleting = true
 
@@ -505,9 +602,9 @@ async function confirmDelete() {
 }
 
 // 生命周期
-onMounted(() => {
-  initDateRange()
-  loadLogs()
+onMounted(async () => {
+  await initDateRange()
+  await loadLogs()
 })
 
 onUnmounted(() => {
@@ -660,6 +757,14 @@ h2 {
   background: #0b7dda;
 }
 
+.btn-action.btn-recent {
+  background: #9C27B0;
+}
+
+.btn-action.btn-recent:hover {
+  background: #7B1FA2;
+}
+
 .btn-action.btn-export {
   background: #FF9800;
 }
@@ -674,6 +779,14 @@ h2 {
 
 .btn-action.btn-delete:hover:not(:disabled) {
   background: #d32f2f;
+}
+
+.btn-action.btn-delete-old {
+  background: #D32F2F;
+}
+
+.btn-action.btn-delete-old:hover {
+  background: #B71C1C;
 }
 
 .btn-action:disabled {
@@ -995,6 +1108,13 @@ h2 {
   color: #f44336;
   font-size: 14px;
   font-weight: 500;
+}
+
+.dialog-info {
+  margin: 0 0 8px 0;
+  color: #2196F3;
+  font-size: 14px;
+  font-weight: 400;
 }
 
 .dialog-actions {
