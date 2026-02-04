@@ -11,6 +11,7 @@
         <router-link to="/settings/defaults">用户设置</router-link>
         <router-link to="/prompts">提示词库</router-link>
         <router-link to="/logs">日志</router-link>
+        <router-link to="/stats">统计</router-link>
       </div>
     </nav>
     <main class="main-content">

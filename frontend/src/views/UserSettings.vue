@@ -119,6 +119,44 @@
         </div>
       </div>
 
+      <div v-else-if="selectedSetting === 'defaultStyle'" class="details-content">
+        <div class="details-header">
+          <h2>默认主题配置</h2>
+        </div>
+
+        <div class="settings-form">
+          <section class="settings-section">
+            <h3>消息显示风格</h3>
+            <label>
+              默认主题:
+              <select v-model="settings.defaultStyle" class="input-field">
+                <option value="">默认（简洁风格）</option>
+                <option value="notion">Notion（文档风格）</option>
+                <option value="konayuki">Konayuki（温暖风格）</option>
+                <option value="everforest">Everforest（自然绿意）</option>
+                <option value="happysimple">HappySimple（活泼可爱）</option>
+              </select>
+            </label>
+            <p class="hint-text">设置后，聊天页面将自动使用此主题显示 AI 回复内容</p>
+
+            <!-- 主题预览 -->
+            <div v-if="settings.defaultStyle" class="style-preview-box">
+              <h4>主题预览</h4>
+              <div class="style-preview-content">
+                <div class="preview-header">
+                  <span class="preview-icon">{{ getStyleConfig(settings.defaultStyle)?.icon }}</span>
+                  <span class="preview-name">{{ getStyleConfig(settings.defaultStyle)?.name }}</span>
+                </div>
+                <div class="preview-desc">{{ getStyleConfig(settings.defaultStyle)?.description }}</div>
+              </div>
+            </div>
+          </section>
+
+          <button @click="saveSettings" class="btn-save">保存设置</button>
+          <div v-if="saveMessage" class="save-message">{{ saveMessage }}</div>
+        </div>
+      </div>
+
       <div v-else-if="selectedSetting === 'sourceLanguages'" class="details-content">
         <div class="details-header">
           <h2>源语言管理</h2>
@@ -325,12 +363,14 @@
 <script setup>
 import { ref, onMounted, computed } from 'vue'
 import axios from 'axios'
+import contentStyleManager from '../utils/contentStyleManager.js'
 
 const settings = ref({
   defaultParams: { temperature: 0.7, max_tokens: 2000, top_p: 1 },
   globalFrequency: 10,
   defaultModel: '',
   defaultPromptId: '',
+  defaultStyle: '',
   translateDefaultModel: '',
   translateDefaultPromptId: '',
   translatePollingEnabled: false,
@@ -364,6 +404,12 @@ const selectedPromptPreview = computed(() => {
   return allPrompts.value.find(p => p.id === settings.value.defaultPromptId)
 })
 
+// 获取风格配置
+function getStyleConfig(styleId) {
+  if (!styleId) return null
+  return contentStyleManager.getStyle(styleId)
+}
+
 // 检查翻译模型是否支持轮询
 const isTranslateModelPollingSupported = computed(() => {
   if (!settings.value.translateDefaultModel) return false
@@ -392,6 +438,12 @@ const settingsItems = ref([
     name: '默认模型',
     description: '新对话默认模型',
     icon: '🤖'
+  },
+  {
+    id: 'defaultStyle',
+    name: '默认主题',
+    description: '消息显示风格',
+    icon: '🎨'
   },
   {
     id: 'defaultPrompt',
@@ -867,6 +919,52 @@ onMounted(() => {
   background: #f8f9fa;
   border-radius: 10px;
   border: 2px solid #e0e0e0;
+}
+
+.style-preview-box {
+  margin-top: 20px;
+  padding: 16px;
+  background: #f8f9fa;
+  border-radius: 10px;
+  border: 2px solid #e0e0e0;
+}
+
+.style-preview-content {
+  color: #495057;
+  font-size: 13px;
+  line-height: 1.6;
+  max-height: 200px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  background: white;
+  padding: 12px;
+  border-radius: 6px;
+}
+
+.preview-header {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-bottom: 10px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid #dee2e6;
+}
+
+.preview-icon {
+  font-size: 24px;
+  line-height: 1;
+}
+
+.preview-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: #333;
+}
+
+.preview-desc {
+  color: #6c757d;
+  font-size: 12px;
 }
 
 .prompt-preview-box h4 {

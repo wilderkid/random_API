@@ -1,0 +1,997 @@
+/*
+ * API 设置页面 - 深色科技风格
+ * 类似VS Code的深色主题，科技感强
+ */
+
+/* ==================== 根变量 ==================== */
+.api-settings-container.api-style-dark,
+.api-settings-container.api-style-dark * {
+  --ad-bg: #1e1e1e;
+  --ad-surface: #252526;
+  --ad-surface-hover: #2d2d30;
+  --ad-surface-active: #37373d;
+  --ad-border: #3e3e42;
+  --ad-border-hover: #4e4e52;
+  --ad-text-primary: #cccccc;
+  --ad-text-secondary: #969696;
+  --ad-text-tertiary: #6e6e6e;
+  --ad-primary: #007acc;
+  --ad-primary-hover: #0098ff;
+  --ad-primary-fade: rgba(0, 122, 204, 0.15);
+  --ad-success: #4ec9b0;
+  --ad-success-hover: #3db89f;
+  --ad-success-fade: rgba(78, 201, 176, 0.15);
+  --ad-warning: #dcdcaa;
+  --ad-warning-hover: #c5c5a3;
+  --ad-danger: #f48771;
+  --ad-danger-hover: #d97460;
+  --ad-danger-fade: rgba(244, 135, 113, 0.15);
+  --ad-info: #75beff;
+  --ad-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --ad-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+  --ad-shadow-lg: 0 4px 16px rgba(0, 0, 0, 0.5);
+  --ad-glow-sm: 0 0 8px rgba(0, 122, 204, 0.3);
+  --ad-glow: 0 0 16px rgba(0, 122, 204, 0.4);
+  --ad-radius-sm: 4px;
+  --ad-radius: 8px;
+  --ad-radius-lg: 12px;
+  --ad-transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+
+  --ad-font-body: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Microsoft YaHei", sans-serif;
+  --ad-font-mono: ui-monospace, "JetBrains Mono", "SFMono-Regular",
+    "Menlo", "Consolas", monospace;
+}
+
+/* ==================== 基础样式 ==================== */
+.api-settings-container.api-style-dark {
+  font-family: var(--ad-font-body);
+  background: var(--ad-bg);
+  color: var(--ad-text-primary);
+  height: 100vh;
+  display: flex;
+}
+
+/* ==================== 左侧边栏 ==================== */
+.api-settings-container.api-style-dark .providers-sidebar {
+  width: 320px;
+  background: var(--ad-surface);
+  border-right: 1px solid var(--ad-border);
+  display: flex;
+  flex-direction: column;
+  z-index: 10;
+}
+
+.api-settings-container.api-style-dark .sidebar-header {
+  padding: 20px;
+  border-bottom: 1px solid var(--ad-border);
+}
+
+/* 搜索框 */
+.api-settings-container.api-style-dark .search-input {
+  width: 100%;
+  padding: 12px 16px;
+  border: 1px solid var(--ad-border);
+  border-radius: var(--ad-radius-sm);
+  background: var(--ad-bg);
+  color: var(--ad-text-primary);
+  font-size: 14px;
+  transition: var(--ad-transition);
+  margin-bottom: 16px;
+}
+
+.api-settings-container.api-style-dark .search-input:focus {
+  outline: none;
+  border-color: var(--ad-primary);
+  box-shadow: var(--ad-glow-sm);
+}
+
+.api-settings-container.api-style-dark .search-input::placeholder {
+  color: var(--ad-text-tertiary);
+}
+
+/* 按钮组 */
+.api-settings-container.api-style-dark .button-group {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.api-settings-container.api-style-dark .btn-add-provider,
+.api-settings-container.api-style-dark .btn-import,
+.api-settings-container.api-style-dark .btn-export,
+.api-settings-container.api-style-dark .btn-manage-groups {
+  padding: 8px 14px;
+  border: 1px solid transparent;
+  border-radius: var(--ad-radius-sm);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: var(--ad-transition);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  color: white;
+  background: linear-gradient(135deg, rgba(255,255,255,0.1) 0%, rgba(255,255,255,0.05) 100%);
+  backdrop-filter: blur(10px);
+}
+
+.api-settings-container.api-style-dark .btn-add-provider {
+  background: linear-gradient(135deg, var(--ad-primary) 0%, #0066cc 100%);
+  box-shadow: var(--ad-glow-sm);
+}
+
+.api-settings-container.api-style-dark .btn-add-provider:hover {
+  background: linear-gradient(135deg, var(--ad-primary-hover) 0%, #0077dd 100%);
+  box-shadow: var(--ad-glow);
+  transform: translateY(-1px);
+}
+
+.api-settings-container.api-style-dark .btn-import {
+  background: linear-gradient(135deg, var(--ad-info) 0%, #5aa5df 100%);
+}
+
+.api-settings-container.api-style-dark .btn-import:hover {
+  background: linear-gradient(135deg, #85c8ff 0%, #6ab5ee 100%);
+  transform: translateY(-1px);
+}
+
+.api-settings-container.api-style-dark .btn-export {
+  background: linear-gradient(135deg, var(--ad-warning) 0%, #c5c5a3 100%);
+  color: #1e1e1e;
+}
+
+.api-settings-container.api-style-dark .btn-export:hover {
+  background: linear-gradient(135deg, #e5e5b8 0%, #d5d5b3 100%);
+  transform: translateY(-1px);
+}
+
+.api-settings-container.api-style-dark .btn-manage-groups {
+  background: linear-gradient(135deg, #6c757d 0%, #5a6268 100%);
+}
+
+.api-settings-container.api-style-dark .btn-manage-groups:hover {
+  background: linear-gradient(135deg, #7c858d 0%, #6a7278 100%);
+  transform: translateY(-1px);
+}
+
+/* 刷新所有按钮 */
+.api-settings-container.api-style-dark .btn-refresh-all {
+  width: 100%;
+  padding: 10px 16px;
+  border: 1px solid var(--ad-border);
+  border-radius: var(--ad-radius-sm);
+  background: var(--ad-surface);
+  color: var(--ad-text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: var(--ad-transition);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.api-settings-container.api-style-dark .btn-refresh-all:hover:not(:disabled) {
+  background: var(--ad-surface-hover);
+  color: var(--ad-text-primary);
+  border-color: var(--ad-border-hover);
+  box-shadow: var(--ad-glow-sm);
+}
+
+.api-settings-container.api-style-dark .btn-refresh-all:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ==================== 提供商列表 ==================== */
+.api-settings-container.api-style-dark .providers-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px;
+}
+
+.api-settings-container.api-style-dark .providers-list::-webkit-scrollbar {
+  width: 6px;
+}
+
+.api-settings-container.api-style-dark .providers-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.api-settings-container.api-style-dark .providers-list::-webkit-scrollbar-thumb {
+  background: var(--ad-border);
+  border-radius: 3px;
+}
+
+/* 分组标题 - 霓虹效果 */
+.api-settings-container.api-style-dark .group-header {
+  display: flex;
+  align-items: center;
+  padding: 10px 14px;
+  background: transparent;
+  cursor: pointer;
+  font-weight: 500;
+  color: var(--ad-text-secondary);
+  margin-bottom: 4px;
+  border-radius: var(--ad-radius-sm);
+  transition: var(--ad-transition);
+  border: 1px solid transparent;
+}
+
+.api-settings-container.api-style-dark .group-header:hover {
+  background: var(--ad-surface-hover);
+  color: var(--ad-text-primary);
+  border-color: var(--ad-border);
+  box-shadow: 0 0 12px rgba(0, 122, 204, 0.1);
+}
+
+.api-settings-container.api-style-dark .group-expand-icon {
+  margin-right: 8px;
+  font-size: 10px;
+  color: var(--ad-primary);
+}
+
+.api-settings-container.api-style-dark .group-name {
+  flex: 1;
+  font-size: 13px;
+}
+
+.api-settings-container.api-style-dark .group-count {
+  background: var(--ad-surface-active);
+  color: var(--ad-primary);
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 600;
+  border: 1px solid var(--ad-primary-fade);
+  box-shadow: 0 0 8px rgba(0, 122, 204, 0.3);
+}
+
+/* 提供商项 - 卡片式设计 */
+.api-settings-container.api-style-dark .provider-item {
+  display: flex;
+  align-items: center;
+  padding: 12px 14px;
+  margin-bottom: 8px;
+  background: var(--ad-surface);
+  border-radius: var(--ad-radius);
+  border: 1px solid var(--ad-border);
+  cursor: pointer;
+  transition: var(--ad-transition);
+  position: relative;
+  overflow: hidden;
+}
+
+.api-settings-container.api-style-dark .provider-item::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 3px;
+  height: 100%;
+  background: transparent;
+  transition: var(--ad-transition);
+}
+
+.api-settings-container.api-style-dark .provider-item:hover {
+  border-color: var(--ad-primary);
+  box-shadow: 0 0 16px rgba(0, 122, 204, 0.2);
+  transform: translateX(2px);
+}
+
+.api-settings-container.api-style-dark .provider-item.active::before {
+  background: var(--ad-primary);
+  box-shadow: 0 0 8px var(--ad-primary);
+}
+
+.api-settings-container.api-style-dark .provider-item.active {
+  background: var(--ad-surface-active);
+  border-color: var(--ad-primary);
+}
+
+.api-settings-container.api-style-dark .provider-item.no-models {
+  border-color: var(--ad-danger);
+}
+
+.api-settings-container.api-style-dark .provider-item.no-models::before {
+  background: var(--ad-danger);
+}
+
+.api-settings-container.api-style-dark .provider-item.no-models:hover {
+  box-shadow: 0 0 16px rgba(244, 135, 113, 0.3);
+}
+
+.api-settings-container.api-style-dark .provider-item.no-models.active::before {
+  background: var(--ad-danger);
+  box-shadow: 0 0 8px var(--ad-danger);
+}
+
+/* 提供商图标 - 发光效果 */
+.api-settings-container.api-style-dark .provider-item-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: var(--ad-radius-sm);
+  background: var(--ad-bg);
+  color: var(--ad-text-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+  margin-right: 12px;
+  font-size: 14px;
+  border: 1px solid var(--ad-border);
+  transition: var(--ad-transition);
+}
+
+.api-settings-container.api-style-dark .provider-item.active .provider-item-icon {
+  background: var(--ad-primary);
+  color: white;
+  border-color: var(--ad-primary);
+  box-shadow: 0 0 12px rgba(0, 122, 204, 0.5);
+}
+
+.api-settings-container.api-style-dark .provider-item.no-models .provider-item-icon {
+  border-color: var(--ad-danger);
+  color: var(--ad-danger);
+}
+
+.api-settings-container.api-style-dark .provider-item.no-models.active .provider-item-icon {
+  background: var(--ad-danger);
+  color: #1e1e1e;
+  box-shadow: 0 0 12px rgba(244, 135, 113, 0.5);
+}
+
+/* 提供商信息 */
+.api-settings-container.api-style-dark .provider-item-info {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.api-settings-container.api-style-dark .provider-item-name {
+  font-weight: 500;
+  color: var(--ad-text-primary);
+  font-size: 14px;
+}
+
+.api-settings-container.api-style-dark .model-count-badge {
+  background: var(--ad-bg);
+  color: var(--ad-success);
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 600;
+  min-width: 20px;
+  text-align: center;
+  border: 1px solid var(--ad-success-fade);
+}
+
+.api-settings-container.api-style-dark .model-count-badge.zero-models {
+  color: var(--ad-danger);
+  border-color: var(--ad-danger-fade);
+  background: rgba(244, 135, 113, 0.1);
+}
+
+/* 提供商状态 */
+.api-settings-container.api-style-dark .provider-item-status {
+  font-size: 11px;
+  padding: 4px 8px;
+  border-radius: var(--ad-radius-sm);
+  font-weight: 500;
+}
+
+.api-settings-container.api-style-dark .provider-item-status.active {
+  background: var(--ad-success-fade);
+  color: var(--ad-success);
+  border: 1px solid var(--ad-success-fade);
+}
+
+.api-settings-container.api-style-dark .provider-item-status.disabled {
+  background: var(--ad-danger-fade);
+  color: var(--ad-danger);
+  border: 1px solid var(--ad-danger-fade);
+}
+
+/* ==================== 右侧详情面板 ==================== */
+.api-settings-container.api-style-dark .provider-details-panel {
+  flex: 1;
+  padding: 32px;
+  overflow-y: auto;
+  background: var(--ad-bg);
+}
+
+.api-settings-container.api-style-dark .provider-details-panel::-webkit-scrollbar {
+  width: 6px;
+}
+
+.api-settings-container.api-style-dark .provider-details-panel::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.api-settings-container.api-style-dark .provider-details-panel::-webkit-scrollbar-thumb {
+  background: var(--ad-border);
+  border-radius: 3px;
+}
+
+/* 空状态 */
+.api-settings-container.api-style-dark .empty-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--ad-text-tertiary);
+  font-size: 15px;
+}
+
+/* 详情头部 */
+.api-settings-container.api-style-dark .details-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 24px;
+  padding-bottom: 16px;
+  border-bottom: 2px solid var(--ad-border);
+}
+
+.api-settings-container.api-style-dark .details-header h2 {
+  margin: 0;
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--ad-text-primary);
+  text-shadow: 0 0 20px rgba(0, 122, 204, 0.3);
+}
+
+/* 头部操作按钮 */
+.api-settings-container.api-style-dark .header-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.api-settings-container.api-style-dark .btn-toggle {
+  padding: 8px 16px;
+  border: 1px solid var(--ad-border);
+  border-radius: var(--ad-radius-sm);
+  background: var(--ad-surface);
+  color: var(--ad-text-secondary);
+  cursor: pointer;
+  transition: var(--ad-transition);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.api-settings-container.api-style-dark .btn-toggle:hover {
+  background: var(--ad-surface-hover);
+  border-color: var(--ad-border-hover);
+  color: var(--ad-text-primary);
+}
+
+.api-settings-container.api-style-dark .btn-icon {
+  padding: 8px 12px;
+  border: 1px solid var(--ad-border);
+  border-radius: var(--ad-radius-sm);
+  background: var(--ad-surface);
+  color: var(--ad-text-secondary);
+  cursor: pointer;
+  transition: var(--ad-transition);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  font-size: 14px;
+}
+
+.api-settings-container.api-style-dark .btn-icon:hover {
+  background: var(--ad-surface-hover);
+  color: var(--ad-text-primary);
+  border-color: var(--ad-border-hover);
+  box-shadow: var(--ad-glow-sm);
+}
+
+/* 配置区块 */
+.api-settings-container.api-style-dark .config-section {
+  margin-bottom: 24px;
+  padding: 20px;
+  background: var(--ad-surface);
+  border-radius: var(--ad-radius);
+  border: 1px solid var(--ad-border);
+  box-shadow: var(--ad-shadow-sm);
+}
+
+.api-settings-container.api-style-dark .config-section label {
+  display: block;
+  font-weight: 500;
+  margin-bottom: 8px;
+  color: var(--ad-text-primary);
+  font-size: 14px;
+}
+
+.api-settings-container.api-style-dark .config-section .hint {
+  font-size: 12px;
+  color: var(--ad-text-tertiary);
+  margin-top: 4px;
+  display: block;
+}
+
+/* 输入框 */
+.api-settings-container.api-style-dark .input-field {
+  flex: 1;
+  padding: 10px 14px;
+  border: 1px solid var(--ad-border);
+  border-radius: var(--ad-radius-sm);
+  background: var(--ad-bg);
+  color: var(--ad-text-primary);
+  font-size: 14px;
+  transition: var(--ad-transition);
+}
+
+.api-settings-container.api-style-dark .input-field:focus {
+  outline: none;
+  border-color: var(--ad-primary);
+  box-shadow: var(--ad-glow-sm);
+}
+
+.api-settings-container.api-style-dark .input-field[readonly] {
+  background: var(--ad-surface);
+  color: var(--ad-text-secondary);
+  cursor: default;
+}
+
+/* 输入组 */
+.api-settings-container.api-style-dark .input-group {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.api-settings-container.api-style-dark .btn-icon-small,
+.api-settings-container.api-style-dark .btn-test {
+  padding: 8px 14px;
+  border: 1px solid var(--ad-border);
+  border-radius: var(--ad-radius-sm);
+  background: var(--ad-surface);
+  color: var(--ad-text-secondary);
+  cursor: pointer;
+  transition: var(--ad-transition);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.api-settings-container.api-style-dark .btn-test {
+  background: linear-gradient(135deg, var(--ad-success) 0%, #3db89f 100%);
+  color: #1e1e1e;
+  border-color: transparent;
+}
+
+.api-settings-container.api-style-dark .btn-test:hover {
+  background: linear-gradient(135deg, var(--ad-success-hover) 0%, #2ca78f 100%);
+  box-shadow: 0 0 12px rgba(78, 201, 176, 0.4);
+}
+
+.api-settings-container.api-style-dark .btn-test:disabled {
+  background: var(--ad-border);
+  color: var(--ad-text-tertiary);
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.api-settings-container.api-style-dark .btn-icon-small:hover {
+  background: var(--ad-surface-hover);
+  color: var(--ad-text-primary);
+  border-color: var(--ad-border-hover);
+}
+
+/* 复选框标签 */
+.api-settings-container.api-style-dark .checkbox-label {
+  display: flex !important;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-weight: 500;
+  color: var(--ad-text-primary);
+  font-size: 14px;
+}
+
+.api-settings-container.api-style-dark .checkbox-label input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  cursor: pointer;
+  margin: 0;
+  accent-color: var(--ad-primary);
+}
+
+/* ==================== 模型配置 ==================== */
+.api-settings-container.api-style-dark .models-config {
+  background: var(--ad-surface);
+  border-radius: var(--ad-radius);
+  padding: 20px;
+  border: 1px solid var(--ad-border);
+  box-shadow: var(--ad-shadow-sm);
+}
+
+.api-settings-container.api-style-dark .models-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.api-settings-container.api-style-dark .models-toolbar label {
+  font-weight: 500;
+  color: var(--ad-text-primary);
+  font-size: 14px;
+}
+
+.api-settings-container.api-style-dark .count {
+  background: var(--ad-primary);
+  color: white;
+  padding: 2px 10px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 600;
+  box-shadow: 0 0 8px rgba(0, 122, 204, 0.4);
+}
+
+.api-settings-container.api-style-dark .search-input-small {
+  padding: 8px 12px;
+  border: 1px solid var(--ad-border);
+  border-radius: var(--ad-radius-sm);
+  background: var(--ad-bg);
+  color: var(--ad-text-primary);
+  font-size: 13px;
+  flex: 1;
+  min-width: 200px;
+}
+
+.api-settings-container.api-style-dark .search-input-small:focus {
+  outline: none;
+  border-color: var(--ad-primary);
+  box-shadow: var(--ad-glow-sm);
+}
+
+/* 已添加模型容器 */
+.api-settings-container.api-style-dark .added-models-container {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.api-settings-container.api-style-dark .added-model-group {
+  background: var(--ad-bg);
+  padding: 12px;
+  border-radius: var(--ad-radius-sm);
+  border: 1px solid var(--ad-border);
+}
+
+.api-settings-container.api-style-dark .added-group-header {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ad-text-secondary);
+  margin-bottom: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.api-settings-container.api-style-dark .added-models-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.api-settings-container.api-style-dark .added-model-card {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  background: var(--ad-surface);
+  border-radius: var(--ad-radius-sm);
+  border: 1px solid var(--ad-border);
+  transition: var(--ad-transition);
+}
+
+.api-settings-container.api-style-dark .added-model-card:hover {
+  border-color: var(--ad-primary);
+  box-shadow: 0 0 12px rgba(0, 122, 204, 0.3);
+}
+
+.api-settings-container.api-style-dark .model-icon {
+  font-size: 16px;
+}
+
+.api-settings-container.api-style-dark .model-name {
+  font-family: var(--ad-font-mono);
+  font-size: 13px;
+  color: var(--ad-text-primary);
+  flex: 1;
+}
+
+.api-settings-container.api-style-dark .model-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.api-settings-container.api-style-dark .btn-icon-tiny {
+  padding: 6px 10px;
+  border: 1px solid var(--ad-border);
+  border-radius: var(--ad-radius-sm);
+  background: var(--ad-surface);
+  color: var(--ad-text-secondary);
+  cursor: pointer;
+  transition: var(--ad-transition);
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.api-settings-container.api-style-dark .btn-icon-tiny:hover {
+  background: var(--ad-surface-hover);
+  color: var(--ad-text-primary);
+  border-color: var(--ad-border-hover);
+  box-shadow: var(--ad-glow-sm);
+}
+
+/* 可用模型面板 */
+.api-settings-container.api-style-dark .available-models-panel {
+  max-height: 400px;
+  overflow-y: auto;
+  border: 1px solid var(--ad-border);
+  border-radius: var(--ad-radius-sm);
+  background: var(--ad-bg);
+  padding: 8px;
+}
+
+.api-settings-container.api-style-dark .model-group {
+  margin-bottom: 8px;
+}
+
+.api-settings-container.api-style-dark .model-group:last-child {
+  margin-bottom: 0;
+}
+
+.api-settings-container.api-style-dark .model-group > .group-header {
+  padding: 10px 14px;
+  background: var(--ad-surface);
+  border-radius: var(--ad-radius-sm);
+  cursor: pointer;
+  font-weight: 500;
+  color: var(--ad-text-secondary);
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  transition: var(--ad-transition);
+  border: 1px solid var(--ad-border);
+}
+
+.api-settings-container.api-style-dark .model-group > .group-header:hover {
+  background: var(--ad-surface-hover);
+  color: var(--ad-text-primary);
+  border-color: var(--ad-border-hover);
+}
+
+.api-settings-container.api-style-dark .group-models {
+  padding: 8px 12px;
+}
+
+.api-settings-container.api-style-dark .model-row {
+  display: flex;
+  align-items: center;
+  padding: 10px 14px;
+  background: var(--ad-surface);
+  border-radius: var(--ad-radius-sm);
+  margin-bottom: 4px;
+  gap: 12px;
+  transition: var(--ad-transition);
+  border: 1px solid transparent;
+}
+
+.api-settings-container.api-style-dark .model-row:hover {
+  background: var(--ad-surface-hover);
+  border-color: var(--ad-border);
+  box-shadow: 0 0 12px rgba(0, 122, 204, 0.15);
+}
+
+.api-settings-container.api-style-dark .model-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.api-settings-container.api-style-dark .icon-btn,
+.api-settings-container.api-style-dark .btn-toggle-model {
+  padding: 6px 12px;
+  border: 1px solid var(--ad-border);
+  border-radius: var(--ad-radius-sm);
+  background: var(--ad-surface);
+  color: var(--ad-text-secondary);
+  cursor: pointer;
+  transition: var(--ad-transition);
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.api-settings-container.api-style-dark .btn-toggle-model {
+  background: linear-gradient(135deg, var(--ad-primary) 0%, #0066cc 100%);
+  color: white;
+  border-color: transparent;
+  font-weight: 600;
+}
+
+.api-settings-container.api-style-dark .btn-toggle-model:hover {
+  background: linear-gradient(135deg, var(--ad-primary-hover) 0%, #0077dd 100%);
+  box-shadow: 0 0 12px rgba(0, 122, 204, 0.4);
+}
+
+.api-settings-container.api-style-dark .icon-btn:hover {
+  background: var(--ad-surface-hover);
+  color: var(--ad-text-primary);
+  border-color: var(--ad-border-hover);
+  box-shadow: var(--ad-glow-sm);
+}
+
+/* ==================== 模态框 ==================== */
+.api-settings-container.api-style-dark .modal {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  backdrop-filter: blur(4px);
+}
+
+.api-settings-container.api-style-dark .modal-content {
+  background: var(--ad-surface);
+  border-radius: var(--ad-radius-lg);
+  padding: 28px;
+  max-width: 480px;
+  width: 90%;
+  box-shadow: var(--ad-shadow-lg);
+  border: 1px solid var(--ad-border);
+}
+
+.api-settings-container.api-style-dark .modal-content.modal-large {
+  max-width: 600px;
+}
+
+.api-settings-container.api-style-dark .modal-content h3 {
+  margin: 0 0 20px 0;
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--ad-text-primary);
+  border-bottom: 1px solid var(--ad-border);
+  padding-bottom: 12px;
+}
+
+.api-settings-container.api-style-dark .modal-content label {
+  display: block;
+  font-weight: 500;
+  margin-bottom: 8px;
+  color: var(--ad-text-primary);
+  font-size: 14px;
+}
+
+/* 高级设置 */
+.api-settings-container.api-style-dark .advanced-settings {
+  border: 1px solid var(--ad-border);
+  border-radius: var(--ad-radius);
+  overflow: hidden;
+  margin-top: 12px;
+}
+
+.api-settings-container.api-style-dark .advanced-toggle {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 14px;
+  cursor: pointer;
+  background: var(--ad-bg);
+  color: var(--ad-text-secondary);
+  font-size: 13px;
+  transition: var(--ad-transition);
+  border: none;
+}
+
+.api-settings-container.api-style-dark .advanced-toggle:hover {
+  background: var(--ad-surface);
+  color: var(--ad-text-primary);
+}
+
+.api-settings-container.api-style-dark .advanced-content {
+  padding: 14px;
+  border-top: 1px solid var(--ad-border);
+  background: var(--ad-surface);
+}
+
+.api-settings-container.api-style-dark .advanced-content .hint {
+  display: block;
+  margin-bottom: 8px;
+}
+
+/* 模态框按钮 */
+.api-settings-container.api-style-dark .modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 24px;
+}
+
+.api-settings-container.api-style-dark .btn-save {
+  padding: 10px 20px;
+  border: none;
+  border-radius: var(--ad-radius-sm);
+  background: linear-gradient(135deg, var(--ad-primary) 0%, #0066cc 100%);
+  color: white;
+  cursor: pointer;
+  transition: var(--ad-transition);
+  font-size: 14px;
+  font-weight: 500;
+  box-shadow: var(--ad-glow-sm);
+}
+
+.api-settings-container.api-style-dark .btn-save:hover {
+  background: linear-gradient(135deg, var(--ad-primary-hover) 0%, #0077dd 100%);
+  box-shadow: var(--ad-glow);
+  transform: translateY(-1px);
+}
+
+.api-settings-container.api-style-dark .btn-save:disabled {
+  background: var(--ad-border);
+  color: var(--ad-text-tertiary);
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
+.api-settings-container.api-style-dark .btn-cancel {
+  padding: 10px 20px;
+  border: 1px solid var(--ad-border);
+  border-radius: var(--ad-radius-sm);
+  background: var(--ad-surface);
+  color: var(--ad-text-secondary);
+  cursor: pointer;
+  transition: var(--ad-transition);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.api-settings-container.api-style-dark .btn-cancel:hover {
+  background: var(--ad-surface-hover);
+  color: var(--ad-text-primary);
+  border-color: var(--ad-border-hover);
+}
+
+/* ==================== 响应式 ==================== */
+@media (max-width: 768px) {
+  .api-settings-container.api-style-dark {
+    flex-direction: column;
+  }
+
+  .api-settings-container.api-style-dark .providers-sidebar {
+    width: 100%;
+    height: auto;
+    max-height: 40vh;
+    border-right: none;
+    border-bottom: 1px solid var(--ad-border);
+  }
+
+  .api-settings-container.api-style-dark .provider-details-panel {
+    padding: 16px;
+  }
+
+  .api-settings-container.api-style-dark .config-section,
+  .api-settings-container.api-style-dark .models-config {
+    padding: 16px;
+  }
+}

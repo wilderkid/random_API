@@ -1,8 +1,31 @@
 <template>
-  <div class="api-settings-container">
+  <div class="api-settings-container" :class="currentApiStyleConfig?.cssClass || 'api-style-simple'">
     <!-- 左侧提供商列表 -->
     <div class="providers-sidebar">
       <div class="sidebar-header">
+        <!-- 风格选择器 -->
+        <div class="api-style-selector" ref="apiStyleSelectorRef">
+          <div class="api-style-select-trigger" @click="toggleApiStyleDropdown">
+            <span class="api-style-icon">{{ currentApiStyleConfig?.icon || '✨' }}</span>
+            <span class="selected-api-style">{{ currentApiStyleConfig?.name || '简约风格' }}</span>
+            <span class="dropdown-arrow">{{ showApiStyleDropdown ? '▲' : '▼' }}</span>
+          </div>
+          <div v-if="showApiStyleDropdown" class="api-style-dropdown">
+            <div class="api-style-options">
+              <div
+                v-for="style in availableApiStyles"
+                :key="style.id"
+                :class="['api-style-option', { active: currentApiStyle === style.id }]"
+                @click="selectApiStyle(style.id)"
+                :title="style.description"
+              >
+                <span class="api-style-option-icon">{{ style.icon }}</span>
+                <span class="api-style-option-name">{{ style.name }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <input v-model="searchProvider" placeholder="搜索模型平台名..." class="search-input">
         <div class="button-group">
           <button @click="showAddProvider = true" class="btn-add-provider">+ 添加</button>
@@ -310,8 +333,12 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import axios from 'axios'
+import apiStyleManager from '../utils/apiStyleManager.js'
+import '../styles/api-simple-style.css'
+import '../styles/api-dark-style.css'
+import '../styles/api-dashboard-style.css'
 
 const providers = ref([])
 const groups = ref([])
@@ -333,6 +360,11 @@ const showAddGroup = ref(false)
 const editingGroup = ref(null)
 const groupForm = ref({ name: '', description: '' })
 const isRefreshingAll = ref(false) // 批量刷新状态
+
+// 风格选择相关
+const currentApiStyle = ref(apiStyleManager.getCurrentStyle())
+const showApiStyleDropdown = ref(false)
+const apiStyleSelectorRef = ref(null)
 
 const filteredProviders = computed(() => {
   const query = searchProvider.value.toLowerCase()
@@ -395,15 +427,24 @@ const groupedModels = computed(() => {
 
 const addedModelsGrouped = computed(() => {
   if (!selectedProvider.value?.models) return []
-  
+
   const groups = {}
   selectedProvider.value.models.forEach(model => {
     const groupName = model.id.split(/[-/]/)[0] || 'other'
     if (!groups[groupName]) groups[groupName] = []
     groups[groupName].push(model)
   })
-  
+
   return Object.entries(groups).map(([name, models]) => ({ name, models }))
+})
+
+// 风格相关计算属性
+const currentApiStyleConfig = computed(() => {
+  return apiStyleManager.getStyle(currentApiStyle.value)
+})
+
+const availableApiStyles = computed(() => {
+  return apiStyleManager.getAvailableStyles()
 })
 
 async function loadProviders() {
@@ -835,6 +876,35 @@ async function updateProviderApiType() {
   }
 }
 
+// 风格切换函数
+function toggleApiStyleDropdown() {
+  showApiStyleDropdown.value = !showApiStyleDropdown.value
+}
+
+function selectApiStyle(styleId) {
+  currentApiStyle.value = styleId
+  apiStyleManager.setCurrentStyle(styleId)
+  showApiStyleDropdown.value = false
+  // 保存到用户设置
+  saveApiStyleToSettings(styleId)
+}
+
+// 保存风格到用户设置
+async function saveApiStyleToSettings(styleId) {
+  try {
+    await axios.put('/api/settings', { defaultApiStyle: styleId })
+  } catch (error) {
+    console.error('Error saving API style:', error)
+  }
+}
+
+// 点击外部关闭下拉菜单
+function handleClickOutside(event) {
+  if (apiStyleSelectorRef.value && !apiStyleSelectorRef.value.contains(event.target)) {
+    showApiStyleDropdown.value = false
+  }
+}
+
 function getFullApiUrl(provider) {
   if (!provider) return ''
   const baseUrl = provider.baseUrl.replace(/\/$/, '')
@@ -861,8 +931,27 @@ function getFullApiUrl(provider) {
 }
 
 onMounted(async () => {
+  // 加载风格配置
+  try {
+    const res = await axios.get('/api/settings')
+    const defaultApiStyle = res.data.defaultApiStyle
+    if (defaultApiStyle) {
+      currentApiStyle.value = defaultApiStyle
+      apiStyleManager.setCurrentStyle(defaultApiStyle)
+    }
+  } catch (error) {
+    console.error('Error loading API style:', error)
+  }
+
   await loadGroups()
   await loadProviders()
+
+  // 添加点击外部关闭下拉菜单的监听器
+  document.addEventListener('click', handleClickOutside)
+})
+
+onUnmounted(() => {
+  document.removeEventListener('click', handleClickOutside)
 })
 </script>
 
@@ -903,6 +992,111 @@ onMounted(async () => {
 .advanced-content label {
   display: block;
   margin-top: 8px;
+}
+
+/* ==================== API 风格选择器样式 ==================== */
+.api-style-selector {
+  position: relative;
+  margin-bottom: 12px;
+}
+
+.api-style-select-trigger {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  background: #f8f9fa;
+  border: 1px solid #dee2e6;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s;
+  user-select: none;
+}
+
+.api-style-select-trigger:hover {
+  background: #e9ecef;
+  border-color: #adb5bd;
+}
+
+.api-style-icon {
+  font-size: 16px;
+  flex-shrink: 0;
+}
+
+.selected-api-style {
+  flex: 1;
+  font-size: 14px;
+  font-weight: 500;
+  color: #495057;
+}
+
+.dropdown-arrow {
+  font-size: 10px;
+  color: #6c757d;
+  transition: transform 0.2s;
+}
+
+.api-style-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  background: white;
+  border: 1px solid #dee2e6;
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  z-index: 1000;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.api-style-options {
+  display: flex;
+  flex-direction: column;
+}
+
+.api-style-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  cursor: pointer;
+  transition: all 0.2s;
+  border-bottom: 1px solid #f1f3f5;
+}
+
+.api-style-option:last-child {
+  border-bottom: none;
+}
+
+.api-style-option:hover {
+  background: #f8f9fa;
+}
+
+.api-style-option.active {
+  background: #e7f5ff;
+  color: #007bff;
+}
+
+.api-style-option-icon {
+  font-size: 18px;
+  flex-shrink: 0;
+}
+
+.api-style-option-name {
+  flex: 1;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.api-style-option-desc {
+  font-size: 12px;
+  color: #6c757d;
+  margin-left: auto;
+  max-width: 150px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .api-settings-container {

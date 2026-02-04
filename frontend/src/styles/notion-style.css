@@ -1,0 +1,319 @@
+/*
+ * Notion 风格 - 消息内容样式
+ * 基于 notion_style_markdown.css 改编
+ */
+
+/* ==================== Notion 风格根变量 ==================== */
+.message-content.style-notion,
+.message-content.style-notion * {
+  --notion-accent-color: #c1cacc;
+  --notion-accented-background-color: rgb(247, 246, 243);
+  --notion-bg-color: #ffffff;
+  --notion-border-color: #e1e7e8;
+  --notion-text-color: #37352f;
+  --notion-link-color: #73716d;
+  --notion-code-bg-color: #ededeb;
+  --notion-code-color: #eb5757;
+  --notion-code-block-bg-color: #f7f6f3;
+  --notion-border-radius: 5px;
+  --notion-font-size: 16px;
+  --notion-h1-fontsize: 1.875rem;
+  --notion-h2-fontsize: 1.5rem;
+  --notion-h3-fontsize: 1.25rem;
+  --notion-line-height: 1.4;
+  --notion-body-font: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei",
+    "Noto Sans SC", "Microsoft JhengHei", "Noto Sans TC", "Meiryo", "Yu Gothic",
+    "Noto Sans JP", "Malgun Gothic", "Noto Sans KR", sans-serif;
+  --notion-monospace-font: "Sarasa Mono SC", "Source Han Mono", "Space Mono",
+    "Inconsolata", "Courier New", monospace;
+}
+
+/* ==================== Notion 风格基础样式 ==================== */
+.message-content.style-notion {
+  font-family: var(--notion-body-font);
+  font-size: var(--notion-font-size);
+  line-height: var(--notion-line-height);
+  color: var(--notion-text-color);
+  padding: 0.5rem 0;
+}
+
+/* ==================== 标题样式 ==================== */
+.message-content.style-notion h1 {
+  margin-top: 2.5rem;
+  margin-bottom: 1.25rem;
+  font-size: var(--notion-h1-fontsize);
+  font-weight: 700;
+  color: var(--notion-text-color);
+  line-height: 1.3;
+  border-bottom: 1px solid var(--notion-border-color);
+  padding-bottom: 0.5rem;
+}
+
+.message-content.style-notion h1:first-child {
+  margin-top: 0;
+}
+
+.message-content.style-notion h2 {
+  margin-top: 2rem;
+  margin-bottom: 1rem;
+  font-size: var(--notion-h2-fontsize);
+  font-weight: 600;
+  color: var(--notion-text-color);
+  line-height: 1.4;
+}
+
+.message-content.style-notion h3 {
+  margin-top: 1.5rem;
+  margin-bottom: 0.75rem;
+  font-size: var(--notion-h3-fontsize);
+  font-weight: 600;
+  color: var(--notion-text-color);
+}
+
+.message-content.style-notion h4,
+.message-content.style-notion h5,
+.message-content.style-notion h6 {
+  margin-top: 1rem;
+  margin-bottom: 0.5rem;
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--notion-text-color);
+}
+
+/* ==================== 段落样式 ==================== */
+.message-content.style-notion p {
+  margin: 0.75rem 0;
+  line-height: 1.7;
+}
+
+/* ==================== 列表样式 ==================== */
+.message-content.style-notion ul,
+.message-content.style-notion ol {
+  padding-left: 0;
+  margin: 0.75rem 0;
+}
+
+.message-content.style-notion ul li,
+.message-content.style-notion ol li {
+  padding-left: 0;
+  margin-left: 1.75rem;
+  margin-bottom: 0.35rem;
+  line-height: 1.7;
+}
+
+.message-content.style-notion li p {
+  margin: 0;
+}
+
+/* 嵌套列表 */
+.message-content.style-notion ol ol {
+  list-style-type: lower-alpha;
+  margin-left: 1.5rem;
+}
+
+.message-content.style-notion ol ol ol {
+  list-style-type: lower-roman;
+}
+
+/* ==================== 引用块样式 ==================== */
+.message-content.style-notion blockquote {
+  margin: 1rem 0;
+  padding: 0.75rem 1rem;
+  padding-left: 1.25rem;
+  background-color: var(--notion-accented-background-color);
+  border-left: 3px solid var(--notion-text-color);
+  border-radius: 0 var(--notion-border-radius) var(--notion-border-radius) 0;
+}
+
+.message-content.style-notion blockquote p {
+  margin: 0;
+}
+
+/* ==================== 分割线样式 ==================== */
+.message-content.style-notion hr {
+  border: none;
+  border-bottom: 2px solid var(--notion-border-color);
+  margin: 2rem 0;
+}
+
+/* ==================== 代码样式 ==================== */
+
+/* 行内代码 */
+.message-content.style-notion code {
+  font-family: var(--notion-monospace-font);
+  font-size: 0.9em;
+  color: var(--notion-code-color);
+  background-color: var(--notion-code-bg-color);
+  padding: 0.2em 0.5em;
+  border-radius: 4px;
+  line-height: normal;
+}
+
+/* 代码块容器 */
+.message-content.style-notion pre {
+  background-color: var(--notion-code-block-bg-color);
+  border-radius: var(--notion-border-radius);
+  padding: 1.25rem;
+  margin: 1rem 0;
+  overflow-x: auto;
+  border: 1px solid var(--notion-border-color);
+}
+
+.message-content.style-notion pre code {
+  background-color: transparent;
+  padding: 0;
+  border-radius: 0;
+  color: var(--notion-text-color);
+  font-size: 0.9em;
+  line-height: 1.6;
+}
+
+/* 代码块语言标签 */
+.message-content.style-notion pre.notion-code-block::before {
+  content: attr(data-language);
+  display: block;
+  font-size: 0.75rem;
+  color: var(--notion-link-color);
+  margin-bottom: 0.5rem;
+  text-transform: uppercase;
+  font-weight: 500;
+  letter-spacing: 0.05em;
+}
+
+/* 语法高亮颜色（基础版） */
+.message-content.style-notion pre code .token.comment,
+.message-content.style-notion pre code .token.prolog {
+  color: #8d8d8d;
+  font-style: italic;
+}
+
+.message-content.style-notion pre code .token.keyword {
+  color: #006fd0;
+  font-weight: 600;
+}
+
+.message-content.style-notion pre code .token.string,
+.message-content.style-notion pre code .token.string-2 {
+  color: #579c26;
+}
+
+.message-content.style-notion pre code .token.number {
+  color: #990055;
+}
+
+.message-content.style-notion pre code .token.function {
+  color: #d63253;
+}
+
+/* ==================== 表格样式 ==================== */
+.message-content.style-notion table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1rem 0;
+  font-size: 0.95em;
+}
+
+.message-content.style-notion th,
+.message-content.style-notion td {
+  border: 1px solid var(--notion-border-color);
+  padding: 0.6rem 0.8rem;
+  text-align: left;
+  min-width: 0.5rem;
+}
+
+.message-content.style-notion th {
+  background-color: var(--notion-code-block-bg-color);
+  font-weight: 600;
+  color: var(--notion-text-color);
+}
+
+.message-content.style-notion tr:hover td {
+  background-color: var(--notion-accented-background-color);
+}
+
+/* ==================== 链接样式 ==================== */
+.message-content.style-notion a {
+  color: var(--notion-link-color);
+  text-decoration: underline;
+  text-decoration-color: var(--notion-accent-color);
+  transition: all 0.2s ease;
+}
+
+.message-content.style-notion a:hover {
+  color: var(--notion-text-color);
+  text-decoration-color: var(--notion-text-color);
+}
+
+/* ==================== 图片样式 ==================== */
+.message-content.style-notion img {
+  border-radius: 8px;
+  max-width: 100%;
+  height: auto;
+  margin: 0.75rem 0;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+/* ==================== 任务列表样式 ==================== */
+.message-content.style-notion input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  margin-right: 0.5rem;
+  cursor: pointer;
+  accent-color: var(--notion-text-color);
+}
+
+.message-content.style-notion li.task-list-item {
+  list-style: none;
+  margin-left: 0;
+}
+
+.message-content.style-notion li.task-list-item input[type="checkbox"] {
+  margin-left: -1.5rem;
+}
+
+/* ==================== 强调样式 ==================== */
+.message-content.style-notion strong {
+  font-weight: 700;
+}
+
+.message-content.style-notion em {
+  font-style: italic;
+}
+
+/* ==================== 删除线样式 ==================== */
+.message-content.style-notion del {
+  text-decoration: line-through;
+  color: var(--notion-link-color);
+}
+
+/* ==================== 上标下标 ==================== */
+.message-content.style-notion sup {
+  font-size: 0.75em;
+  vertical-align: super;
+  line-height: 0;
+}
+
+.message-content.style-notion sub {
+  font-size: 0.75em;
+  vertical-align: sub;
+  line-height: 0;
+}
+
+/* ==================== 响应式调整 ==================== */
+@media (max-width: 768px) {
+  .message-content.style-notion {
+    --notion-font-size: 15px;
+    --notion-h1-fontsize: 1.5rem;
+    --notion-h2-fontsize: 1.3rem;
+    --notion-h3-fontsize: 1.15rem;
+  }
+
+  .message-content.style-notion table {
+    font-size: 0.85em;
+  }
+
+  .message-content.style-notion th,
+  .message-content.style-notion td {
+    padding: 0.5rem;
+  }
+}

@@ -1,0 +1,382 @@
+/*
+ * Everforest 风格 - 消息内容样式
+ * 基于 everforest-light.css 改编
+ * 自然舒适的绿色系主题
+ */
+
+/* ==================== Everforest 风格根变量 ==================== */
+.message-content.style-everforest,
+.message-content.style-everforest * {
+  --everforest-fg: #5c6a72;
+  --everforest-fg-muted: #829181;
+  --everforest-gray-0: #a6b0a0;
+  --everforest-gray-1: #939f91;
+  --everforest-gray-2: #829181;
+
+  --everforest-bg-dim: #f2efdf;
+  --everforest-bg-0: #fffbef;
+  --everforest-bg-1: #f8f5e4;
+  --everforest-bg-2: #f2efdf;
+  --everforest-bg-3: #edeada;
+  --everforest-bg-4: #e8e5d5;
+  --everforest-bg-5: #bec5b2;
+
+  /* Everforest 配色 */
+  --everforest-red: #f85552;
+  --everforest-orange: #f57d26;
+  --everforest-yellow: #dfa000;
+  --everforest-green: #8da101;
+  --everforest-aqua: #35a77c;
+  --everforest-blue: #3a94c5;
+  --everforest-purple: #df69ba;
+
+  --everforest-text: var(--everforest-fg);
+  --everforest-text-muted: var(--everforest-fg-muted);
+  --everforest-border: #d7d3c4;
+  --everforest-accent: var(--everforest-green);
+  --everforest-accent-2: var(--everforest-blue);
+
+  --everforest-font-body: "PingFang SC", "Microsoft YaHei", "LXGW WenKai", ui-serif,
+    "Iowan Old Style", "Times New Roman", serif;
+  --everforest-font-mono: ui-monospace, "JetBrains Mono", "Zed Plex Mono", "SFMono-Regular",
+    Menlo, Consolas, monospace;
+
+  --everforest-radius: 10px;
+  --everforest-radius-sm: 8px;
+  --everforest-shadow-1: 0 1px 2px rgba(0, 0, 0, 0.04);
+  --everforest-shadow-2: 0 6px 18px rgba(0, 0, 0, 0.06);
+}
+
+/* ==================== Everforest 风格基础样式 ==================== */
+.message-content.style-everforest {
+  font-family: var(--everforest-font-body);
+  font-size: 16px;
+  line-height: 1.65;
+  color: var(--everforest-text);
+  padding: 0.5rem 0;
+  background: transparent;
+}
+
+/* ==================== 标题样式 ==================== */
+.message-content.style-everforest h1,
+.message-content.style-everforest h2,
+.message-content.style-everforest h3,
+.message-content.style-everforest h4,
+.message-content.style-everforest h5,
+.message-content.style-everforest h6 {
+  font-weight: 700;
+  color: var(--everforest-text);
+  line-height: 1.25;
+  margin: 2.2rem 0 1rem;
+}
+
+.message-content.style-everforest h1 {
+  font-size: 2.1rem;
+  margin-top: 0;
+}
+
+.message-content.style-everforest h1:first-child {
+  margin-top: 0;
+}
+
+.message-content.style-everforest h2 {
+  font-size: 1.8rem;
+  border-bottom: 1px solid var(--everforest-border);
+  padding-bottom: 0.35rem;
+}
+
+.message-content.style-everforest h3 {
+  font-size: 1.5rem;
+  border-bottom: 1px dashed var(--everforest-bg-5);
+  padding-bottom: 0.25rem;
+}
+
+.message-content.style-everforest h4 {
+  font-size: 1.25rem;
+  margin-top: 1.5rem;
+}
+
+.message-content.style-everforest h5 {
+  font-size: 1.1rem;
+  margin-top: 1.2rem;
+}
+
+.message-content.style-everforest h6 {
+  font-size: 1rem;
+  color: var(--everforest-text-muted);
+  margin-top: 1rem;
+}
+
+/* ==================== 段落样式 ==================== */
+.message-content.style-everforest p {
+  margin: 0 0 1.05rem;
+  line-height: 1.8;
+}
+
+/* ==================== 强调样式 ==================== */
+/* Everforest 特色：粗体文字使用绿色 */
+.message-content.style-everforest strong,
+.message-content.style-everforest b {
+  color: var(--everforest-green) !important;
+  font-weight: 600;
+}
+
+.message-content.style-everforest em {
+  color: var(--everforest-purple);
+  font-style: italic;
+}
+
+.message-content.style-everforest del {
+  color: var(--everforest-text-muted);
+  text-decoration: line-through;
+}
+
+/* ==================== 列表样式 ==================== */
+.message-content.style-everforest ul,
+.message-content.style-everforest ol {
+  margin: 0 0 1rem 1.5rem;
+}
+
+.message-content.style-everforest li {
+  margin: 0.3rem 0;
+  line-height: 1.6;
+}
+
+.message-content.style-everforest li > p {
+  margin: 0.2rem 0;
+}
+
+/* 任务列表 - Everforest 绿色复选框 */
+.message-content.style-everforest .task-list {
+  list-style-type: none;
+  padding-left: 0;
+}
+
+.message-content.style-everforest .task-list-item {
+  position: relative;
+  padding-left: 2rem;
+  margin: 0.35rem 0;
+}
+
+.message-content.style-everforest .task-list-item input[type="checkbox"] {
+  position: absolute;
+  left: 0;
+  top: 0.25em;
+  width: 1.1em;
+  height: 1.1em;
+  appearance: none;
+  -webkit-appearance: none;
+  border-radius: 6px;
+  border: 2px solid var(--everforest-green);
+  background: transparent;
+  margin: 0;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.message-content.style-everforest .task-list-item input[type="checkbox"]:checked {
+  background-color: var(--everforest-green);
+  border-color: var(--everforest-green);
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 16 16' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M3.5 8.5l3 3 6-6' stroke='%23000000' stroke-width='2'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 70%;
+}
+
+.message-content.style-everforest .task-list-item input[type="checkbox"]:hover {
+  box-shadow: 0 0 0 3px rgba(141, 161, 1, 0.2);
+}
+
+/* ==================== 引用块样式 ==================== */
+.message-content.style-everforest blockquote {
+  margin: 1.25rem 0;
+  padding: 0.8rem 1rem;
+  border-left: 4px solid var(--everforest-aqua);
+  background: rgba(53, 167, 124, 0.06);
+  color: var(--everforest-text);
+  border-radius: var(--everforest-radius-sm);
+  display: flex;
+  align-items: center;
+  min-height: 2.5em;
+  line-height: 1.6;
+}
+
+.message-content.style-everforest blockquote p {
+  margin: 0;
+}
+
+/* ==================== 分割线样式 ==================== */
+.message-content.style-everforest hr {
+  border: none;
+  border-top: 1px solid var(--everforest-border);
+  margin: 2.5em 0;
+}
+
+/* ==================== 代码样式 ==================== */
+
+/* 行内代码 */
+.message-content.style-everforest code,
+.message-content.style-everforest tt {
+  font-family: var(--everforest-font-mono);
+  font-size: 1em;
+  background: rgba(58, 148, 197, 0.06);
+  color: #1e4b59;
+  border: 1px solid #d7ebe3;
+  padding: 0.15rem 0.35rem;
+  border-radius: 6px;
+  line-height: normal;
+}
+
+/* 代码块容器 */
+.message-content.style-everforest pre {
+  background: var(--everforest-bg-1);
+  border: 1px solid var(--everforest-border);
+  border-radius: var(--everforest-radius);
+  padding: 1rem;
+  margin: 1.5em 0;
+  overflow-x: auto;
+  box-shadow: var(--everforest-shadow-1);
+  font-family: var(--everforest-font-mono);
+  font-size: 1.05em;
+  line-height: 1.6;
+  color: var(--everforest-text);
+}
+
+.message-content.style-everforest pre code {
+  background: transparent;
+  padding: 0;
+  border: none;
+  font-size: 1em;
+  color: inherit;
+}
+
+/* 语法高亮颜色（Everforest 配色） */
+.message-content.style-everforest pre code .token.comment {
+  color: #939f91;
+  font-style: italic;
+}
+
+.message-content.style-everforest pre code .token.keyword {
+  color: #f85552;
+  font-weight: 600;
+}
+
+.message-content.style-everforest pre code .token.number {
+  color: #f57d26;
+}
+
+.message-content.style-everforest pre code .token.string,
+.message-content.style-everforest pre code .token.string-2 {
+  color: #8da101;
+}
+
+.message-content.style-everforest pre code .token.function {
+  color: #3a94c5;
+}
+
+.message-content.style-everforest pre code .token.tag {
+  color: #f85552;
+}
+
+.message-content.style-everforest pre code .token.attr-name {
+  color: #dfa000;
+}
+
+/* ==================== 表格样式 ==================== */
+.message-content.style-everforest table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  margin: 1.2rem 0;
+  background: var(--everforest-bg-1);
+  box-shadow: var(--everforest-shadow-1);
+  border: 1px solid var(--everforest-border);
+  border-radius: var(--everforest-radius);
+  overflow: hidden;
+  font-size: 0.95em;
+}
+
+.message-content.style-everforest th,
+.message-content.style-everforest td {
+  padding: 0.6rem 0.75rem;
+  border-bottom: 1px solid var(--everforest-bg-4);
+  text-align: left;
+}
+
+.message-content.style-everforest thead th {
+  background: var(--everforest-bg-3);
+  color: var(--everforest-text);
+  font-weight: 600;
+}
+
+.message-content.style-everforest tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.message-content.style-everforest tbody tr:hover {
+  background: var(--everforest-bg-2);
+}
+
+/* ==================== 链接样式 ==================== */
+.message-content.style-everforest a {
+  color: var(--everforest-accent);
+  text-decoration: none;
+  transition: color 0.2s ease;
+}
+
+.message-content.style-everforest a:hover {
+  color: var(--everforest-accent);
+  text-decoration: underline;
+}
+
+/* ==================== 图片样式 ==================== */
+.message-content.style-everforest img {
+  border-radius: var(--everforest-radius-sm);
+  box-shadow: var(--everforest-shadow-2);
+  max-width: 100%;
+  height: auto;
+  margin: 1.5em 0;
+}
+
+/* ==================== 上标下标 ==================== */
+.message-content.style-everforest sup,
+.message-content.style-everforest sub {
+  font-size: 0.75em;
+  line-height: 0;
+}
+
+.message-content.style-everforest sup {
+  vertical-align: super;
+}
+
+.message-content.style-everforest sub {
+  vertical-align: sub;
+}
+
+/* ==================== 响应式调整 ==================== */
+@media (max-width: 768px) {
+  .message-content.style-everforest {
+    font-size: 15px;
+  }
+
+  .message-content.style-everforest h1 {
+    font-size: 1.75rem;
+  }
+
+  .message-content.style-everforest h2 {
+    font-size: 1.5rem;
+  }
+
+  .message-content.style-everforest h3 {
+    font-size: 1.3rem;
+  }
+
+  .message-content.style-everforest table {
+    font-size: 0.85em;
+  }
+
+  .message-content.style-everforest th,
+  .message-content.style-everforest td {
+    padding: 0.5rem 0.6rem;
+  }
+}

@@ -1,0 +1,911 @@
+/*
+ * API 设置页面 - 简约风格
+ * 现代化简约设计，注重留白和层次
+ */
+
+/* ==================== 根变量 ==================== */
+.api-settings-container.api-style-simple,
+.api-settings-container.api-style-simple * {
+  --as-bg: #f7f7f8;
+  --as-surface: #ffffff;
+  --as-surface-hover: #f1f3f5;
+  --as-border: #e9ecef;
+  --as-border-hover: #dee2e6;
+  --as-text-primary: #212529;
+  --as-text-secondary: #6c757d;
+  --as-text-tertiary: #adb5bd;
+  --as-primary: #007bff;
+  --as-primary-hover: #0056b3;
+  --as-success: #28a745;
+  --as-success-hover: #1e7e34;
+  --as-warning: #ffc107;
+  --as-warning-hover: #e0a800;
+  --as-danger: #dc3545;
+  --as-danger-hover: #a71d2a;
+  --as-info: #17a2b8;
+  --as-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --as-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  --as-shadow-lg: 0 4px 16px rgba(0, 0, 0, 0.12);
+  --as-radius-sm: 4px;
+  --as-radius: 8px;
+  --as-radius-lg: 12px;
+  --as-radius-xl: 16px;
+  --as-transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+
+  --as-font-body: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Microsoft YaHei", sans-serif;
+  --as-font-mono: ui-monospace, "JetBrains Mono", "SFMono-Regular",
+    "Menlo", "Consolas", monospace;
+}
+
+/* ==================== 基础样式 ==================== */
+.api-settings-container.api-style-simple {
+  font-family: var(--as-font-body);
+  background: var(--as-bg);
+  color: var(--as-text-primary);
+  height: 100vh;
+  display: flex;
+}
+
+/* ==================== 左侧边栏 ==================== */
+.api-settings-container.api-style-simple .providers-sidebar {
+  width: 320px;
+  background: var(--as-surface);
+  border-right: none;
+  box-shadow: var(--as-shadow-sm);
+  display: flex;
+  flex-direction: column;
+  z-index: 10;
+}
+
+/* 搜索框 */
+.api-settings-container.api-style-simple .search-input {
+  width: 100%;
+  padding: 12px 16px;
+  border: 1px solid var(--as-border);
+  border-radius: var(--as-radius-sm);
+  background: var(--as-bg);
+  color: var(--as-text-primary);
+  font-size: 14px;
+  transition: var(--as-transition);
+  margin-bottom: 16px;
+}
+
+.api-settings-container.api-style-simple .search-input:focus {
+  outline: none;
+  border-color: var(--as-primary);
+  box-shadow: 0 0 0 3px rgba(0, 123, 255, 0.1);
+}
+
+.api-settings-container.api-style-simple .search-input::placeholder {
+  color: var(--as-text-tertiary);
+}
+
+/* 按钮组 */
+.api-settings-container.api-style-simple .button-group {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.api-settings-container.api-style-simple .btn-add-provider,
+.api-settings-container.api-style-simple .btn-import,
+.api-settings-container.api-style-simple .btn-export,
+.api-settings-container.api-style-simple .btn-manage-groups {
+  padding: 8px 14px;
+  border: none;
+  border-radius: var(--as-radius-sm);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: var(--as-transition);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  color: white;
+}
+
+.api-settings-container.api-style-simple .btn-add-provider {
+  background: var(--as-primary);
+}
+
+.api-settings-container.api-style-simple .btn-add-provider:hover {
+  background: var(--as-primary-hover);
+  transform: translateY(-1px);
+}
+
+.api-settings-container.api-style-simple .btn-import {
+  background: var(--as-info);
+}
+
+.api-settings-container.api-style-simple .btn-import:hover {
+  background: #138496;
+  transform: translateY(-1px);
+}
+
+.api-settings-container.api-style-simple .btn-export {
+  background: var(--as-warning);
+}
+
+.api-settings-container.api-style-simple .btn-export:hover {
+  background: var(--as-warning-hover);
+  transform: translateY(-1px);
+}
+
+.api-settings-container.api-style-simple .btn-manage-groups {
+  background: #6c757d;
+}
+
+.api-settings-container.api-style-simple .btn-manage-groups:hover {
+  background: #495057;
+  transform: translateY(-1px);
+}
+
+/* 刷新所有按钮 */
+.api-settings-container.api-style-simple .btn-refresh-all {
+  width: 100%;
+  padding: 10px 16px;
+  border: none;
+  border-radius: var(--as-radius-sm);
+  background: var(--as-surface);
+  color: var(--as-text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: var(--as-transition);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid var(--as-border);
+}
+
+.api-settings-container.api-style-simple .btn-refresh-all:hover:not(:disabled) {
+  background: var(--as-surface-hover);
+  color: var(--as-text-primary);
+  border-color: var(--as-border-hover);
+}
+
+.api-settings-container.api-style-simple .btn-refresh-all:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ==================== 提供商列表 ==================== */
+.api-settings-container.api-style-simple .providers-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px;
+}
+
+.api-settings-container.api-style-simple .providers-list::-webkit-scrollbar {
+  width: 6px;
+}
+
+.api-settings-container.api-style-simple .providers-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.api-settings-container.api-style-simple .providers-list::-webkit-scrollbar-thumb {
+  background: var(--as-border);
+  border-radius: 3px;
+}
+
+/* 分组标题 */
+.api-settings-container.api-style-simple .group-header {
+  display: flex;
+  align-items: center;
+  padding: 10px 14px;
+  background: transparent;
+  cursor: pointer;
+  font-weight: 500;
+  color: var(--as-text-secondary);
+  margin-bottom: 4px;
+  border-radius: var(--as-radius-sm);
+  transition: var(--as-transition);
+}
+
+.api-settings-container.api-style-simple .group-header:hover {
+  background: var(--as-surface-hover);
+  color: var(--as-text-primary);
+}
+
+.api-settings-container.api-style-simple .group-expand-icon {
+  margin-right: 8px;
+  font-size: 10px;
+  color: var(--as-text-tertiary);
+}
+
+.api-settings-container.api-style-simple .group-name {
+  flex: 1;
+  font-size: 13px;
+}
+
+.api-settings-container.api-style-simple .group-count {
+  background: var(--as-bg);
+  color: var(--as-text-tertiary);
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+/* 提供商项 */
+.api-settings-container.api-style-simple .provider-item {
+  display: flex;
+  align-items: center;
+  padding: 12px 14px;
+  margin-bottom: 8px;
+  background: var(--as-surface);
+  border-radius: var(--as-radius);
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: var(--as-transition);
+  box-shadow: var(--as-shadow-sm);
+}
+
+.api-settings-container.api-style-simple .provider-item:hover {
+  transform: translateX(4px);
+  box-shadow: var(--as-shadow);
+}
+
+.api-settings-container.api-style-simple .provider-item.active {
+  border-left: 3px solid var(--as-primary);
+  background: linear-gradient(90deg, #f0f7ff 0%, var(--as-surface) 100%);
+}
+
+.api-settings-container.api-style-simple .provider-item.no-models {
+  border-left: 3px solid var(--as-danger);
+  background: linear-gradient(90deg, #fff5f5 0%, var(--as-surface) 100%);
+}
+
+.api-settings-container.api-style-simple .provider-item.no-models.active {
+  border-left-color: var(--as-danger);
+}
+
+/* 提供商图标 */
+.api-settings-container.api-style-simple .provider-item-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: var(--as-radius-sm);
+  background: var(--as-bg);
+  color: var(--as-text-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+  margin-right: 12px;
+  font-size: 14px;
+}
+
+.api-settings-container.api-style-simple .provider-item.active .provider-item-icon {
+  background: var(--as-primary);
+  color: white;
+}
+
+/* 提供商信息 */
+.api-settings-container.api-style-simple .provider-item-info {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.api-settings-container.api-style-simple .provider-item-name {
+  font-weight: 500;
+  color: var(--as-text-primary);
+  font-size: 14px;
+}
+
+.api-settings-container.api-style-simple .model-count-badge {
+  background: var(--as-bg);
+  color: var(--as-text-tertiary);
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 600;
+  min-width: 20px;
+  text-align: center;
+}
+
+.api-settings-container.api-style-simple .model-count-badge.zero-models {
+  color: var(--as-danger);
+  background: #fff5f5;
+}
+
+.api-settings-container.api-style-simple .provider-item.active .model-count-badge {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+/* 提供商状态 */
+.api-settings-container.api-style-simple .provider-item-status {
+  font-size: 11px;
+  padding: 4px 8px;
+  border-radius: var(--as-radius-sm);
+  font-weight: 500;
+}
+
+.api-settings-container.api-style-simple .provider-item-status.active {
+  background: rgba(40, 167, 69, 0.1);
+  color: var(--as-success);
+}
+
+.api-settings-container.api-style-simple .provider-item-status.disabled {
+  background: rgba(220, 53, 69, 0.1);
+  color: var(--as-danger);
+}
+
+/* ==================== 右侧详情面板 ==================== */
+.api-settings-container.api-style-simple .provider-details-panel {
+  flex: 1;
+  padding: 32px;
+  overflow-y: auto;
+  background: var(--as-bg);
+}
+
+.api-settings-container.api-style-simple .provider-details-panel::-webkit-scrollbar {
+  width: 6px;
+}
+
+.api-settings-container.api-style-simple .provider-details-panel::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.api-settings-container.api-style-simple .provider-details-panel::-webkit-scrollbar-thumb {
+  background: var(--as-border);
+  border-radius: 3px;
+}
+
+/* 空状态 */
+.api-settings-container.api-style-simple .empty-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--as-text-tertiary);
+  font-size: 15px;
+}
+
+/* 详情头部 */
+.api-settings-container.api-style-simple .details-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 24px;
+  padding-bottom: 16px;
+  border-bottom: 2px solid var(--as-border);
+}
+
+.api-settings-container.api-style-simple .details-header h2 {
+  margin: 0;
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--as-text-primary);
+}
+
+/* 头部操作按钮 */
+.api-settings-container.api-style-simple .header-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.api-settings-container.api-style-simple .btn-toggle {
+  padding: 8px 16px;
+  border: 1px solid var(--as-border);
+  border-radius: var(--as-radius-sm);
+  background: var(--as-surface);
+  color: var(--as-text-secondary);
+  cursor: pointer;
+  transition: var(--as-transition);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.api-settings-container.api-style-simple .btn-toggle:hover {
+  background: var(--as-surface-hover);
+  border-color: var(--as-border-hover);
+  color: var(--as-text-primary);
+}
+
+.api-settings-container.api-style-simple .btn-icon {
+  padding: 8px 12px;
+  border: 1px solid var(--as-border);
+  border-radius: var(--as-radius-sm);
+  background: var(--as-surface);
+  color: var(--as-text-secondary);
+  cursor: pointer;
+  transition: var(--as-transition);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  font-size: 14px;
+}
+
+.api-settings-container.api-style-simple .btn-icon:hover {
+  background: var(--as-surface-hover);
+  color: var(--as-text-primary);
+}
+
+/* 配置区块 */
+.api-settings-container.api-style-simple .config-section {
+  margin-bottom: 24px;
+  padding: 20px;
+  background: var(--as-surface);
+  border-radius: var(--as-radius);
+  box-shadow: var(--as-shadow-sm);
+}
+
+.api-settings-container.api-style-simple .config-section label {
+  display: block;
+  font-weight: 500;
+  margin-bottom: 8px;
+  color: var(--as-text-primary);
+  font-size: 14px;
+}
+
+.api-settings-container.api-style-simple .config-section .hint {
+  font-size: 12px;
+  color: var(--as-text-tertiary);
+  margin-top: 4px;
+  display: block;
+}
+
+/* 输入框 */
+.api-settings-container.api-style-simple .input-field {
+  flex: 1;
+  padding: 10px 14px;
+  border: 1px solid var(--as-border);
+  border-radius: var(--as-radius-sm);
+  background: var(--as-bg);
+  color: var(--as-text-primary);
+  font-size: 14px;
+  transition: var(--as-transition);
+}
+
+.api-settings-container.api-style-simple .input-field:focus {
+  outline: none;
+  border-color: var(--as-primary);
+  box-shadow: 0 0 0 3px rgba(0, 123, 255, 0.1);
+}
+
+.api-settings-container.api-style-simple .input-field[readonly] {
+  background: var(--as-bg);
+  color: var(--as-text-secondary);
+  cursor: default;
+}
+
+/* 输入组 */
+.api-settings-container.api-style-simple .input-group {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.api-settings-container.api-style-simple .btn-icon-small,
+.api-settings-container.api-style-simple .btn-test {
+  padding: 8px 14px;
+  border: 1px solid var(--as-border);
+  border-radius: var(--as-radius-sm);
+  background: var(--as-surface);
+  color: var(--as-text-secondary);
+  cursor: pointer;
+  transition: var(--as-transition);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.api-settings-container.api-style-simple .btn-test {
+  background: var(--as-success);
+  color: white;
+  border-color: var(--as-success);
+}
+
+.api-settings-container.api-style-simple .btn-test:hover {
+  background: var(--as-success-hover);
+  border-color: var(--as-success-hover);
+}
+
+.api-settings-container.api-style-simple .btn-test:disabled {
+  background: var(--as-border);
+  color: var(--as-text-tertiary);
+  cursor: not-allowed;
+}
+
+.api-settings-container.api-style-simple .btn-icon-small:hover {
+  background: var(--as-surface-hover);
+  color: var(--as-text-primary);
+}
+
+/* 复选框标签 */
+.api-settings-container.api-style-simple .checkbox-label {
+  display: flex !important;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-weight: 500;
+  color: var(--as-text-primary);
+  font-size: 14px;
+}
+
+.api-settings-container.api-style-simple .checkbox-label input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  cursor: pointer;
+  margin: 0;
+  accent-color: var(--as-primary);
+}
+
+/* ==================== 模型配置 ==================== */
+.api-settings-container.api-style-simple .models-config {
+  background: var(--as-surface);
+  border-radius: var(--as-radius);
+  padding: 20px;
+  box-shadow: var(--as-shadow-sm);
+}
+
+.api-settings-container.api-style-simple .models-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.api-settings-container.api-style-simple .models-toolbar label {
+  font-weight: 500;
+  color: var(--as-text-primary);
+  font-size: 14px;
+}
+
+.api-settings-container.api-style-simple .count {
+  background: var(--as-primary);
+  color: white;
+  padding: 2px 10px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.api-settings-container.api-style-simple .search-input-small {
+  padding: 8px 12px;
+  border: 1px solid var(--as-border);
+  border-radius: var(--as-radius-sm);
+  background: var(--as-bg);
+  color: var(--as-text-primary);
+  font-size: 13px;
+  flex: 1;
+  min-width: 200px;
+}
+
+.api-settings-container.api-style-simple .search-input-small:focus {
+  outline: none;
+  border-color: var(--as-primary);
+}
+
+/* 已添加模型容器 */
+.api-settings-container.api-style-simple .added-models-container {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.api-settings-container.api-style-simple .added-model-group {
+  background: var(--as-bg);
+  padding: 12px;
+  border-radius: var(--as-radius-sm);
+}
+
+.api-settings-container.api-style-simple .added-group-header {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--as-text-secondary);
+  margin-bottom: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.api-settings-container.api-style-simple .added-models-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.api-settings-container.api-style-simple .added-model-card {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  background: var(--as-surface);
+  border-radius: var(--as-radius-sm);
+  border: 1px solid var(--as-border);
+  transition: var(--as-transition);
+}
+
+.api-settings-container.api-style-simple .added-model-card:hover {
+  border-color: var(--as-primary);
+  box-shadow: var(--as-shadow);
+}
+
+.api-settings-container.api-style-simple .model-icon {
+  font-size: 16px;
+}
+
+.api-settings-container.api-style-simple .model-name {
+  font-family: var(--as-font-mono);
+  font-size: 13px;
+  color: var(--as-text-primary);
+  flex: 1;
+}
+
+.api-settings-container.api-style-simple .model-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.api-settings-container.api-style-simple .btn-icon-tiny {
+  padding: 6px 10px;
+  border: 1px solid var(--as-border);
+  border-radius: var(--as-radius-sm);
+  background: var(--as-surface);
+  color: var(--as-text-secondary);
+  cursor: pointer;
+  transition: var(--as-transition);
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.api-settings-container.api-style-simple .btn-icon-tiny:hover {
+  background: var(--as-surface-hover);
+  color: var(--as-text-primary);
+  border-color: var(--as-border-hover);
+}
+
+/* 可用模型面板 */
+.api-settings-container.api-style-simple .available-models-panel {
+  max-height: 400px;
+  overflow-y: auto;
+  border: 1px solid var(--as-border);
+  border-radius: var(--as-radius-sm);
+  background: var(--as-bg);
+  padding: 8px;
+}
+
+.api-settings-container.api-style-simple .model-group {
+  margin-bottom: 8px;
+}
+
+.api-settings-container.api-style-simple .model-group:last-child {
+  margin-bottom: 0;
+}
+
+.api-settings-container.api-style-simple .model-group > .group-header {
+  padding: 10px 14px;
+  background: var(--as-surface);
+  border-radius: var(--as-radius-sm);
+  cursor: pointer;
+  font-weight: 500;
+  color: var(--as-text-secondary);
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  transition: var(--as-transition);
+}
+
+.api-settings-container.api-style-simple .model-group > .group-header:hover {
+  background: var(--as-surface-hover);
+  color: var(--as-text-primary);
+}
+
+.api-settings-container.api-style-simple .group-models {
+  padding: 8px 12px;
+}
+
+.api-settings-container.api-style-simple .model-row {
+  display: flex;
+  align-items: center;
+  padding: 10px 14px;
+  background: var(--as-surface);
+  border-radius: var(--as-radius-sm);
+  margin-bottom: 4px;
+  gap: 12px;
+  transition: var(--as-transition);
+}
+
+.api-settings-container.api-style-simple .model-row:hover {
+  background: var(--as-surface-hover);
+}
+
+.api-settings-container.api-style-simple .model-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.api-settings-container.api-style-simple .icon-btn,
+.api-settings-container.api-style-simple .btn-toggle-model {
+  padding: 6px 12px;
+  border: 1px solid var(--as-border);
+  border-radius: var(--as-radius-sm);
+  background: var(--as-surface);
+  color: var(--as-text-secondary);
+  cursor: pointer;
+  transition: var(--as-transition);
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.api-settings-container.api-style-simple .btn-toggle-model {
+  background: var(--as-primary);
+  color: white;
+  border-color: var(--as-primary);
+  font-weight: 600;
+}
+
+.api-settings-container.api-style-simple .btn-toggle-model:hover {
+  background: var(--as-primary-hover);
+  border-color: var(--as-primary-hover);
+}
+
+.api-settings-container.api-style-simple .icon-btn:hover {
+  background: var(--as-surface-hover);
+  color: var(--as-text-primary);
+  border-color: var(--as-border-hover);
+}
+
+/* ==================== 模态框 ==================== */
+.api-settings-container.api-style-simple .modal {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.api-settings-container.api-style-simple .modal-content {
+  background: var(--as-surface);
+  border-radius: var(--as-radius-lg);
+  padding: 28px;
+  max-width: 480px;
+  width: 90%;
+  box-shadow: var(--as-shadow-lg);
+}
+
+.api-settings-container.api-style-simple .modal-content.modal-large {
+  max-width: 600px;
+}
+
+.api-settings-container.api-style-simple .modal-content h3 {
+  margin: 0 0 20px 0;
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--as-text-primary);
+}
+
+.api-settings-container.api-style-simple .modal-content label {
+  display: block;
+  font-weight: 500;
+  margin-bottom: 8px;
+  color: var(--as-text-primary);
+  font-size: 14px;
+}
+
+/* 高级设置 */
+.api-settings-container.api-style-simple .advanced-settings {
+  border: 1px solid var(--as-border);
+  border-radius: var(--as-radius);
+  overflow: hidden;
+  margin-top: 12px;
+}
+
+.api-settings-container.api-style-simple .advanced-toggle {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 14px;
+  cursor: pointer;
+  background: var(--as-bg);
+  color: var(--as-text-secondary);
+  font-size: 13px;
+  transition: var(--as-transition);
+}
+
+.api-settings-container.api-style-simple .advanced-toggle:hover {
+  background: var(--as-surface-hover);
+  color: var(--as-text-primary);
+}
+
+.api-settings-container.api-style-simple .advanced-content {
+  padding: 14px;
+  border-top: 1px solid var(--as-border);
+  background: var(--as-surface);
+}
+
+.api-settings-container.api-style-simple .advanced-content .hint {
+  display: block;
+  margin-bottom: 8px;
+}
+
+/* 模态框按钮 */
+.api-settings-container.api-style-simple .modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 24px;
+}
+
+.api-settings-container.api-style-simple .btn-save {
+  padding: 10px 20px;
+  border: none;
+  border-radius: var(--as-radius-sm);
+  background: var(--as-primary);
+  color: white;
+  cursor: pointer;
+  transition: var(--as-transition);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.api-settings-container.api-style-simple .btn-save:hover {
+  background: var(--as-primary-hover);
+  transform: translateY(-1px);
+}
+
+.api-settings-container.api-style-simple .btn-save:disabled {
+  background: var(--as-border);
+  color: var(--as-text-tertiary);
+  cursor: not-allowed;
+  transform: none;
+}
+
+.api-settings-container.api-style-simple .btn-cancel {
+  padding: 10px 20px;
+  border: 1px solid var(--as-border);
+  border-radius: var(--as-radius-sm);
+  background: var(--as-surface);
+  color: var(--as-text-secondary);
+  cursor: pointer;
+  transition: var(--as-transition);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.api-settings-container.api-style-simple .btn-cancel:hover {
+  background: var(--as-surface-hover);
+  color: var(--as-text-primary);
+}
+
+/* ==================== 响应式 ==================== */
+@media (max-width: 768px) {
+  .api-settings-container.api-style-simple {
+    flex-direction: column;
+  }
+
+  .api-settings-container.api-style-simple .providers-sidebar {
+    width: 100%;
+    height: auto;
+    max-height: 40vh;
+    border-right: none;
+    border-bottom: 1px solid var(--as-border);
+  }
+
+  .api-settings-container.api-style-simple .provider-details-panel {
+    padding: 16px;
+  }
+
+  .api-settings-container.api-style-simple .config-section,
+  .api-settings-container.api-style-simple .models-config {
+    padding: 16px;
+  }
+}

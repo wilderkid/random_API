@@ -4,7 +4,27 @@ const fs = require('fs').promises;
 const path = require('path');
 const axios = require('axios');
 const crypto = require('crypto');
-const { logApiCall, logSystemEvent, readLogs, parseLogsForStats, deleteLogs, clearAllLogs } = require('./logger');
+const {
+  logApiCall,
+  logApiRequest,         // 新增
+  logProviderSwitch,      // 新增
+  logSessionBind,         // 新增
+  logSystemEvent,
+  readLogs,
+  searchLogs,
+  parseLogsForStats,
+  deleteLogs,
+  clearAllLogs,
+  archiveOldLogs,
+  getAvailableLogDates,
+  exportToCSV,
+  exportToJSON,
+  addLogListener,
+  LogLevel,
+  LogType,
+  PerformanceTracker,      // 新增
+  generateTraceId         // 新增
+} = require('./logger');
 
 const app = express();
 const PORT = 3000;
@@ -12,6 +32,54 @@ const PORT = 3000;
 // Performance optimization: Add debug mode control
 const DEBUG_MODE = process.env.NODE_ENV !== 'production';
 const VERBOSE_LOGGING = process.env.VERBOSE_LOGGING === 'true';
+
+// 统计数据缓存（性能优化）
+const statsCache = new Map();
+const STATS_CACHE_TTL = 60 * 1000; // 缓存60秒
+const TODAY_CACHE_TTL = 10 * 1000; // 当天数据缓存10秒（实时性更高）
+
+function getCachedStats(key, isToday = false) {
+  const cached = statsCache.get(key);
+  if (!cached) return null;
+  const ttl = isToday ? TODAY_CACHE_TTL : STATS_CACHE_TTL;
+  if (Date.now() - cached.timestamp > ttl) {
+    statsCache.delete(key);
+    return null;
+  }
+  return cached.data;
+}
+
+function setCachedStats(key, data, isToday = false) {
+  statsCache.set(key, {
+    data,
+    timestamp: Date.now(),
+    isToday
+  });
+}
+
+function clearStatsCache() {
+  statsCache.clear();
+}
+
+// 定期清理过期缓存（每分钟执行一次）
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, value] of statsCache.entries()) {
+    const ttl = value.isToday ? TODAY_CACHE_TTL : STATS_CACHE_TTL;
+    if (now - value.timestamp > ttl) {
+      statsCache.delete(key);
+    }
+  }
+}, 60 * 1000);
+
+// 获取本地今天的日期（YYYY-MM-DD格式）
+function getLocalToday() {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
 
 // Optimized logging functions
 const log = {
@@ -2943,6 +3011,18 @@ app.get('/v1/models', verifyProxyApiKey, async (req, res) => {
 
 // OpenAI 兼容 - Chat Completions（支持自动故障转移）
 app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
+  // ==================== 日志追踪初始化 ====================
+  const traceId = generateTraceId();
+  const perfTracker = new PerformanceTracker(traceId);
+  perfTracker.checkpoint('request_start');
+
+  // 提取客户端信息
+  const clientIp = req.ip || req.connection.remoteAddress ||
+                   req.headers['x-forwarded-for']?.split(',')[0].trim() ||
+                   'unknown';
+  const userAgent = req.headers['user-agent'] || 'unknown';
+  const apiKeyName = req.apiKeyInfo?.name || 'unknown';
+
   try {
     const { messages, model, stream = false, temperature, max_tokens, top_p, ...otherParams } = req.body;
 
@@ -3112,9 +3192,19 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
         settings.providers,
         pollingConfig
       );
-      
+
       if (selectedProvider) {
         console.log(`[Session] Found existing provider binding: ${selectedProvider.name} (ID: ${selectedProvider.id})`);
+        // 异步记录会话绑定（非阻塞）
+        setImmediate(() => {
+          logSessionBind({
+            traceId,
+            sessionId: sessionIdentifier,
+            model: pureModelName,
+            providerId: selectedProvider.id,
+            providerName: selectedProvider.name
+          });
+        });
       } else {
         console.log(`[Session] No existing provider binding found, will select new provider`);
       }
@@ -3157,8 +3247,22 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
     
     for (let attempt = 0; attempt < failoverProviders.length; attempt++) {
       const selectedProvider = failoverProviders[attempt];
-      
+
       triedProviderIds.push(selectedProvider.id);
+
+      // 记录提供商切换（非首次尝试时）
+      if (attempt > 0) {
+        const prevProvider = failoverProviders[attempt - 1];
+        setImmediate(() => {
+          logProviderSwitch({
+            traceId,
+            fromProvider: prevProvider.name,
+            toProvider: selectedProvider.name,
+            reason: `Previous provider failed: ${errors[errors.length - 1]?.error || 'Unknown error'}`
+          });
+        });
+      }
+
       console.log(`[Proxy] Attempt ${attempt + 1}/${failoverProviders.length}: Trying provider ${selectedProvider.name} (ID: ${selectedProvider.id})`);
       
       // 获取该提供商的具体模型ID
@@ -3210,6 +3314,39 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
 
           // Stream request successfully initiated, exit loop
           log.verbose(`[DEBUG] Stream request initiated successfully, exiting provider loop`);
+
+          // 记录API请求日志（非阻塞）
+          perfTracker.checkpoint('request_complete');
+          setImmediate(() => {
+            logApiRequest({
+              traceId,
+              clientIp,
+              userAgent,
+              apiKeyName,
+              sessionId: sessionIdentifier,
+              isPolling: usePolling,
+              isNewConversation,
+              request: { model: pureModelName, stream: true, messages },
+              providers: [{
+                attempt: attempt + 1,
+                providerId: selectedProvider.id,
+                providerName: selectedProvider.name,
+                status: 'success',
+                statusCode: response.status,
+                duration: perfTracker.getDuration('request_complete')
+              }],
+              result: {
+                status: 'success',
+                successfulProvider: selectedProvider.id,
+                totalAttempts: 1,
+                totalDuration: perfTracker.getTotalDuration(),
+                tokenUsage: null,  // 流式响应无法立即获取token使用量
+                estimatedCost: null
+              },
+              metadata: { failoverOccurred: attempt > 0, isStreaming: true }
+            });
+          });
+
           return;
 
         } catch (error) {
@@ -3258,6 +3395,39 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
           backgroundProcessor.handleSuccess(selectedProvider, pureModelName, userSettings, pollingConfig, sessionIdentifier);
 
           log.verbose(`[DEBUG] Non-streaming request completed successfully using provider ${selectedProvider.name}`);
+
+          // 记录API请求日志（非阻塞）
+          perfTracker.checkpoint('request_complete');
+          setImmediate(() => {
+            logApiRequest({
+              traceId,
+              clientIp,
+              userAgent,
+              apiKeyName,
+              sessionId: sessionIdentifier,
+              isPolling: usePolling,
+              isNewConversation,
+              request: { model: pureModelName, stream, messages },
+              providers: [{
+                attempt: attempt + 1,
+                providerId: selectedProvider.id,
+                providerName: selectedProvider.name,
+                status: 'success',
+                statusCode: response.status,
+                duration: perfTracker.getDuration('request_complete')
+              }],
+              result: {
+                status: 'success',
+                successfulProvider: selectedProvider.id,
+                totalAttempts: 1,
+                totalDuration: perfTracker.getTotalDuration(),
+                tokenUsage: response.data?.usage || null,
+                estimatedCost: null  // TODO: 添加成本计算
+              },
+              metadata: { failoverOccurred: attempt > 0 }
+            });
+          });
+
           return res.status(200).json(response.data);
 
         } catch (error) {
@@ -3289,6 +3459,38 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
     // Build detailed error information
     const errorDetails = errors.map(e => `${e.provider}: ${e.error}`).join('; ');
 
+    // 记录API请求日志（非阻塞）
+    perfTracker.checkpoint('all_providers_failed');
+    setImmediate(() => {
+      logApiRequest({
+        traceId,
+        clientIp,
+        userAgent,
+        apiKeyName,
+        sessionId: sessionIdentifier,
+        isPolling: usePolling,
+        isNewConversation,
+        request: { model: pureModelName, stream, messages },
+        providers: errors.map((e, idx) => ({
+          attempt: idx + 1,
+          providerId: `provider_${idx}`,
+          providerName: e.provider,
+          status: 'failed',
+          statusCode: e.status,
+          error: e.error
+        })),
+        result: {
+          status: 'failed',
+          successfulProvider: null,
+          totalAttempts: triedProviderIds.length,
+          totalDuration: perfTracker.getTotalDuration(),
+          tokenUsage: null,
+          estimatedCost: null
+        },
+        metadata: { failoverOccurred: triedProviderIds.length > 1 }
+      });
+    });
+
     sendErrorResponse(res, stream, {
       message: `All providers failed for model '${pureModelName}'. Tried ${triedProviderIds.length} providers.${stream ? ` Details: ${errorDetails}` : ''}`,
       type: 'server_error',
@@ -3298,6 +3500,32 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
 
   } catch (error) {
     log.error('[Proxy] Unexpected error:', error);
+
+    // 记录异常错误日志（非阻塞）
+    perfTracker.checkpoint('error');
+    setImmediate(() => {
+      logApiRequest({
+        traceId,
+        clientIp,
+        userAgent,
+        apiKeyName,
+        sessionId: sessionIdentifier,
+        isPolling: usePolling,
+        isNewConversation,
+        request: { model: pureModelName, stream, messages },
+        providers: [],
+        result: {
+          status: 'failed',
+          successfulProvider: null,
+          totalAttempts: 0,
+          totalDuration: perfTracker.getTotalDuration(),
+          tokenUsage: null,
+          estimatedCost: null
+        },
+        metadata: { errorType: 'internal_error', errorMessage: error.message }
+      });
+    });
+
     sendErrorResponse(res, stream, {
       message: error.message,
       type: 'server_error',
@@ -3469,34 +3697,56 @@ app.delete('/api/proxy-keys/:id', async (req, res) => {
 
 // ==================== 日志查询接口 ====================
 
-// 获取日志统计数据
+// 获取日志统计数据（增强版）
 app.get('/api/logs/stats', async (req, res) => {
   try {
     const { startDate, endDate } = req.query;
-    
-    // 如果没有提供日期范围，默认查询当天
+
+    // 如果没有提供日期范围，默认查询当天（使用本地时间）
     const today = new Date();
-    const start = startDate || today.toISOString().split('T')[0];
-    const end = endDate || today.toISOString().split('T')[0];
-    
+    const year = today.getFullYear();
+    const month = String(today.getMonth() + 1).padStart(2, '0');
+    const day = String(today.getDate()).padStart(2, '0');
+    const localToday = `${year}-${month}-${day}`;
+    const start = startDate || localToday;
+    const end = endDate || localToday;
+
     // 验证日期范围
     const startDateObj = new Date(start);
     const endDateObj = new Date(end);
     const daysDiff = Math.ceil((endDateObj - startDateObj) / (1000 * 60 * 60 * 24));
-    
+
     if (daysDiff > 7) {
       return res.status(400).json({ error: '日期范围不能超过7天' });
     }
-    
-    // 读取日志内容
-    const logsContent = await readLogs(start, end);
-    
+
+    // 判断是否是当天数据
+    const isToday = start === end && start === getLocalToday();
+
+    // 检查缓存
+    const cacheKey = `stats:${start}:${end}`;
+    const cachedStats = getCachedStats(cacheKey, isToday);
+    if (cachedStats) {
+      return res.json({
+        dateRange: { start, end },
+        stats: cachedStats,
+        fromCache: true
+      });
+    }
+
+    // 读取并解析日志
+    const logEntries = await readLogs(start, end);
+
     // 解析日志生成统计数据
-    const stats = parseLogsForStats(logsContent);
-    
+    const stats = parseLogsForStats(logEntries);
+
+    // 存入缓存（当天数据缓存时间更短）
+    setCachedStats(cacheKey, stats, isToday);
+
     res.json({
       dateRange: { start, end },
-      stats
+      stats,
+      fromCache: false
     });
   } catch (error) {
     console.error('Error getting log stats:', error);
@@ -3504,34 +3754,254 @@ app.get('/api/logs/stats', async (req, res) => {
   }
 });
 
-// 获取原始日志内容
-app.get('/api/logs/raw', async (req, res) => {
+// 刷新统计数据缓存（强制重新加载）
+app.post('/api/logs/stats/refresh', async (req, res) => {
   try {
-    const { startDate, endDate } = req.query;
-    
-    // 如果没有提供日期范围，默认查询当天
+    const { startDate, endDate } = req.body;
+
+    if (!startDate || !endDate) {
+      return res.status(400).json({ error: '请提供日期范围' });
+    }
+
+    // 清除该日期范围的缓存
+    const cacheKey = `stats:${startDate}:${endDate}`;
+    statsCache.delete(cacheKey);
+
+    // 重新读取并解析日志
+    const logEntries = await readLogs(startDate, endDate);
+    const stats = parseLogsForStats(logEntries);
+
+    // 重新存入缓存
+    const isToday = startDate === endDate && startDate === getLocalToday();
+    setCachedStats(cacheKey, stats, isToday);
+
+    res.json({
+      dateRange: { start: startDate, end: endDate },
+      stats,
+      fromCache: false,
+      refreshed: true
+    });
+  } catch (error) {
+    console.error('Error refreshing log stats:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 获取可用的日志日期列表
+app.get('/api/logs/available', async (req, res) => {
+  try {
+    const dates = await getAvailableLogDates();
+    res.json({ dates });
+  } catch (error) {
+    console.error('Error getting available log dates:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 搜索日志（支持多条件过滤和分页）
+app.get('/api/logs', async (req, res) => {
+  try {
+    const {
+      startDate,
+      endDate,
+      level,
+      type,
+      userId,
+      traceId,
+      keyword,
+      limit = 100,
+      offset = 0
+    } = req.query;
+
+    // 如果没有提供日期范围，默认查询当天（使用本地时间）
     const today = new Date();
-    const start = startDate || today.toISOString().split('T')[0];
-    const end = endDate || today.toISOString().split('T')[0];
-    
+    const year = today.getFullYear();
+    const month = String(today.getMonth() + 1).padStart(2, '0');
+    const day = String(today.getDate()).padStart(2, '0');
+    const localToday = `${year}-${month}-${day}`;
+    const start = startDate || localToday;
+    const end = endDate || localToday;
+
     // 验证日期范围
     const startDateObj = new Date(start);
     const endDateObj = new Date(end);
     const daysDiff = Math.ceil((endDateObj - startDateObj) / (1000 * 60 * 60 * 24));
-    
+
     if (daysDiff > 7) {
       return res.status(400).json({ error: '日期范围不能超过7天' });
     }
-    
-    // 读取日志内容
-    const logsContent = await readLogs(start, end);
-    
+
+    // 验证限制参数
+    const parsedLimit = parseInt(limit);
+    const parsedOffset = parseInt(offset);
+
+    if (isNaN(parsedLimit) || parsedLimit < 1 || parsedLimit > 1000) {
+      return res.status(400).json({ error: 'limit必须在1到1000之间' });
+    }
+
+    if (isNaN(parsedOffset) || parsedOffset < 0) {
+      return res.status(400).json({ error: 'offset必须大于等于0' });
+    }
+
+    // 验证级别和类型
+    const validLevels = Object.values(LogLevel);
+    const validTypes = Object.values(LogType);
+
+    if (level && !validLevels.includes(level)) {
+      return res.status(400).json({ error: `无效的日志级别，可选值: ${validLevels.join(', ')}` });
+    }
+
+    if (type && !validTypes.includes(type)) {
+      return res.status(400).json({ error: `无效的日志类型，可选值: ${validTypes.join(', ')}` });
+    }
+
+    // 搜索日志
+    const result = await searchLogs({
+      startDate: start,
+      endDate: end,
+      level,
+      type,
+      userId,
+      traceId,
+      keyword,
+      limit: parsedLimit,
+      offset: parsedOffset
+    });
+
     res.json({
       dateRange: { start, end },
-      content: logsContent
+      logs: result.logs,
+      pagination: result.pagination
     });
   } catch (error) {
-    console.error('Error getting raw logs:', error);
+    console.error('Error searching logs:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 导出日志
+app.get('/api/logs/export', async (req, res) => {
+  try {
+    const { startDate, endDate, format = 'json' } = req.query;
+
+    // 验证导出格式
+    if (!['json', 'csv'].includes(format)) {
+      return res.status(400).json({ error: '无效的导出格式，可选值: json, csv' });
+    }
+
+    // 如果没有提供日期范围，默认查询当天（使用本地时间）
+    const today = new Date();
+    const year = today.getFullYear();
+    const month = String(today.getMonth() + 1).padStart(2, '0');
+    const day = String(today.getDate()).padStart(2, '0');
+    const localToday = `${year}-${month}-${day}`;
+    const start = startDate || localToday;
+    const end = endDate || localToday;
+
+    // 验证日期范围
+    const startDateObj = new Date(start);
+    const endDateObj = new Date(end);
+    const daysDiff = Math.ceil((endDateObj - startDateObj) / (1000 * 60 * 60 * 24));
+
+    if (daysDiff > 30) {
+      return res.status(400).json({ error: '导出的日期范围不能超过30天' });
+    }
+
+    // 读取日志
+    const logEntries = await readLogs(start, end);
+
+    // 根据格式导出
+    let exportData;
+    let contentType;
+    let filename;
+
+    if (format === 'csv') {
+      exportData = exportToCSV(logEntries);
+      contentType = 'text/csv; charset=utf-8';
+      filename = `logs_${start}_${end}.csv`;
+    } else {
+      exportData = exportToJSON(logEntries);
+      contentType = 'application/json; charset=utf-8';
+      filename = `logs_${start}_${end}.json`;
+    }
+
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(exportData);
+  } catch (error) {
+    console.error('Error exporting logs:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 实时日志流（Server-Sent Events）
+app.get('/api/logs/stream', async (req, res) => {
+  try {
+    // 设置 SSE 响应头
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+
+    const { level, type } = req.query;
+
+    // 验证级别和类型
+    const validLevels = Object.values(LogLevel);
+    const validTypes = Object.values(LogType);
+
+    if (level && !validLevels.includes(level)) {
+      return res.status(400).json({ error: `无效的日志级别，可选值: ${validLevels.join(', ')}` });
+    }
+
+    if (type && !validTypes.includes(type)) {
+      return res.status(400).json({ error: `无效的日志类型，可选值: ${validTypes.join(', ')}` });
+    }
+
+    // 添加日志监听器
+    const removeListener = addLogListener((logEntry) => {
+      // 根据过滤条件决定是否发送
+      if (level && logEntry.level !== level) return;
+      if (type && logEntry.type !== type) return;
+
+      res.write(`data: ${JSON.stringify(logEntry)}\n\n`);
+    });
+
+    // 发送初始连接消息
+    res.write(`data: ${JSON.stringify({ type: 'connected', message: '实时日志流已连接' })}\n\n`);
+
+    // 客户端断开连接时移除监听器
+    req.on('close', () => {
+      removeListener();
+    });
+
+    req.on('end', () => {
+      removeListener();
+    });
+  } catch (error) {
+    console.error('Error setting up log stream:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 归档旧日志
+app.post('/api/logs/archive', async (req, res) => {
+  try {
+    const { daysToKeep = 30 } = req.body;
+
+    // 验证参数
+    if (daysToKeep < 1 || daysToKeep > 365) {
+      return res.status(400).json({ error: 'daysToKeep必须在1到365之间' });
+    }
+
+    const result = await archiveOldLogs(daysToKeep);
+
+    res.json({
+      success: true,
+      archivedCount: result.archivedCount,
+      errors: result.errors
+    });
+  } catch (error) {
+    console.error('Error archiving logs:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -3540,13 +4010,13 @@ app.get('/api/logs/raw', async (req, res) => {
 app.delete('/api/logs', async (req, res) => {
   try {
     const { startDate, endDate } = req.query;
-    
+
     if (!startDate || !endDate) {
       return res.status(400).json({ error: '必须提供开始日期和结束日期' });
     }
-    
+
     const result = await deleteLogs(startDate, endDate);
-    
+
     res.json({
       success: true,
       deletedCount: result.deletedCount,
@@ -3562,7 +4032,7 @@ app.delete('/api/logs', async (req, res) => {
 app.delete('/api/logs/all', async (req, res) => {
   try {
     const result = await clearAllLogs();
-    
+
     res.json({
       success: true,
       deletedCount: result.deletedCount,

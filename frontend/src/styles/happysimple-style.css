@@ -1,0 +1,418 @@
+/*
+ * HappySimple 风格 - 消息内容样式
+ * 基于 happysimple.css 改编
+ * 活泼可爱的多彩主题
+ */
+
+/* ==================== HappySimple 风格根变量 ==================== */
+.message-content.style-happysimple,
+.message-content.style-happysimple * {
+  --hs-bg: #c0e6ff;
+  --hs-select-bg: #ffafa3;
+  --hs-text: #000;
+  --hs-red: #fe5f58;
+  --hs-red-dark: #db524f;
+  --hs-blue: #61abff;
+  --hs-green: #47b357;
+  --hs-purple: #a68bff;
+  --hs-orange: #f0ad4e;
+  --hs-light-blue: #5fa7e4;
+  --hs-teal: #6aaf7e;
+  --hs-yellow: #fbe598;
+  --hs-code-bg: #edebeb;
+  --hs-table-header: #aed3e3;
+  --hs-table-odd: #ededed;
+  --hs-table-even: #e2f2f9;
+
+  --hs-font-body: -apple-system, BlinkMacSystemFont, "Segoe UI",
+    "PingFang SC", "Microsoft YaHei", sans-serif;
+  --hs-font-mono: Monaco, Consolas, "Courier New", monospace;
+}
+
+/* ==================== HappySimple 风格基础样式 ==================== */
+.message-content.style-happysimple {
+  font-family: var(--hs-font-body);
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--hs-text);
+  padding: 0.5rem 0;
+  background: transparent;
+}
+
+::selection {
+  background-color: var(--hs-select-bg);
+}
+
+/* ==================== 标题样式 ==================== */
+.message-content.style-happysimple h1,
+.message-content.style-happysimple h2,
+.message-content.style-happysimple h3,
+.message-content.style-happysimple h4,
+.message-content.style-happysimple h5,
+.message-content.style-happysimple h6 {
+  font-weight: 500;
+  color: var(--hs-text);
+  line-height: 1.5;
+  margin: 30px 0 15px;
+}
+
+.message-content.style-happysimple h1 {
+  font-size: 2.4rem;
+  margin-top: 0;
+  color: var(--hs-red-dark);
+}
+
+.message-content.style-happysimple h1:first-child {
+  margin-top: 0;
+}
+
+.message-content.style-happysimple h2 {
+  font-size: 2.0rem;
+  padding-bottom: 0.25rem;
+  border-bottom: 3px solid var(--hs-red);
+}
+
+.message-content.style-happysimple h3 {
+  font-size: 1.6rem;
+  font-weight: 400;
+  color: var(--hs-red);
+}
+
+.message-content.style-happysimple h4 {
+  font-size: 1.3rem;
+}
+
+.message-content.style-happysimple h5 {
+  font-size: 1.1rem;
+}
+
+.message-content.style-happysimple h6 {
+  font-size: 1rem;
+  color: var(--hs-red);
+}
+
+/* ==================== 段落样式 ==================== */
+.message-content.style-happysimple p {
+  margin: 10px 0;
+  line-height: 1.8;
+}
+
+/* ==================== 强调样式 ==================== */
+.message-content.style-happysimple strong {
+  color: var(--hs-red);
+  font-weight: 600;
+}
+
+.message-content.style-happysimple em {
+  color: var(--hs-purple);
+  font-style: italic;
+}
+
+.message-content.style-happysimple del {
+  color: #999;
+  text-decoration: line-through;
+}
+
+/* 高亮 */
+.message-content.style-happysimple mark {
+  background-color: var(--hs-yellow);
+  color: var(--hs-text);
+  padding: 2px 4px;
+  border-radius: 2px;
+}
+
+/* ==================== 列表样式 ==================== */
+.message-content.style-happysimple ul,
+.message-content.style-happysimple ol {
+  margin: 10px 0;
+  padding-left: 1.2em;
+}
+
+.message-content.style-happysimple li {
+  margin: 10px 0;
+  line-height: 1.8;
+}
+
+/* 无序列表 - 红色圆形符号 */
+.message-content.style-happysimple ul {
+  list-style: none;
+  padding-left: 0;
+}
+
+.message-content.style-happysimple ul li {
+  position: relative;
+  padding-left: 1.5rem;
+}
+
+.message-content.style-happysimple ul li::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 10px;
+  width: 0.8rem;
+  height: 0.8rem;
+  background-color: #fff;
+  border: 2px solid var(--hs-red);
+  border-radius: 50%;
+}
+
+/* 有序列表 - 红色数字 */
+.message-content.style-happysimple ol {
+  counter-reset: hs-counter;
+}
+
+.message-content.style-happysimple ol li {
+  counter-increment: hs-counter;
+  padding-left: 0;
+  list-style: none;
+  position: relative;
+  padding-left: 2rem;
+}
+
+.message-content.style-happysimple ol li::before {
+  content: counter(hs-counter);
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 1.5rem;
+  height: 1.5rem;
+  line-height: 1.5rem;
+  text-align: center;
+  color: var(--hs-red);
+  font-weight: 600;
+}
+
+/* 任务列表 */
+.message-content.style-happysimple .task-list {
+  list-style: none;
+  padding-left: 0;
+}
+
+.message-content.style-happysimple .task-list-item {
+  position: relative;
+  padding-left: 2rem;
+  margin: 8px 0;
+}
+
+.message-content.style-happysimple .task-list-item input[type="checkbox"] {
+  position: absolute;
+  left: 0;
+  top: 5px;
+  width: 1.1rem;
+  height: 1.1rem;
+  appearance: none;
+  -webkit-appearance: none;
+  border: 2px solid var(--hs-red);
+  border-radius: 2px;
+  background: #fff;
+  margin: 0;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.message-content.style-happysimple .task-list-item input[type="checkbox"]:checked {
+  background-color: var(--hs-red);
+  border-color: var(--hs-red);
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 16 16' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M3.5 8.5l3 3 6-6' stroke='%23ffffff' stroke-width='2.5'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 70%;
+}
+
+.message-content.style-happysimple .task-list-item input[type="checkbox"]:hover {
+  box-shadow: 0 0 0 3px rgba(254, 95, 88, 0.3);
+}
+
+/* ==================== 引用块样式 ==================== */
+.message-content.style-happysimple blockquote {
+  margin: 10px 0;
+  padding: 10px 15px;
+  border-left: 5px solid var(--hs-purple);
+  background: #f3f0ff;
+  border-radius: 0 5px 5px 0;
+  color: var(--hs-text);
+}
+
+.message-content.style-happysimple blockquote p {
+  margin: 0.5em 0;
+}
+
+/* ==================== 分割线样式 ==================== */
+.message-content.style-happysimple hr {
+  border: none;
+  border-top: 2px dashed var(--hs-red);
+  margin: 25px 0;
+}
+
+/* ==================== 代码样式 ==================== */
+
+/* 行内代码 */
+.message-content.style-happysimple code {
+  font-family: var(--hs-font-mono);
+  font-size: 0.9em;
+  color: #4c4c4c;
+  background-color: var(--hs-code-bg);
+  padding: 2px 6px;
+  border-radius: 2px;
+  line-height: normal;
+}
+
+/* 代码块容器 - 深色主题 */
+.message-content.style-happysimple pre {
+  background: linear-gradient(180deg, rgb(33, 37, 43) 0%, rgb(41, 45, 62) 100%);
+  border: 1px solid #000;
+  border-radius: 10px;
+  padding: 1rem;
+  margin: 15px 0;
+  overflow-x: auto;
+  font-family: var(--hs-font-mono);
+  font-size: 0.9em;
+  line-height: 1.6;
+  color: #a6accd;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.message-content.style-happysimple pre code {
+  background: transparent;
+  padding: 0;
+  color: inherit;
+}
+
+/* 语法高亮颜色（类似 VS Code） */
+.message-content.style-happysimple pre code .token.comment {
+  color: #7f848e;
+  font-style: italic;
+}
+
+.message-content.style-happysimple pre code .token.keyword {
+  color: #c678dd;
+  font-weight: 600;
+}
+
+.message-content.style-happysimple pre code .token.number {
+  color: #d19a66;
+}
+
+.message-content.style-happysimple pre code .token.string,
+.message-content.style-happysimple pre code .token.string-2 {
+  color: #98c379;
+}
+
+.message-content.style-happysimple pre code .token.function {
+  color: #61afef;
+}
+
+.message-content.style-happysimple pre code .token.tag {
+  color: #e06c75;
+}
+
+.message-content.style-happysimple pre code .token.attr-name {
+  color: #d19a66;
+}
+
+.message-content.style-happysimple pre code .token.class-name {
+  color: #e5c07b;
+}
+
+/* ==================== 表格样式 ==================== */
+.message-content.style-happysimple table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  margin: 10px 0;
+  border: 2px solid #000;
+  border-radius: 5px;
+  overflow: hidden;
+  font-size: 0.95em;
+}
+
+.message-content.style-happysimple th,
+.message-content.style-happysimple td {
+  padding: 10px 12px;
+  border: 1px solid #000;
+  text-align: left;
+}
+
+.message-content.style-happysimple thead th {
+  background-color: var(--hs-table-header);
+  color: var(--hs-text);
+  font-weight: 400;
+}
+
+.message-content.style-happysimple tbody tr:nth-child(odd) {
+  background-color: var(--hs-table-odd);
+}
+
+.message-content.style-happysimple tbody tr:nth-child(even) {
+  background-color: var(--hs-table-even);
+}
+
+.message-content.style-happysimple tbody tr:hover {
+  background-color: var(--hs-select-bg);
+}
+
+/* ==================== 链接样式 ==================== */
+.message-content.style-happysimple a {
+  color: var(--hs-blue);
+  text-decoration: none;
+  border-bottom: 2px solid #000;
+  transition: all 0.2s ease;
+}
+
+.message-content.style-happysimple a:hover {
+  color: var(--hs-red);
+  border-bottom-color: var(--hs-red);
+}
+
+/* ==================== 图片样式 ==================== */
+.message-content.style-happysimple img {
+  border: 2px solid #000;
+  border-radius: 5px;
+  max-width: 100%;
+  height: auto;
+  margin: 20px 0;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+/* ==================== 上标下标 ==================== */
+.message-content.style-happysimple sup,
+.message-content.style-happysimple sub {
+  font-size: 0.75em;
+  line-height: 0;
+}
+
+.message-content.style-happysimple sup {
+  vertical-align: super;
+}
+
+.message-content.style-happysimple sub {
+  vertical-align: sub;
+}
+
+/* ==================== 响应式调整 ==================== */
+@media (max-width: 768px) {
+  .message-content.style-happysimple {
+    font-size: 14px;
+  }
+
+  .message-content.style-happysimple h1 {
+    font-size: 1.8rem;
+  }
+
+  .message-content.style-happysimple h2 {
+    font-size: 1.5rem;
+  }
+
+  .message-content.style-happysimple h3 {
+    font-size: 1.3rem;
+  }
+
+  .message-content.style-happysimple table {
+    font-size: 0.85em;
+  }
+
+  .message-content.style-happysimple th,
+  .message-content.style-happysimple td {
+    padding: 8px 10px;
+  }
+}
