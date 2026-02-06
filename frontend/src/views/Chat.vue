@@ -95,6 +95,21 @@
             <span class="details-icon">🔍</span>
             <span>查看详情</span>
           </div>
+          <!-- 消息操作按钮 -->
+          <div class="message-actions" v-if="!msg.streaming">
+            <button class="action-btn" @click="copyMessage(msg)" title="复制消息">
+              <span class="action-icon">📋</span>
+              <span class="action-text">复制</span>
+            </button>
+            <button class="action-btn action-btn-danger" @click="deleteMessage(i)" title="删除消息">
+              <span class="action-icon">🗑️</span>
+              <span class="action-text">删除</span>
+            </button>
+            <button v-if="msg.role === 'assistant'" class="action-btn action-btn-primary" @click="regenerateResponse(i)" title="重新生成回复">
+              <span class="action-icon">🔄</span>
+              <span class="action-text">重新生成</span>
+            </button>
+          </div>
         </div>
       </div>
       
@@ -1121,6 +1136,77 @@
   }
   50% {
     opacity: 0.5;
+  }
+}
+
+/* 消息操作按钮样式 */
+.message-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid #e9ecef;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.message:hover .message-actions {
+  opacity: 1;
+}
+
+.action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  background-color: #f8f9fa;
+  border: 1px solid #dee2e6;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  color: #6c757d;
+  transition: all 0.2s ease;
+}
+
+.action-btn:hover {
+  background-color: #e9ecef;
+  border-color: #adb5bd;
+  color: #495057;
+}
+
+.action-btn-danger:hover {
+  background-color: #f8d7da;
+  border-color: #f5c6cb;
+  color: #721c24;
+}
+
+.action-btn-primary:hover {
+  background-color: #cce5ff;
+  border-color: #b8daff;
+  color: #004085;
+}
+
+.action-icon {
+  font-size: 14px;
+  line-height: 1;
+}
+
+.action-text {
+  font-size: 12px;
+}
+
+/* 适配小屏幕 */
+@media (max-width: 768px) {
+  .message-actions {
+    opacity: 1;
+  }
+
+  .action-text {
+    display: none;
+  }
+
+  .action-btn {
+    padding: 6px 8px;
   }
 }
 </style>
@@ -2253,7 +2339,7 @@ async function processStreamResponse(response, assistantMsg) {
     
     assistantMsg.streaming = false
     assistantMsg.error = false
-    
+
     // 最终渲染时使用缓存
     const cacheKey = `${assistantMsg.role}-${assistantMsg.content}`
     if (!renderedCache.has(cacheKey)) {
@@ -2262,6 +2348,9 @@ async function processStreamResponse(response, assistantMsg) {
     } else {
       assistantMsg.rendered = renderedCache.get(cacheKey)
     }
+
+    // 强制触发响应式更新，确保消息操作按钮显示
+    messages.value = [...messages.value]
     
   } catch (e) {
     console.error('Stream processing error:', e)
@@ -2519,7 +2608,7 @@ function showErrorDetails(errorDetails) {
 // 复制错误详情
 function copyErrorDetails() {
   if (!currentErrorDetails.value) return
-  
+
   const details = currentErrorDetails.value
   const text = `
 错误详情报告
@@ -2553,13 +2642,155 @@ ${details.stackTrace}
 建议解决方案:
 ${details.suggestions.map((s, i) => `${i + 1}. ${s}`).join('\n')}
 `.trim()
-  
+
   navigator.clipboard.writeText(text).then(() => {
     // 可以添加复制成功的提示
     console.log('错误详情已复制到剪贴板')
   }).catch(err => {
     console.error('复制失败:', err)
   })
+}
+
+// 复制消息内容
+function copyMessage(msg) {
+  const text = msg.content || ''
+  navigator.clipboard.writeText(text).then(() => {
+    console.log('消息已复制到剪贴板')
+  }).catch(err => {
+    console.error('复制失败:', err)
+    alert('复制失败，请手动选择文本复制')
+  })
+}
+
+// 删除消息
+async function deleteMessage(index) {
+  if (index < 0 || index >= messages.value.length) return
+
+  const msg = messages.value[index]
+  const confirmText = msg.role === 'user' ? '确定要删除这条用户消息吗？' : '确定要删除这条AI回复吗？'
+
+  if (!confirm(confirmText)) return
+
+  // 如果删除的是用户消息，同时删除其后面的AI回复（如果有的话）
+  if (msg.role === 'user' && index + 1 < messages.value.length && messages.value[index + 1].role === 'assistant') {
+    messages.value.splice(index, 2) // 删除用户消息和AI回复
+  } else {
+    messages.value.splice(index, 1) // 只删除当前消息
+  }
+
+  // 保存对话
+  await saveConversation()
+}
+
+// 重新生成AI回复
+async function regenerateResponse(index) {
+  if (index < 0 || index >= messages.value.length) return
+
+  const msg = messages.value[index]
+  if (msg.role !== 'assistant') return
+
+  // 检查是否正在发送
+  if (isSending.value) {
+    alert('当前有消息正在发送，请稍后再试')
+    return
+  }
+
+  // 设置发送锁
+  isSending.value = true
+
+  try {
+    // 如果没有当前对话，无法重新生成
+    if (!currentConv.value) {
+      alert('没有找到当前对话')
+      return
+    }
+
+    // 删除当前AI回复
+    messages.value.splice(index, 1)
+
+    // 获取之前的消息历史（用于重新生成）
+    const historyMessages = messages.value.slice(0, index)
+
+    // 如果历史消息为空或最后一条不是用户消息，无法重新生成
+    if (historyMessages.length === 0) {
+      alert('没有找到可用的历史消息')
+      isSending.value = false
+      return
+    }
+
+    throttledScrollToBottom()
+
+    // 创建新的助手消息
+    const assistantMsg = { role: 'assistant', content: '', streaming: true }
+    messages.value.push(assistantMsg)
+
+    // 根据模型类型选择参数
+    const requestParams = currentModelType.value === 'image' ? imageParams.value : params.value
+
+    const response = await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        messages: historyMessages,
+        model: currentModel.value,
+        params: requestParams,
+        polling: pollingEnabled.value,
+        systemPrompt: selectedPrompt.value ? selectedPrompt.value.content : undefined
+      })
+    })
+
+    // 检查HTTP状态码
+    if (!response.ok) {
+      const errorText = await response.text()
+      let errorMessage = `HTTP ${response.status}: ${response.statusText}`
+
+      try {
+        const errorData = JSON.parse(errorText)
+        if (errorData.error) {
+          errorMessage = errorData.error
+        }
+      } catch (e) {
+        if (errorText) {
+          errorMessage = errorText
+        }
+      }
+
+      throw new Error(errorMessage)
+    }
+
+    // 处理流式响应
+    await processStreamResponse(response, assistantMsg)
+
+  } catch (e) {
+    console.error('Regenerate error:', e)
+
+    // 创建详细错误信息
+    const errorDetails = createErrorDetails(e, currentModel.value)
+
+    let errorMessage = '重新生成失败'
+    if (e.message) {
+      errorMessage = e.message
+    }
+
+    const assistantMsg = messages.value[messages.value.length - 1]
+    if (assistantMsg && assistantMsg.role === 'assistant') {
+      assistantMsg.content = `❌ ${errorMessage}`
+      assistantMsg.streaming = false
+      assistantMsg.error = true
+      assistantMsg.errorDetails = errorDetails
+
+      messages.value = [...messages.value]
+      nextTick(() => {
+        throttledScrollToBottom()
+      })
+    }
+  } finally {
+    // 释放发送锁
+    isSending.value = false
+  }
+
+  // 保存对话
+  await saveConversation()
 }
 
 // 图片查看器相关函数
