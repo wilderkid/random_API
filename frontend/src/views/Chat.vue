@@ -1215,8 +1215,8 @@
 <style>
 /* ==================== 消息内容中的图片通用样式 ==================== */
 
-/* 为消息内容中的所有图片添加缩略图样式 */
-.message-content img {
+/* 为消息内容中的所有图片添加缩略图样式（排除生成图片） */
+.message-content img:not(.generated-image-preview) {
   max-width: 200px;
   max-height: 200px;
   border-radius: 8px;
@@ -1228,13 +1228,35 @@
   display: inline-block;
 }
 
-.message-content img:hover {
+.message-content img:not(.generated-image-preview):hover {
   transform: scale(1.05);
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
   border-color: #007bff;
 }
 
 /* ==================== 生成图片容器样式（非scoped，用于v-html） ==================== */
+
+/* 图片文本内容（进度信息、提示词等） */
+.image-text-content {
+  margin-bottom: 12px;
+  padding: 12px;
+  background: #f8f9fa;
+  border-radius: 8px;
+  border-left: 3px solid #0891b2;
+  font-size: 13px;
+  color: #495057;
+  line-height: 1.6;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.image-text-content p {
+  margin: 0 0 8px 0;
+}
+
+.image-text-content p:last-child {
+  margin-bottom: 0;
+}
 
 .generated-images-container {
   display: grid;
@@ -1270,10 +1292,14 @@
 .generated-image-preview {
   width: 100%;
   height: auto;
+  max-width: 100%;
   max-height: 250px;
   object-fit: cover;
   display: block;
   transition: transform 0.3s ease;
+  border: none;
+  margin: 0;
+  border-radius: 0;
 }
 
 /* 悬停遮罩层 */
@@ -2340,6 +2366,29 @@ async function processStreamResponse(response, assistantMsg) {
     assistantMsg.streaming = false
     assistantMsg.error = false
 
+    // 检测消息内容是否包含 Markdown 图片格式（用于处理上游 API 返回的图片）
+    const markdownImageRegex = /!\[([^\]]*)\]\(([^)]+)\)/g
+    const imageMatches = [...assistantMsg.content.matchAll(markdownImageRegex)]
+
+    if (imageMatches.length > 0) {
+      // 提取图片 URL，转换为图片响应格式
+      const extractedImages = imageMatches.map(match => ({
+        url: match[2],
+        alt: match[1] || 'Generated Image'
+      }))
+
+      // 提取非图片部分的文本（提示词、进度信息等）
+      let textContent = assistantMsg.content.replace(markdownImageRegex, '').trim()
+      // 清理多余的空行
+      textContent = textContent.replace(/\n{3,}/g, '\n\n').trim()
+
+      // 设置为图片响应类型
+      assistantMsg.messageType = 'image-response'
+      assistantMsg.generatedImages = extractedImages
+      assistantMsg.textContent = textContent // 保存文本内容用于显示
+      console.log(`[ImageDetect] 检测到 ${extractedImages.length} 张图片`)
+    }
+
     // 最终渲染时使用缓存
     const cacheKey = `${assistantMsg.role}-${assistantMsg.content}`
     if (!renderedCache.has(cacheKey)) {
@@ -2439,14 +2488,21 @@ const throttledScrollToBottom = (() => {
 function getRenderedContent(msg, index) {
   // 生图响应特殊渲染
   if (msg.messageType === 'image-response' && msg.generatedImages) {
-    let html = '<div class="generated-images-container">'
+    let html = ''
+
+    // 如果有文本内容（从 Markdown 格式检测到的图片会带有文本），先显示文本
+    if (msg.textContent) {
+      html += `<div class="image-text-content">${DOMPurify.sanitize(marked(msg.textContent))}</div>`
+    }
+
+    html += '<div class="generated-images-container">'
 
     msg.generatedImages.forEach((img, idx) => {
       // 使用data属性存储图片URL，通过事件委托处理点击
       html += `
         <div class="generated-image-item">
           <div class="image-preview-wrapper" data-image-url="${DOMPurify.sanitize(img.url)}" style="cursor: pointer;">
-            <img src="${img.url}" alt="Generated Image ${idx + 1}"
+            <img src="${img.url}" alt="${img.alt || 'Generated Image ' + (idx + 1)}"
                  class="generated-image-preview" loading="lazy">
             <div class="image-preview-overlay">
               <span class="preview-icon">🔍</span>
