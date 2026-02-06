@@ -109,8 +109,8 @@
           :class="getLogLevelClass(log.level)"
         >
           <div class="log-header" @click="toggleLogDetail(log)">
-            <span class="log-badge level-{{ log.level.toLowerCase() }}">{{ log.level }}</span>
-            <span class="log-badge type-{{ log.type.toLowerCase() }}">{{ log.type }}</span>
+            <span :class="['log-badge', `level-${log.level.toLowerCase()}`]">{{ log.level }}</span>
+            <span :class="['log-badge', `type-${log.type.toLowerCase()}`]">{{ log.type }}</span>
             <span class="log-time">{{ formatTime(log.timestamp) }}</span>
             <span class="log-message-short">{{ getShortMessage(log.message) }}</span>
             <span class="toggle-icon">{{ expandedLogs.has(log.traceId) ? '▼' : '▶' }}</span>
@@ -152,25 +152,33 @@
 
       <!-- 分页控制 -->
       <div v-if="pagination.total > 0" class="pagination">
-        <button
-          @click="goToPage(0)"
-          class="btn-page"
-          :disabled="pagination.offset === 0"
-        >首页</button>
-        <button
-          @click="prevPage"
-          class="btn-page"
-          :disabled="pagination.offset === 0"
-        >上一页</button>
-        <span class="page-info">
-          {{ pagination.offset + 1 }} - {{ Math.min(pagination.offset + pagination.limit, pagination.total) }}
-          / {{ pagination.total }}
-        </span>
-        <button
-          @click="nextPage"
-          class="btn-page"
-          :disabled="!pagination.hasMore"
-        >下一页</button>
+        <div class="pagination-left">
+          <label class="page-size-label">每页显示：</label>
+          <select v-model.number="pagination.limit" @change="changePageSize(pagination.limit)" class="page-size-select">
+            <option v-for="size in pageSizeOptions" :key="size" :value="size">{{ size }} 条</option>
+          </select>
+        </div>
+        <div class="pagination-controls">
+          <button
+            @click="goToPage(0)"
+            class="btn-page"
+            :disabled="pagination.offset === 0"
+          >首页</button>
+          <button
+            @click="prevPage"
+            class="btn-page"
+            :disabled="pagination.offset === 0"
+          >上一页</button>
+          <span class="page-info">
+            {{ pagination.offset + 1 }} - {{ Math.min(pagination.offset + pagination.limit, pagination.total) }}
+            / {{ pagination.total }}
+          </span>
+          <button
+            @click="nextPage"
+            class="btn-page"
+            :disabled="!pagination.hasMore"
+          >下一页</button>
+        </div>
       </div>
     </div>
 
@@ -262,10 +270,13 @@ const filters = ref({
 // 分页
 const pagination = ref({
   total: 0,
-  limit: 50,
+  limit: 10,
   offset: 0,
   hasMore: false
 })
+
+// 每页显示条目数选项
+const pageSizeOptions = [10, 20, 50, 100]
 
 // 展开的日志详情
 const expandedLogs = ref(new Set())
@@ -438,6 +449,13 @@ function prevPage() {
 
 function nextPage() {
   pagination.value.offset += pagination.value.limit
+  loadLogs()
+}
+
+// 改变每页显示条目数
+function changePageSize(newSize) {
+  pagination.value.limit = newSize
+  pagination.value.offset = 0
   loadLogs()
 }
 
@@ -875,6 +893,8 @@ h2 {
   border: 1px solid #e0e0e0;
   border-radius: 6px;
   overflow: hidden;
+  flex-shrink: 0;
+  min-height: 50px;
 }
 
 .log-header {
@@ -1034,12 +1054,50 @@ h2 {
 /* 分页 */
 .pagination {
   display: flex;
-  justify-content: center;
+  justify-content: space-between;
   align-items: center;
-  gap: 10px;
+  gap: 20px;
   margin-top: 20px;
   padding-top: 20px;
   border-top: 1px solid #e0e0e0;
+  flex-wrap: wrap;
+}
+
+.pagination-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.page-size-label {
+  font-size: 14px;
+  color: #666;
+  white-space: nowrap;
+}
+
+.page-size-select {
+  padding: 6px 10px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  background: white;
+  cursor: pointer;
+  font-size: 14px;
+  transition: border-color 0.3s;
+}
+
+.page-size-select:hover {
+  border-color: #999;
+}
+
+.page-size-select:focus {
+  outline: none;
+  border-color: #2196F3;
+}
+
+.pagination-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
 .btn-page {
@@ -1065,6 +1123,7 @@ h2 {
 .page-info {
   font-size: 14px;
   color: #666;
+  white-space: nowrap;
 }
 
 /* 对话框 */

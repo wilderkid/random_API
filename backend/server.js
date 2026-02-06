@@ -130,6 +130,23 @@ let promptsCacheTime = 0;
 let languagesCacheTime = 0;
 const CACHE_TTL = 5000; // 5秒缓存
 
+// 支持Tool Calling的主流模型列表（模型名称匹配规则）
+const TOOL_CALLING_SUPPORTED_MODELS = [
+  /gpt-/i,           // ChatGPT系列: gpt-4, gpt-3.5-turbo等
+  /claude/i,         // Claude系列
+  /gemini/i,         // Gemini系列
+  /glm-/i,           // GLM系列: glm-4等
+  /moonshot/i,       // Kimi (Moonshot)
+  /abab/i,           // MiniMax
+];
+
+// 检查模型是否支持Tool Calling
+function supportsToolCalling(modelName) {
+  if (!modelName) return false;
+  const normalized = modelName.toLowerCase();
+  return TOOL_CALLING_SUPPORTED_MODELS.some(pattern => pattern.test(normalized));
+}
+
 // 配置常量
 const CONFIG = {
   CACHE_TTL: 5000, // 缓存过期时间（毫秒）
@@ -566,6 +583,61 @@ app.put('/api/providers/:id', async (req, res) => {
   }
 });
 
+// 批量删除供应商（必须在 :id 路由之前定义）
+app.delete('/api/providers/batch', async (req, res) => {
+  try {
+    const { ids } = req.body;
+
+    if (!ids || !Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({ error: '请提供要删除的供应商ID列表' });
+    }
+
+    const data = await getApiSettings();
+    const originalCount = data.providers.length;
+    const idsSet = new Set(ids);
+
+    data.providers = data.providers.filter(p => !idsSet.has(p.id));
+    const deletedCount = originalCount - data.providers.length;
+
+    await safeWriteFile(API_SETTINGS_FILE, data);
+    invalidateApiSettingsCache();
+
+    console.log(`[供应商管理] 批量删除了 ${deletedCount} 个供应商`);
+    res.json({
+      success: true,
+      deletedCount,
+      message: `成功删除 ${deletedCount} 个供应商`
+    });
+  } catch (error) {
+    console.error('[供应商管理] 批量删除失败:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 清除所有供应商（必须在 :id 路由之前定义）
+app.delete('/api/providers/all', async (req, res) => {
+  try {
+    const data = await getApiSettings();
+    const deletedCount = data.providers.length;
+
+    data.providers = [];
+
+    await safeWriteFile(API_SETTINGS_FILE, data);
+    invalidateApiSettingsCache();
+
+    console.log(`[供应商管理] 清除了所有供应商，共 ${deletedCount} 个`);
+    res.json({
+      success: true,
+      deletedCount,
+      message: `成功清除所有供应商，共 ${deletedCount} 个`
+    });
+  } catch (error) {
+    console.error('[供应商管理] 清除所有供应商失败:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 删除单个供应商（:id 路由必须放在具体路由之后）
 app.delete('/api/providers/:id', async (req, res) => {
   const data = await getApiSettings();
   data.providers = data.providers.filter(p => p.id !== req.params.id);
@@ -1507,8 +1579,8 @@ function buildApiUrl(baseUrl, endpoint, apiType = 'openai', customEndpoints = nu
   }
 }
 
-function buildChatRequestBody(modelId, messages, params, apiType = 'openai', images = null, systemPrompt = null) {
-  log.verbose(`[DEBUG] buildChatRequestBody: modelId=${modelId}, apiType=${apiType}, messages=${messages.length}, images=${images ? images.length : 'none'}, systemPrompt=${systemPrompt ? 'yes' : 'no'}`);
+function buildChatRequestBody(modelId, messages, params, apiType = 'openai', images = null, systemPrompt = null, tools = null, toolChoice = null) {
+  log.verbose(`[DEBUG] buildChatRequestBody: modelId=${modelId}, apiType=${apiType}, messages=${messages.length}, images=${images ? images.length : 'none'}, systemPrompt=${systemPrompt ? 'yes' : 'no'}, tools=${tools ? tools.length : 'none'}`);
 
   // Process image message format
   let processedMessages = messages;
@@ -1563,6 +1635,27 @@ function buildChatRequestBody(modelId, messages, params, apiType = 'openai', ima
       log.verbose(`[DEBUG] Added default max_tokens: ${requestBody.max_tokens}`);
     }
 
+    // Convert OpenAI tool format to Anthropic tool format
+    if (tools && tools.length > 0) {
+      requestBody.tools = tools.map(tool => ({
+        name: tool.function.name,
+        description: tool.function.description || '',
+        input_schema: tool.function.parameters || {}
+      }));
+      log.verbose(`[DEBUG] Converted ${tools.length} tools to Anthropic format`);
+
+      // Handle tool_choice for Anthropic
+      if (toolChoice) {
+        if (toolChoice === 'auto') {
+          requestBody.tool_choice = { type: 'auto' };
+        } else if (toolChoice === 'none') {
+          delete requestBody.tools; // Anthropic doesn't support explicit "none"
+        } else if (typeof toolChoice === 'object' && toolChoice.function) {
+          requestBody.tool_choice = { type: 'tool', name: toolChoice.function.name };
+        }
+      }
+    }
+
     log.verbose(`[DEBUG] Final Anthropic request body created`);
     return requestBody;
   } else {
@@ -1583,6 +1676,45 @@ function buildChatRequestBody(modelId, messages, params, apiType = 'openai', ima
       messages: finalMessages,
       ...params
     };
+
+    // Add tools for OpenAI compatible APIs
+    if (tools && tools.length > 0) {
+      // 清理工具定义，只移除 strict 和 additionalProperties 字段
+      requestBody.tools = tools.map(tool => {
+        const cleanTool = JSON.parse(JSON.stringify(tool)); // 深拷贝
+
+        // 递归移除 strict 和 additionalProperties 字段
+        const removeIncompatibleFields = (obj) => {
+          if (typeof obj !== 'object' || obj === null) return;
+
+          if (Array.isArray(obj)) {
+            obj.forEach(item => removeIncompatibleFields(item));
+          } else {
+            // 删除不兼容的字段
+            delete obj.strict;
+            delete obj.additionalProperties;
+
+            // 递归处理子对象
+            Object.values(obj).forEach(value => {
+              if (typeof value === 'object' && value !== null) {
+                removeIncompatibleFields(value);
+              }
+            });
+          }
+        };
+
+        removeIncompatibleFields(cleanTool);
+        return cleanTool;
+      });
+
+      log.verbose(`[DEBUG] Added ${tools.length} tools to request (removed strict/additionalProperties)`);
+
+      if (toolChoice) {
+        requestBody.tool_choice = toolChoice;
+        log.verbose(`[DEBUG] Added tool_choice: ${JSON.stringify(toolChoice)}`);
+      }
+    }
+
     log.verbose(`[DEBUG] Final OpenAI request body created`);
     return requestBody;
   }
@@ -2365,12 +2497,24 @@ function buildStreamingChunkFromCompletion(completion) {
     const message = choice.message || {};
     const content = typeof message.content === 'string' ? message.content : '';
 
+    const delta = {
+      role: message.role || 'assistant',
+      content
+    };
+
+    // 重要：转发 tool_calls 字段，否则工具调用会失败
+    if (message.tool_calls) {
+      delta.tool_calls = message.tool_calls;
+    }
+
+    // 也转发 function_call（旧版本兼容）
+    if (message.function_call) {
+      delta.function_call = message.function_call;
+    }
+
     return {
       index: choice.index !== undefined ? choice.index : index,
-      delta: {
-        role: message.role || 'assistant',
-        content
-      },
+      delta,
       finish_reason: choice.finish_reason || null
     };
   });
@@ -2390,8 +2534,391 @@ function buildStreamingChunkFromCompletion(completion) {
   return chunk;
 }
 
+// Anthropic to OpenAI format converter for streaming responses
+function convertAnthropicStreamToOpenAI(apiType) {
+  const { Transform } = require('stream');
+
+  if (apiType !== 'anthropic') {
+    // 如果不是Anthropic类型，直接透传
+    return new Transform({
+      transform(chunk, encoding, callback) {
+        callback(null, chunk);
+      }
+    });
+  }
+
+  // Anthropic格式转换器
+  let buffer = '';
+  let toolCallIndex = 0;
+  let currentToolCall = null;
+  let eventCount = 0;
+  let outputCount = 0;
+
+  console.log('[Converter] Anthropic-to-OpenAI converter initialized');
+
+  return new Transform({
+    transform(chunk, encoding, callback) {
+      try {
+        const chunkStr = chunk.toString();
+        buffer += chunkStr;
+
+        // 按行处理SSE数据
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || ''; // 保留最后一个不完整的行
+
+        for (const line of lines) {
+          if (!line.trim() || line.startsWith(':')) {
+            // 空行或注释行，直接转发
+            this.push(line + '\n');
+            continue;
+          }
+
+          if (line.startsWith('data: ')) {
+            const data = line.slice(6);
+
+            if (data === '[DONE]') {
+              console.log('[Converter] Received [DONE] signal');
+              this.push('data: [DONE]\n\n');
+              continue;
+            }
+
+            try {
+              const event = JSON.parse(data);
+              eventCount++;
+
+              // 检测是OpenAI格式还是Anthropic格式
+              if (event.choices) {
+                // OpenAI 格式，但需要检查是否包含 XML 工具调用
+                const delta = event.choices[0]?.delta;
+                const content = delta?.content;
+
+                if (content && typeof content === 'string') {
+                  // 检测 XML 工具调用标签
+                  const xmlToolPattern = /<([a-z_]+)>[\s\S]*?<\/\1>/;
+                  const hasXmlTools = xmlToolPattern.test(content);
+
+                  if (hasXmlTools) {
+                    console.log(`[Converter] Event #${eventCount}: OpenAI format with XML tools detected, converting`);
+
+                    // 解析 XML 工具调用
+                    const toolCalls = parseXmlToolCalls(content);
+
+                    if (toolCalls && toolCalls.length > 0) {
+                      // 创建包含 tool_calls 的新事件
+                      const convertedEvent = {
+                        ...event,
+                        choices: [{
+                          ...event.choices[0],
+                          delta: {
+                            tool_calls: toolCalls
+                          },
+                          finish_reason: 'tool_calls'
+                        }]
+                      };
+
+                      outputCount++;
+                      console.log(`[Converter] Converted ${toolCalls.length} XML tools to tool_calls format`);
+                      this.push(`data: ${JSON.stringify(convertedEvent)}\n\n`);
+                    } else {
+                      // 没有识别到工具，移除 XML 标签后透传
+                      const cleanContent = removeXmlToolCalls(content);
+                      if (cleanContent) {
+                        const cleanedEvent = {
+                          ...event,
+                          choices: [{
+                            ...event.choices[0],
+                            delta: {
+                              content: cleanContent
+                            }
+                          }]
+                        };
+                        this.push(`data: ${JSON.stringify(cleanedEvent)}\n\n`);
+                      }
+                    }
+                  } else {
+                    console.log(`[Converter] Event #${eventCount}: OpenAI format, passing through`);
+                    this.push(line + '\n\n');
+                  }
+                } else {
+                  console.log(`[Converter] Event #${eventCount}: OpenAI format, passing through`);
+                  this.push(line + '\n\n');
+                }
+              } else if (event.type) {
+                // Anthropic格式，需要转换
+                console.log(`[Converter] Event #${eventCount}: Anthropic type=${event.type}`);
+
+                const openaiChunk = convertAnthropicEventToOpenAI(event, toolCallIndex, currentToolCall);
+
+                if (openaiChunk) {
+                  outputCount++;
+                  console.log(`[Converter] Output #${outputCount}: Generated OpenAI chunk for event type ${event.type}`);
+
+                  // 更新工具调用状态
+                  if (event.type === 'content_block_start' &&
+                      event.content_block?.type === 'tool_use') {
+                    currentToolCall = {
+                      id: event.content_block.id,
+                      name: event.content_block.name,
+                      arguments: ''
+                    };
+                    toolCallIndex++;
+                  } else if (event.type === 'content_block_delta' &&
+                             event.delta?.type === 'input_json_delta') {
+                    if (currentToolCall) {
+                      currentToolCall.arguments += event.delta.partial_json;
+                    }
+                  } else if (event.type === 'content_block_stop') {
+                    currentToolCall = null;
+                  }
+
+                  this.push(`data: ${JSON.stringify(openaiChunk)}\n\n`);
+                } else {
+                  console.log(`[Converter] Event type ${event.type} returned null, skipping`);
+                }
+              } else {
+                // 未知格式，直接透传
+                console.log(`[Converter] Event #${eventCount}: Unknown format, passing through`);
+                this.push(line + '\n\n');
+              }
+            } catch (e) {
+              // JSON解析失败，可能是格式问题，直接转发
+              console.log('[Converter] Failed to parse event as JSON:', e.message);
+              console.log('[Converter] Raw data:', data.substring(0, 200));
+              this.push(line + '\n\n');
+            }
+          } else {
+            // 非data行，直接转发
+            this.push(line + '\n');
+          }
+        }
+
+        callback();
+      } catch (error) {
+        console.error('[Converter] Error in transform:', error);
+        callback(error);
+      }
+    },
+
+    flush(callback) {
+      console.log(`[Converter] Flush called. Total events: ${eventCount}, Total outputs: ${outputCount}`);
+      // 处理剩余的buffer
+      if (buffer.trim()) {
+        this.push(buffer);
+      }
+      callback();
+    }
+  });
+}
+
+// Parse XML tool calls and convert to OpenAI tool_calls format
+function parseXmlToolCalls(content) {
+  const toolCalls = [];
+
+  // Match XML tool tags like <tool_name>...</tool_name>
+  const toolPattern = /<([a-z_][a-z0-9_]*?)>([\s\S]*?)<\/\1>/g;
+  let match;
+  let toolIndex = 0;
+
+  while ((match = toolPattern.exec(content)) !== null) {
+    const toolName = match[1];
+    const toolContent = match[2];
+
+    // Skip common non-tool tags
+    if (['thinking', 'answer', 'response'].includes(toolName)) {
+      continue;
+    }
+
+    // Parse parameters from nested XML tags
+    const params = {};
+    const paramPattern = /<([a-z_][a-z0-9_]*?)>([\s\S]*?)<\/\1>/g;
+    let paramMatch;
+
+    while ((paramMatch = paramPattern.exec(toolContent)) !== null) {
+      const paramName = paramMatch[1];
+      const paramValue = paramMatch[2].trim();
+      params[paramName] = paramValue;
+    }
+
+    // If no nested tags, use the content as a single parameter
+    if (Object.keys(params).length === 0 && toolContent.trim()) {
+      params.content = toolContent.trim();
+    }
+
+    toolCalls.push({
+      id: `call_xml_${Date.now()}_${toolIndex}`,
+      type: 'function',
+      function: {
+        name: toolName,
+        arguments: JSON.stringify(params)
+      }
+    });
+
+    toolIndex++;
+  }
+
+  return toolCalls.length > 0 ? toolCalls : null;
+}
+
+// Remove XML tool calls from content
+function removeXmlToolCalls(content) {
+  // Remove tool XML tags but keep thinking tags
+  return content.replace(/<(?!thinking|\/thinking)([a-z_][a-z0-9_]*?)>[\s\S]*?<\/\1>/g, '').trim();
+}
+
+// Convert single Anthropic event to OpenAI format
+function convertAnthropicEventToOpenAI(anthropicEvent, toolCallIndex, currentToolCall) {
+  const timestamp = Math.floor(Date.now() / 1000);
+
+  // 基础OpenAI chunk结构
+  const baseChunk = {
+    id: `chatcmpl-${timestamp}`,
+    object: 'chat.completion.chunk',
+    created: timestamp,
+    model: anthropicEvent.model || 'claude',
+    choices: [{
+      index: 0,
+      delta: {},
+      finish_reason: null
+    }]
+  };
+
+  switch (anthropicEvent.type) {
+    case 'message_start':
+      baseChunk.choices[0].delta = { role: 'assistant', content: '' };
+      return baseChunk;
+
+    case 'content_block_start':
+      if (anthropicEvent.content_block?.type === 'text') {
+        baseChunk.choices[0].delta = { content: '' };
+        return baseChunk;
+      } else if (anthropicEvent.content_block?.type === 'tool_use') {
+        // 开始工具调用
+        baseChunk.choices[0].delta = {
+          tool_calls: [{
+            index: toolCallIndex,
+            id: `call_${anthropicEvent.content_block.id}`,
+            type: 'function',
+            function: {
+              name: anthropicEvent.content_block.name,
+              arguments: ''
+            }
+          }]
+        };
+        return baseChunk;
+      }
+      break;
+
+    case 'content_block_delta':
+      if (anthropicEvent.delta?.type === 'text_delta') {
+        baseChunk.choices[0].delta = { content: anthropicEvent.delta.text };
+        return baseChunk;
+      } else if (anthropicEvent.delta?.type === 'input_json_delta') {
+        // 工具调用参数增量
+        baseChunk.choices[0].delta = {
+          tool_calls: [{
+            index: toolCallIndex - 1,
+            function: {
+              arguments: anthropicEvent.delta.partial_json
+            }
+          }]
+        };
+        return baseChunk;
+      }
+      break;
+
+    case 'content_block_stop':
+      // 内容块结束，不需要特殊处理
+      return null;
+
+    case 'message_delta':
+      if (anthropicEvent.delta?.stop_reason) {
+        baseChunk.choices[0].finish_reason = anthropicEvent.delta.stop_reason === 'end_turn' ? 'stop' :
+                                             anthropicEvent.delta.stop_reason === 'tool_use' ? 'tool_calls' :
+                                             anthropicEvent.delta.stop_reason;
+        return baseChunk;
+      }
+      break;
+
+    case 'message_stop':
+      baseChunk.choices[0].finish_reason = 'stop';
+      return baseChunk;
+
+    case 'error':
+      console.error('[DEBUG] Anthropic API error:', anthropicEvent.error);
+      return null;
+  }
+
+  return null;
+}
+
+// Convert non-streaming Anthropic JSON response to OpenAI format
+function convertAnthropicJsonToOpenAI(anthropicResponse) {
+  // Check if this is an Anthropic response
+  if (!anthropicResponse.type || anthropicResponse.type !== 'message') {
+    // Not an Anthropic response, return as-is
+    return anthropicResponse;
+  }
+
+  console.log('[DEBUG] Converting Anthropic JSON response to OpenAI format');
+
+  const timestamp = Math.floor(Date.now() / 1000);
+  const openaiResponse = {
+    id: `chatcmpl-${timestamp}`,
+    object: 'chat.completion',
+    created: timestamp,
+    model: anthropicResponse.model || 'claude',
+    choices: [{
+      index: 0,
+      message: {
+        role: 'assistant',
+        content: null
+      },
+      finish_reason: null
+    }],
+    usage: anthropicResponse.usage ? {
+      prompt_tokens: anthropicResponse.usage.input_tokens || 0,
+      completion_tokens: anthropicResponse.usage.output_tokens || 0,
+      total_tokens: (anthropicResponse.usage.input_tokens || 0) + (anthropicResponse.usage.output_tokens || 0)
+    } : undefined
+  };
+
+  // Process content blocks
+  let textContent = '';
+  const toolCalls = [];
+
+  if (anthropicResponse.content && Array.isArray(anthropicResponse.content)) {
+    for (const block of anthropicResponse.content) {
+      if (block.type === 'text') {
+        textContent += block.text;
+      } else if (block.type === 'tool_use') {
+        toolCalls.push({
+          id: `call_${block.id}`,
+          type: 'function',
+          function: {
+            name: block.name,
+            arguments: JSON.stringify(block.input)
+          }
+        });
+      }
+    }
+  }
+
+  // Set message content and tool_calls
+  if (toolCalls.length > 0) {
+    openaiResponse.choices[0].message.content = textContent || null;
+    openaiResponse.choices[0].message.tool_calls = toolCalls;
+    openaiResponse.choices[0].finish_reason = 'tool_calls';
+  } else {
+    openaiResponse.choices[0].message.content = textContent;
+    openaiResponse.choices[0].finish_reason = anthropicResponse.stop_reason === 'end_turn' ? 'stop' :
+                                               anthropicResponse.stop_reason || 'stop';
+  }
+
+  return openaiResponse;
+}
+
 // Performance optimization: Simplified streaming response handler
-async function handleStreamingResponse(response, res, stream, selectedProvider, pureModelName, userSettings, pollingConfig, sessionIdentifier) {
+async function handleStreamingResponse(response, res, stream, selectedProvider, pureModelName, userSettings, pollingConfig, sessionIdentifier, apiType, skipConverter = false) {
   const originalContentType = response.headers['content-type'];
 
   // Set appropriate response headers based on client request
@@ -2405,18 +2932,87 @@ async function handleStreamingResponse(response, res, stream, selectedProvider, 
 
   let responseCompleted = false;
 
+  // Auto-detect if this is a Claude model that might return Anthropic format
+  // 在透传模式下（skipConverter=true），不进行任何格式转换
+  const isClaudeModel = /claude/i.test(pureModelName);
+  const shouldConvert = !skipConverter && isClaudeModel && apiType === 'openai';
+
+  if (skipConverter) {
+    console.log(`[DEBUG] 透传模式已启用，跳过格式转换器`);
+  } else if (shouldConvert) {
+    console.log(`[DEBUG] Detected Claude model with OpenAI apiType, will apply Anthropic-to-OpenAI converter`);
+  }
+
   // Handle different response types efficiently
   if (originalContentType && originalContentType.includes('text/event-stream')) {
-    // Direct SSE forwarding
-    response.data.pipe(res);
+    // SSE forwarding with Anthropic-to-OpenAI conversion if needed
+    console.log(`[DEBUG] Forwarding SSE stream (apiType=${apiType}, shouldConvert=${shouldConvert})`);
 
-    // Handle success in background
+    let dataReceived = false;
+    let sseEventCount = 0;
+    let hasToolCalls = false;
+
+    response.data.on('data', (chunk) => {
+      const chunkStr = chunk.toString();
+      if (!dataReceived) {
+        console.log('[DEBUG] First SSE chunk received');
+        dataReceived = true;
+      }
+
+      // 解析 SSE 数据，检查是否包含 tool_calls
+      const lines = chunkStr.split('\n');
+      for (const line of lines) {
+        if (line.startsWith('data: ') && line !== 'data: [DONE]') {
+          sseEventCount++;
+          try {
+            const data = JSON.parse(line.slice(6));
+            const delta = data.choices?.[0]?.delta;
+            const finishReason = data.choices?.[0]?.finish_reason;
+
+            // 打印关键信息
+            if (sseEventCount <= 3 || delta?.tool_calls || finishReason) {
+              console.log(`[SSE调试] 事件 #${sseEventCount}:`);
+              if (delta?.content) {
+                console.log(`  content: "${delta.content.substring(0, 100)}${delta.content.length > 100 ? '...' : ''}"`);
+              }
+              if (delta?.tool_calls) {
+                hasToolCalls = true;
+                console.log(`  tool_calls: ${JSON.stringify(delta.tool_calls)}`);
+              }
+              if (finishReason) {
+                console.log(`  finish_reason: ${finishReason}`);
+              }
+            }
+          } catch (e) {
+            // 忽略解析错误
+          }
+        }
+      }
+    });
+
     response.data.on('end', () => {
+      console.log('[DEBUG] SSE stream ended normally');
+      console.log(`[SSE调试] 总事件数: ${sseEventCount}, 包含工具调用: ${hasToolCalls}`);
       if (!responseCompleted) {
         responseCompleted = true;
         backgroundProcessor.handleSuccess(selectedProvider, pureModelName, userSettings, pollingConfig, sessionIdentifier);
       }
     });
+
+    response.data.on('error', (error) => {
+      console.log('[DEBUG] SSE stream error:', error.message);
+      if (!responseCompleted) {
+        responseCompleted = true;
+      }
+    });
+
+    // Apply Anthropic-to-OpenAI converter if needed, then pipe to response
+    if (shouldConvert) {
+      const converter = convertAnthropicStreamToOpenAI('anthropic');
+      response.data.pipe(converter).pipe(res);
+    } else {
+      response.data.pipe(res);
+    }
   } else {
     // Handle JSON response
     let chunks = [];
@@ -2432,7 +3028,13 @@ async function handleStreamingResponse(response, res, stream, selectedProvider, 
 
       try {
         const fullData = Buffer.concat(chunks).toString('utf8');
-        const jsonData = JSON.parse(fullData);
+        let jsonData = JSON.parse(fullData);
+
+        // Apply Anthropic-to-OpenAI conversion if needed
+        if (shouldConvert) {
+          console.log('[DEBUG] Converting non-streaming Anthropic response to OpenAI format');
+          jsonData = convertAnthropicJsonToOpenAI(jsonData);
+        }
 
         if (stream) {
           // Convert a non-stream JSON completion to a single SSE chunk
@@ -2736,7 +3338,7 @@ async function streamChat(provider, messages, params, res, modelId, images, syst
   }
   try {
     log.verbose(`[DEBUG] streamChat: Building request body...`);
-    const requestBody = buildChatRequestBody(modelId || provider.defaultModel, processedMessages, { ...params, stream: true }, apiType, images, systemPrompt);
+    const requestBody = buildChatRequestBody(modelId || provider.defaultModel, processedMessages, { ...params, stream: true }, apiType, images, systemPrompt, null, null);
 
     const headers = {
       'Authorization': `Bearer ${provider.apiKey}`,
@@ -3024,13 +3626,40 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
   const apiKeyName = req.apiKeyInfo?.name || 'unknown';
 
   try {
-    const { messages, model, stream = false, temperature, max_tokens, top_p, ...otherParams } = req.body;
+    const { messages, model, stream = false, temperature, max_tokens, top_p, tools, tool_choice, ...otherParams } = req.body;
 
-    log.debug(`[DEBUG] New chat completion request: model=${model}, stream=${stream}, messages=${messages ? messages.length : 'undefined'}`);
-    log.verbose(`[DEBUG] Request parameters:`, JSON.stringify({ temperature, max_tokens, top_p, ...otherParams }, null, 2));
+    // ==================== 打印客户端请求参数（便于调试） ====================
+    console.log(`\n========== 新的 Chat Completion 请求 ==========`);
+    console.log(`[请求] 模型: ${model}`);
+    console.log(`[请求] 流式: ${stream}`);
+    console.log(`[请求] 消息数量: ${messages ? messages.length : '未定义'}`);
+    console.log(`[请求] 工具数量: ${tools ? tools.length : '无'}`);
+    console.log(`[请求] temperature: ${temperature !== undefined ? temperature : '未设置'}`);
+    console.log(`[请求] max_tokens: ${max_tokens !== undefined ? max_tokens : '未设置'}`);
+    console.log(`[请求] top_p: ${top_p !== undefined ? top_p : '未设置'}`);
+    console.log(`[请求] tool_choice: ${tool_choice !== undefined ? JSON.stringify(tool_choice) : '未设置'}`);
+
+    // 打印其他参数
+    const otherParamKeys = Object.keys(otherParams);
+    if (otherParamKeys.length > 0) {
+      console.log(`[请求] 其他参数:`);
+      otherParamKeys.forEach(key => {
+        const value = otherParams[key];
+        console.log(`  - ${key}: ${typeof value === 'object' ? JSON.stringify(value) : value}`);
+      });
+    }
+
+    // 打印工具详情
+    if (tools && tools.length > 0) {
+      console.log(`[请求] 工具列表:`);
+      tools.forEach((tool, index) => {
+        console.log(`  - 工具 ${index + 1}: ${tool.function?.name || '未知'}`);
+      });
+    }
+    console.log(`================================================\n`);
 
     if (!messages || !Array.isArray(messages)) {
-      log.debug(`[DEBUG] Invalid messages parameter`);
+      console.log(`[错误] messages 参数无效`);
       return sendErrorResponse(res, stream, {
         message: 'messages is required and must be an array',
         type: 'invalid_request_error',
@@ -3038,10 +3667,9 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
       }, 400);
     }
 
-    log.verbose(`[DEBUG] Loading settings...`);
     const settings = await getApiSettings();
     const userSettings = await getUserSettings();
-    log.verbose(`[DEBUG] Found ${settings.providers.length} providers`);
+    console.log(`[配置] 已加载 ${settings.providers.length} 个提供商`);
     const pollingConfig = userSettings.pollingConfig || { available: {}, excluded: {} };
     
     // ==================== 会话识别机制（混合模式） ====================
@@ -3053,10 +3681,10 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
     
     // 3. 确定会话标识符（优先使用session_id，否则使用消息指纹）
     const sessionIdentifier = sessionId || messageFingerprint;
-    
-    console.log(`[Session] Session ID: ${sessionId || 'none'}`);
-    console.log(`[Session] Message Fingerprint: ${messageFingerprint ? messageFingerprint.substring(0, 8) + '...' : 'none'}`);
-    console.log(`[Session] Using identifier: ${sessionIdentifier ? sessionIdentifier.substring(0, 16) + '...' : 'none'}`);
+
+    console.log(`[会话] 会话ID: ${sessionId || '无'}`);
+    console.log(`[会话] 消息指纹: ${messageFingerprint ? messageFingerprint.substring(0, 8) + '...' : '无'}`);
+    console.log(`[会话] 使用的标识符: ${sessionIdentifier ? sessionIdentifier.substring(0, 16) + '...' : '无'}`);
     
     // 定期清理过期的会话映射
     cleanupExpiredConversations(userSettings);
@@ -3064,10 +3692,8 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
     // 确定要使用的模型名称
     let modelName = model;
 
-    log.verbose(`[DEBUG] Model name determination: original=${model}, final=${modelName}`);
-
     if (!modelName) {
-      log.debug(`[DEBUG] No model specified, returning error`);
+      console.log(`[错误] 未指定模型`);
       return sendErrorResponse(res, stream, {
         message: 'model is required. Please specify a model in the request.',
         type: 'invalid_request_error',
@@ -3077,14 +3703,12 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
 
     // Extract pure model name (remove possible prefix)
     const pureModelName = normalizeModelName(modelName);
-
-    log.verbose(`[DEBUG] Pure model name: ${pureModelName}`);
+    console.log(`[模型] 标准化模型名称: ${pureModelName}`);
 
     // Check model permissions - if key configured allowed model list, perform permission check
     const allowedModels = req.apiKeyInfo?.allowedModels || [];
-    log.verbose(`[DEBUG] API key allowed models:`, allowedModels);
     if (allowedModels.length > 0 && !allowedModels.includes(pureModelName)) {
-      log.debug(`[DEBUG] Model not allowed for this API key`);
+      console.log(`[错误] 模型 ${pureModelName} 不在此 API Key 允许的列表中`);
       return sendErrorResponse(res, stream, {
         message: `Model '${pureModelName}' is not allowed for this API key. Allowed models: ${allowedModels.join(', ')}`,
         type: 'permission_error',
@@ -3094,13 +3718,14 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
 
     // 判断是否使用轮询模式
     const usePolling = req.apiKeyInfo?.usePolling !== false; // 默认为true
+    console.log(`[轮询] 轮询模式: ${usePolling ? '启用' : '禁用'}`);
 
     if (usePolling) {
       // 轮询模式：检查模型是否在轮询池中
       const availableProviderIds = pollingConfig.available?.[pureModelName] || [];
-      log.verbose(`[DEBUG] Available provider IDs for model ${pureModelName}:`, availableProviderIds);
+      console.log(`[轮询] 模型 ${pureModelName} 可用提供商数量: ${availableProviderIds.length}`);
       if (availableProviderIds.length < 2) {
-        log.debug(`[DEBUG] Insufficient providers for model ${pureModelName}: ${availableProviderIds.length}`);
+        console.log(`[错误] 模型 ${pureModelName} 提供商不足: ${availableProviderIds.length}`);
         return sendErrorResponse(res, stream, {
           message: `Model '${pureModelName}' requires at least 2 providers for polling. Current providers: ${availableProviderIds.length}. Please configure more providers in polling settings.`,
           type: 'invalid_request_error',
@@ -3117,11 +3742,10 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
           }
         });
       }
-      log.verbose(`[DEBUG] Excluded provider IDs for model ${pureModelName}:`, Array.from(excludedSet));
 
       // Calculate actual available provider count (excluding excluded ones)
       const actualAvailableProviders = availableProviderIds.filter(id => !excludedSet.has(id));
-      log.verbose(`[DEBUG] Actual available providers after exclusions:`, actualAvailableProviders);
+      console.log(`[轮询] 排除后实际可用提供商数量: ${actualAvailableProviders.length}`);
 
       if (actualAvailableProviders.length === 0) {
         return sendErrorResponse(res, stream, {
@@ -3148,28 +3772,13 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
       }
     }
     
-    // 构建请求参数 - 参数隔离机制
-    const keyParams = req.apiKeyInfo?.params || {};
-    const params = {
-      temperature: temperature !== undefined ? temperature :
-                  (keyParams.temperature !== undefined ? keyParams.temperature :
-                  (userSettings.defaultParams?.temperature ?? 0.7)),
-      max_tokens: max_tokens !== undefined ? max_tokens :
-                 (keyParams.max_tokens !== undefined ? keyParams.max_tokens :
-                 (userSettings.defaultParams?.max_tokens ?? 2000)),
-      top_p: top_p !== undefined ? top_p :
-            (keyParams.top_p !== undefined ? keyParams.top_p :
-            (userSettings.defaultParams?.top_p ?? 1)),
-      ...otherParams
-    };
-    
-    // 删除不需要传递的参数
-    delete params.model;
-    delete params.messages;
-    delete params.stream;
-    
-    console.log(`[Proxy] Request parameters - temperature: ${params.temperature}, max_tokens: ${params.max_tokens}, top_p: ${params.top_p}`);
-    
+    // ==================== 透传模式：直接使用客户端请求体 ====================
+    // 不再做参数覆盖或删除，所有参数原封不动透传给供应商
+    console.log(`[透传] 透传模式已启用 - 所有客户端参数将直接转发给供应商`);
+    if (tools && tools.length > 0) {
+      console.log(`[透传] ${tools.length} 个工具将被透传给供应商`);
+    }
+
     // ==================== 会话绑定机制：优先使用已绑定的提供商 ====================
     let selectedProvider = null;
     const isNewConversation = messages.length === 1 && messages[0].role === 'user';
@@ -3178,7 +3787,7 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
     if (isNewConversation && sessionIdentifier) {
         const key = `${pureModelName}:${sessionIdentifier}`;
         if (userSettings.conversationProviderMap && userSettings.conversationProviderMap[key]) {
-            console.log(`[Session] New conversation detected. Deleting old provider binding for key: ${key}`);
+            console.log(`[会话] 检测到新对话，删除旧的提供商绑定`);
             delete userSettings.conversationProviderMap[key];
         }
     }
@@ -3194,7 +3803,7 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
       );
 
       if (selectedProvider) {
-        console.log(`[Session] Found existing provider binding: ${selectedProvider.name} (ID: ${selectedProvider.id})`);
+        console.log(`[会话] 找到已绑定的提供商: ${selectedProvider.name} (ID: ${selectedProvider.id})`);
         // 异步记录会话绑定（非阻塞）
         setImmediate(() => {
           logSessionBind({
@@ -3206,7 +3815,7 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
           });
         });
       } else {
-        console.log(`[Session] No existing provider binding found, will select new provider`);
+        console.log(`[会话] 未找到已绑定的提供商，将选择新的提供商`);
       }
     }
     
@@ -3235,16 +3844,16 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
     }
     
     if (failoverProviders.length === 0) {
-      log.error(`[Proxy] No available providers for model ${pureModelName}`);
+      console.log(`[错误] 模型 ${pureModelName} 没有可用的提供商`);
       return sendErrorResponse(res, stream, {
         message: `No available providers for model '${pureModelName}'`,
         type: 'server_error',
         code: 'no_providers_available'
       }, 503);
     }
-    
-    console.log(`[Proxy] Found ${failoverProviders.length} providers for failover`);
-    
+
+    console.log(`[故障转移] 找到 ${failoverProviders.length} 个可用提供商`);
+
     for (let attempt = 0; attempt < failoverProviders.length; attempt++) {
       const selectedProvider = failoverProviders[attempt];
 
@@ -3253,6 +3862,7 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
       // 记录提供商切换（非首次尝试时）
       if (attempt > 0) {
         const prevProvider = failoverProviders[attempt - 1];
+        console.log(`[故障转移] 切换提供商: ${prevProvider.name} -> ${selectedProvider.name}`);
         setImmediate(() => {
           logProviderSwitch({
             traceId,
@@ -3263,12 +3873,12 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
         });
       }
 
-      console.log(`[Proxy] Attempt ${attempt + 1}/${failoverProviders.length}: Trying provider ${selectedProvider.name} (ID: ${selectedProvider.id})`);
-      
+      console.log(`[请求] 尝试 ${attempt + 1}/${failoverProviders.length}: 使用提供商 ${selectedProvider.name} (ID: ${selectedProvider.id})`);
+
       // 获取该提供商的具体模型ID
       const providerModelId = await getProviderModelId(selectedProvider, pureModelName);
       if (!providerModelId) {
-        console.log(`[Proxy] Model ${pureModelName} not found in provider ${selectedProvider.name}, trying next...`);
+        console.log(`[错误] 模型 ${pureModelName} 在提供商 ${selectedProvider.name} 中未找到，尝试下一个...`);
         errors.push({
           provider: selectedProvider.name,
           error: `Model not found in provider`
@@ -3276,19 +3886,24 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
         await incrementModelFailCount(selectedProvider.id, pureModelName, userSettings);
         continue;
       }
-      
-      console.log(`[Proxy] Using model ID: ${providerModelId} from provider ${selectedProvider.name}`);
+
+      console.log(`[请求] 使用模型ID: ${providerModelId}`);
 
       const apiType = selectedProvider.apiType || 'openai';
-      console.log(`[DEBUG] Provider API type: ${apiType}`);
+      console.log(`[请求] API 类型: ${apiType}`);
       const url = buildApiUrl(selectedProvider.baseUrl, 'chat/completions', apiType, selectedProvider.customEndpoints);
+      console.log(`[请求] 目标URL: ${url}`);
 
       if (stream) {
         // ==================== 流式响应（带故障转移） ====================
-        console.log(`[DEBUG] Starting streaming request to: ${url}`);
+        console.log(`[流式] 开始流式请求...`);
         try {
-          const requestBody = buildChatRequestBody(providerModelId, messages, params, apiType, null);
-          requestBody.stream = true;
+          // 透传模式：直接使用客户端请求体，只替换 model 和 stream
+          const requestBody = {
+            ...req.body,
+            model: providerModelId,
+            stream: true
+          };
 
           const headers = {
             'Authorization': `Bearer ${selectedProvider.apiKey}`,
@@ -3298,22 +3913,74 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
             })
           };
 
-          console.log(`[DEBUG] Request headers:`, JSON.stringify(headers, null, 2));
-          console.log(`[DEBUG] Making streaming POST request...`);
+          // 打印透传的请求体详情
+          console.log(`[透传] 请求体参数:`);
+          console.log(`  - model: ${requestBody.model}`);
+          console.log(`  - stream: ${requestBody.stream}`);
+          console.log(`  - messages: ${requestBody.messages?.length || 0} 条`);
+          console.log(`  - temperature: ${requestBody.temperature !== undefined ? requestBody.temperature : '未设置'}`);
+          console.log(`  - max_tokens: ${requestBody.max_tokens !== undefined ? requestBody.max_tokens : '未设置'}`);
+          console.log(`  - top_p: ${requestBody.top_p !== undefined ? requestBody.top_p : '未设置'}`);
+          console.log(`  - tools: ${requestBody.tools ? requestBody.tools.length + ' 个' : '无'}`);
+          console.log(`  - tool_choice: ${requestBody.tool_choice !== undefined ? JSON.stringify(requestBody.tool_choice) : '未设置'}`);
+          console.log(`  - parallel_tool_calls: ${requestBody.parallel_tool_calls !== undefined ? requestBody.parallel_tool_calls : '未设置'}`);
+          console.log(`  - stream_options: ${requestBody.stream_options !== undefined ? JSON.stringify(requestBody.stream_options) : '未设置'}`);
+
+          // 打印工具详情
+          if (requestBody.tools && requestBody.tools.length > 0) {
+            console.log(`[透传] 工具详情:`);
+            requestBody.tools.forEach((tool, index) => {
+              const fn = tool.function || {};
+              console.log(`  - 工具 ${index + 1}: ${fn.name || '未知'}`);
+              if (fn.parameters) {
+                console.log(`    strict: ${fn.parameters.strict !== undefined ? fn.parameters.strict : '未设置'}`);
+                console.log(`    additionalProperties: ${fn.parameters.additionalProperties !== undefined ? fn.parameters.additionalProperties : '未设置'}`);
+              }
+            });
+          }
+
+          console.log(`[流式] 发送请求...`);
 
           const response = await axios.post(url, requestBody, {
             headers,
             responseType: 'stream',
-            timeout: 120000
+            timeout: 120000,
+            validateStatus: function (status) {
+              // 接受所有状态码，让我们自己处理错误
+              return true;
+            }
           });
 
-          log.verbose(`[DEBUG] Stream request successful, response status: ${response.status}`);
+          console.log(`[流式] 收到响应，状态码: ${response.status}`);
+
+          // 检查响应状态
+          if (response.status !== 200) {
+            console.log(`[错误] 非200状态码: ${response.status}`);
+
+            // 读取错误响应
+            let errorData = '';
+            response.data.on('data', chunk => {
+              errorData += chunk.toString();
+            });
+
+            await new Promise((resolve) => {
+              response.data.on('end', () => {
+                console.log(`[错误] 响应内容: ${errorData}`);
+                resolve();
+              });
+            });
+
+            throw new Error(`HTTP ${response.status}: ${errorData}`);
+          }
+
+          console.log(`[流式] 请求成功，开始处理流式响应...`);
 
           // Use simplified streaming response handler
-          await handleStreamingResponse(response, res, stream, selectedProvider, pureModelName, userSettings, pollingConfig, sessionIdentifier);
+          // 透传模式：跳过格式转换器，直接透传数据
+          await handleStreamingResponse(response, res, stream, selectedProvider, pureModelName, userSettings, pollingConfig, sessionIdentifier, apiType, true);
 
           // Stream request successfully initiated, exit loop
-          log.verbose(`[DEBUG] Stream request initiated successfully, exiting provider loop`);
+          console.log(`[流式] 流式响应处理完成`);
 
           // 记录API请求日志（非阻塞）
           perfTracker.checkpoint('request_complete');
@@ -3350,7 +4017,10 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
           return;
 
         } catch (error) {
-          log.error(`[DEBUG] Provider ${selectedProvider.name} failed with error:`, error.message);
+          console.log(`[错误] 提供商 ${selectedProvider.name} 请求失败: ${error.message}`);
+          if (error.response) {
+            console.log(`[错误] 响应状态码: ${error.response.status}`);
+          }
 
           // Use efficient error parser
           const errorMessage = parseErrorResponse(error);
@@ -3365,13 +4035,17 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
           });
           // Continue trying next provider
         }
-        
+
       } else {
         // ==================== 非流式响应（带故障转移） ====================
-        console.log(`[DEBUG] Starting non-streaming request to: ${url}`);
+        console.log(`[非流式] 开始非流式请求...`);
         try {
-          const requestBody = buildChatRequestBody(providerModelId, messages, params, apiType, null);
-          requestBody.stream = false;
+          // 透传模式：直接使用客户端请求体，只替换 model 和 stream
+          const requestBody = {
+            ...req.body,
+            model: providerModelId,
+            stream: false
+          };
 
           const headers = {
             'Authorization': `Bearer ${selectedProvider.apiKey}`,
@@ -3381,20 +4055,44 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
             })
           };
 
-          console.log(`[DEBUG] Non-streaming request headers:`, JSON.stringify(headers, null, 2));
-          console.log(`[DEBUG] Making non-streaming POST request...`);
+          // 打印透传的请求体详情
+          console.log(`[透传] 请求体参数:`);
+          console.log(`  - model: ${requestBody.model}`);
+          console.log(`  - stream: ${requestBody.stream}`);
+          console.log(`  - messages: ${requestBody.messages?.length || 0} 条`);
+          console.log(`  - temperature: ${requestBody.temperature !== undefined ? requestBody.temperature : '未设置'}`);
+          console.log(`  - max_tokens: ${requestBody.max_tokens !== undefined ? requestBody.max_tokens : '未设置'}`);
+          console.log(`  - top_p: ${requestBody.top_p !== undefined ? requestBody.top_p : '未设置'}`);
+          console.log(`  - tools: ${requestBody.tools ? requestBody.tools.length + ' 个' : '无'}`);
+          console.log(`  - tool_choice: ${requestBody.tool_choice !== undefined ? JSON.stringify(requestBody.tool_choice) : '未设置'}`);
+          console.log(`  - parallel_tool_calls: ${requestBody.parallel_tool_calls !== undefined ? requestBody.parallel_tool_calls : '未设置'}`);
+
+          // 打印工具详情
+          if (requestBody.tools && requestBody.tools.length > 0) {
+            console.log(`[透传] 工具详情:`);
+            requestBody.tools.forEach((tool, index) => {
+              const fn = tool.function || {};
+              console.log(`  - 工具 ${index + 1}: ${fn.name || '未知'}`);
+              if (fn.parameters) {
+                console.log(`    strict: ${fn.parameters.strict !== undefined ? fn.parameters.strict : '未设置'}`);
+                console.log(`    additionalProperties: ${fn.parameters.additionalProperties !== undefined ? fn.parameters.additionalProperties : '未设置'}`);
+              }
+            });
+          }
+
+          console.log(`[非流式] 发送请求...`);
 
           const response = await axios.post(url, requestBody, {
             headers,
             timeout: 120000
           });
 
-          log.verbose(`[DEBUG] Non-streaming request successful, response status: ${response.status}`);
+          console.log(`[非流式] 请求成功，状态码: ${response.status}`);
 
           // Handle success in background (non-blocking)
           backgroundProcessor.handleSuccess(selectedProvider, pureModelName, userSettings, pollingConfig, sessionIdentifier);
 
-          log.verbose(`[DEBUG] Non-streaming request completed successfully using provider ${selectedProvider.name}`);
+          console.log(`[非流式] 使用提供商 ${selectedProvider.name} 完成请求`);
 
           // 记录API请求日志（非阻塞）
           perfTracker.checkpoint('request_complete');
@@ -3431,7 +4129,7 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
           return res.status(200).json(response.data);
 
         } catch (error) {
-          log.error(`[DEBUG] Non-streaming provider ${selectedProvider.name} failed with error:`, error.message);
+          console.log(`[错误] 提供商 ${selectedProvider.name} 非流式请求失败: ${error.message}`);
 
           // Use efficient error parser
           const errorMessage = parseErrorResponse(error);
@@ -3448,16 +4146,17 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
         }
       }
     }
-    
+
     // All providers failed
     backgroundProcessor.addTask(async () => {
       await savePollingState(userSettings);
     });
 
-    log.error(`[Proxy] All ${triedProviderIds.length} providers failed for model ${pureModelName}`);
+    console.log(`[错误] 所有 ${triedProviderIds.length} 个提供商都失败了，模型: ${pureModelName}`);
 
     // Build detailed error information
     const errorDetails = errors.map(e => `${e.provider}: ${e.error}`).join('; ');
+    console.log(`[错误] 详细错误: ${errorDetails}`);
 
     // 记录API请求日志（非阻塞）
     perfTracker.checkpoint('all_providers_failed');
@@ -3499,7 +4198,7 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
     }, 503);
 
   } catch (error) {
-    log.error('[Proxy] Unexpected error:', error);
+    console.log(`[错误] 发生意外错误: ${error.message}`);
 
     // 记录异常错误日志（非阻塞）
     perfTracker.checkpoint('error');
@@ -3597,11 +4296,7 @@ app.post('/api/proxy-keys', async (req, res) => {
       createdAt: new Date().toISOString(),
       lastUsed: null,
       usageCount: 0,
-      params: {
-        temperature: 0.7,
-        max_tokens: 2000,
-        top_p: 1
-      },
+      // 透传模式下不再需要默认参数，所有参数由客户端提供
       allowedModels: [],
       allowedGroups: [], // 新增：允许的分组
       rateLimit: {

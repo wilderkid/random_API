@@ -4,6 +4,17 @@
   box-sizing: border-box;
 }
 
+/* 全局文字选择样式 */
+::selection {
+  background-color: #0891b2;
+  color: #ffffff;
+}
+
+::-moz-selection {
+  background-color: #0891b2;
+  color: #ffffff;
+}
+
 body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   background: #f8fafc;

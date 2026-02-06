@@ -37,6 +37,15 @@
             {{ isRefreshingAll ? '刷新中...' : '🔄 刷新所有模型' }}
           </button>
         </div>
+        <div class="button-group danger-group">
+          <button @click="toggleBatchSelectMode" :class="['btn-batch-select', { active: batchSelectMode }]">
+            {{ batchSelectMode ? '✓ 取消选择' : '☐ 批量选择' }}
+          </button>
+          <button v-if="batchSelectMode && selectedProviderIds.length > 0" @click="batchDeleteProviders" class="btn-batch-delete">
+            🗑 删除选中 ({{ selectedProviderIds.length }})
+          </button>
+          <button @click="clearAllProviders" class="btn-clear-all">🗑 清除所有</button>
+        </div>
         <div class="group-management">
           <button @click="showGroupManager = true" class="btn-manage-groups">📁 管理分组</button>
         </div>
@@ -56,10 +65,18 @@
               :key="provider.id"
               :class="['provider-item', {
                 active: selectedProvider?.id === provider.id,
-                'no-models': !provider.disabled && (!provider.models || provider.models.length === 0)
+                'no-models': !provider.disabled && (!provider.models || provider.models.length === 0),
+                'batch-selected': batchSelectMode && selectedProviderIds.includes(provider.id)
               }]"
-              @click="selectProvider(provider)"
+              @click="batchSelectMode ? toggleProviderSelection(provider.id) : selectProvider(provider)"
             >
+              <input
+                v-if="batchSelectMode"
+                type="checkbox"
+                :checked="selectedProviderIds.includes(provider.id)"
+                @click.stop="toggleProviderSelection(provider.id)"
+                class="provider-checkbox"
+              >
               <div class="provider-item-icon">{{ provider.name.charAt(0) }}</div>
               <div class="provider-item-info">
                 <div class="provider-item-name">
@@ -360,6 +377,8 @@ const showAddGroup = ref(false)
 const editingGroup = ref(null)
 const groupForm = ref({ name: '', description: '' })
 const isRefreshingAll = ref(false) // 批量刷新状态
+const batchSelectMode = ref(false) // 批量选择模式
+const selectedProviderIds = ref([]) // 已选择的供应商ID列表
 
 // 风格选择相关
 const currentApiStyle = ref(apiStyleManager.getCurrentStyle())
@@ -686,6 +705,87 @@ async function deleteProvider() {
   }
 }
 
+// 切换批量选择模式
+function toggleBatchSelectMode() {
+  batchSelectMode.value = !batchSelectMode.value
+  if (!batchSelectMode.value) {
+    selectedProviderIds.value = []
+  }
+}
+
+// 切换供应商选择状态
+function toggleProviderSelection(providerId) {
+  const index = selectedProviderIds.value.indexOf(providerId)
+  if (index >= 0) {
+    selectedProviderIds.value.splice(index, 1)
+  } else {
+    selectedProviderIds.value.push(providerId)
+  }
+}
+
+// 批量删除供应商
+async function batchDeleteProviders() {
+  const count = selectedProviderIds.value.length
+  if (count === 0) {
+    alert('请先选择要删除的供应商')
+    return
+  }
+
+  if (!confirm(`确定要删除选中的 ${count} 个供应商吗？\n\n此操作不可恢复！`)) {
+    return
+  }
+
+  try {
+    const res = await axios.delete('/api/providers/batch', {
+      data: { ids: selectedProviderIds.value }
+    })
+
+    alert(res.data.message || `成功删除 ${res.data.deletedCount} 个供应商`)
+
+    // 清空选择并退出批量选择模式
+    selectedProviderIds.value = []
+    batchSelectMode.value = false
+    selectedProvider.value = null
+
+    await loadProviders()
+  } catch (error) {
+    alert('批量删除失败: ' + (error.response?.data?.error || error.message))
+  }
+}
+
+// 清除所有供应商
+async function clearAllProviders() {
+  const count = providers.value.length
+  if (count === 0) {
+    alert('没有供应商可以清除')
+    return
+  }
+
+  if (!confirm(`⚠️ 危险操作！\n\n确定要清除所有 ${count} 个供应商吗？\n\n此操作将删除所有供应商及其模型配置，不可恢复！`)) {
+    return
+  }
+
+  // 二次确认
+  if (!confirm(`再次确认：真的要删除所有 ${count} 个供应商吗？`)) {
+    return
+  }
+
+  try {
+    const res = await axios.delete('/api/providers/all')
+
+    alert(res.data.message || `成功清除所有供应商，共 ${res.data.deletedCount} 个`)
+
+    // 清空选择状态
+    selectedProviderIds.value = []
+    batchSelectMode.value = false
+    selectedProvider.value = null
+
+    await loadProviders()
+  } catch (error) {
+    alert('清除所有供应商失败: ' + (error.response?.data?.error || error.message))
+  }
+}
+
 async function testConnection() {
   try {
     await axios.get(`/api/providers/${selectedProvider.value.id}/test`)
@@ -956,6 +1056,77 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
+/* ==================== 批量操作相关样式 ==================== */
+.danger-group {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed #ffc9c9;
+}
+
+.btn-batch-select {
+  background: #f8f9fa;
+  color: #495057;
+  border: 1px solid #dee2e6;
+  padding: 6px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  transition: all 0.2s;
+}
+
+.btn-batch-select:hover {
+  background: #e9ecef;
+}
+
+.btn-batch-select.active {
+  background: #e3f2fd;
+  color: #1976d2;
+  border-color: #90caf9;
+}
+
+.btn-batch-delete {
+  background: #ff6b6b;
+  color: white;
+  border: none;
+  padding: 6px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  transition: all 0.2s;
+}
+
+.btn-batch-delete:hover {
+  background: #ff5252;
+}
+
+.btn-clear-all {
+  background: #dc3545;
+  color: white;
+  border: none;
+  padding: 6px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  transition: all 0.2s;
+}
+
+.btn-clear-all:hover {
+  background: #c82333;
+}
+
+.provider-checkbox {
+  margin-right: 8px;
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+  accent-color: #1976d2;
+}
+
+.provider-item.batch-selected {
+  background: #e3f2fd !important;
+  border-color: #90caf9 !important;
+}
+
 .advanced-settings {
   margin-top: 12px;
   border: 1px solid #e0e0e0;
