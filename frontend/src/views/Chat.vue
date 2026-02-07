@@ -2377,16 +2377,22 @@ async function processStreamResponse(response, assistantMsg) {
         alt: match[1] || 'Generated Image'
       }))
 
-      // 提取非图片部分的文本（提示词、进度信息等）
-      let textContent = assistantMsg.content.replace(markdownImageRegex, '').trim()
-      // 清理多余的空行
-      textContent = textContent.replace(/\n{3,}/g, '\n\n').trim()
+      // 过滤出大尺寸图片（512x512 以上），小图标不会被当作生成图片处理
+      const largeImages = await filterLargeImages(extractedImages)
+      console.log(`[ImageDetect] 检测到 ${extractedImages.length} 张图片，其中 ${largeImages.length} 张为大尺寸图片`)
 
-      // 设置为图片响应类型
-      assistantMsg.messageType = 'image-response'
-      assistantMsg.generatedImages = extractedImages
-      assistantMsg.textContent = textContent // 保存文本内容用于显示
-      console.log(`[ImageDetect] 检测到 ${extractedImages.length} 张图片`)
+      if (largeImages.length > 0) {
+        // 提取非图片部分的文本（提示词、进度信息等）
+        let textContent = assistantMsg.content.replace(markdownImageRegex, '').trim()
+        // 清理多余的空行
+        textContent = textContent.replace(/\n{3,}/g, '\n\n').trim()
+
+        // 设置为图片响应类型
+        assistantMsg.messageType = 'image-response'
+        assistantMsg.generatedImages = largeImages
+        assistantMsg.textContent = textContent // 保存文本内容用于显示
+      }
+      // 如果没有大尺寸图片，保持普通消息格式，小图片会以 inline 方式显示
     }
 
     // 最终渲染时使用缓存
@@ -2490,11 +2496,12 @@ function getRenderedContent(msg, index) {
   if (msg.messageType === 'image-response' && msg.generatedImages) {
     let html = ''
 
-    // 如果有文本内容（从 Markdown 格式检测到的图片会带有文本），先显示文本
+    // 如果有文本内容，使用正常的 Markdown 渲染（不压缩）
     if (msg.textContent) {
-      html += `<div class="image-text-content">${DOMPurify.sanitize(marked(msg.textContent))}</div>`
+      html += contentStyleManager.processContent(msg.textContent, marked, DOMPurify.sanitize, currentStyle.value)
     }
 
+    // 只对图片部分使用特殊的 grid 布局
     html += '<div class="generated-images-container">'
 
     msg.generatedImages.forEach((img, idx) => {
@@ -2976,6 +2983,36 @@ function handleImageUpload(event) {
   
   // 清空input，允许重复选择同一文件
   event.target.value = ''
+}
+
+// 检测图片尺寸的辅助函数
+function getImageSize(url) {
+  return new Promise((resolve) => {
+    const img = new Image()
+    img.onload = () => {
+      resolve({ width: img.naturalWidth, height: img.naturalHeight })
+    }
+    img.onerror = () => {
+      // 如果加载失败，返回 0x0，不会被当作生成图片
+      resolve({ width: 0, height: 0 })
+    }
+    img.src = url
+  })
+}
+
+// 检测并过滤大尺寸图片（只有 512x512 以上的才被视为生成图片）
+async function filterLargeImages(images) {
+  const MIN_SIZE = 512
+  const results = await Promise.all(
+    images.map(async (img) => {
+      const size = await getImageSize(img.url)
+      return {
+        ...img,
+        isLarge: size.width >= MIN_SIZE && size.height >= MIN_SIZE
+      }
+    })
+  )
+  return results.filter(img => img.isLarge)
 }
 
 // 图片压缩函数
