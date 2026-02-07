@@ -86,33 +86,7 @@
                 <button @click="copyKey" class="btn-copy">📋 复制</button>
               </div>
             </div>
-            
-            <!-- 默认参数 -->
-            <div class="config-section">
-              <h4>默认参数</h4>
-              <p class="section-desc">当外部请求未提供参数时，将使用这些默认值</p>
-              <div class="params-grid">
-                <div class="form-group">
-                  <label>Temperature</label>
-                  <input v-model.number="selectedKey.params.temperature" 
-                         type="number" step="0.1" min="0" max="2">
-                  <small>控制回答的随机性 (0-2)</small>
-                </div>
-                <div class="form-group">
-                  <label>Max Tokens</label>
-                  <input v-model.number="selectedKey.params.max_tokens" 
-                         type="number" min="1" max="8000">
-                  <small>最大输出长度</small>
-                </div>
-                <div class="form-group">
-                  <label>Top P</label>
-                  <input v-model.number="selectedKey.params.top_p" 
-                         type="number" step="0.1" min="0" max="1">
-                  <small>核采样参数 (0-1)</small>
-                </div>
-              </div>
-            </div>
-            
+
             <!-- 模型权限 - 轮询模式 -->
             <div v-if="selectedKey.usePolling" class="config-section">
               <h4>轮询模型权限</h4>
