@@ -242,6 +242,16 @@ body {
   color: white;
 }
 
+.message.user ::selection {
+  background-color: rgba(255, 255, 255, 0.35);
+  color: #fff;
+}
+
+.message.user ::-moz-selection {
+  background-color: rgba(255, 255, 255, 0.35);
+  color: #fff;
+}
+
 .message.assistant {
   background: #f8fafc;
   align-self: flex-start;
