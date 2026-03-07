@@ -165,8 +165,19 @@
             <button @click="refreshProviderModels" class="btn-fetch-provider-models" :disabled="isRefreshingProviderModels" :title="isRefreshingProviderModels ? '获取中' : '一键获取并刷新当前提供商模型'">
               {{ isRefreshingProviderModels ? '获取中...' : '⚡ 一键获取' }}
             </button>
+            <button v-if="!currentAvailableModels" @click="toggleModelBatchMode" :class="['btn-model-batch-select', { active: modelBatchSelectMode }]" :title="modelBatchSelectMode ? '取消模型批量选择' : '批量选择模型'">
+              {{ modelBatchSelectMode ? '✓ 取消选择' : '☐ 批量选择' }}
+            </button>
             <button @click="showAddModelModal = true" class="btn-icon" title="手动添加模型">➕</button>
             <button v-if="currentAvailableModels" @click="closeModelsList" class="btn-icon" title="关闭">×</button>
+          </div>
+          <div v-if="!currentAvailableModels && modelBatchSelectMode" class="model-batch-toolbar">
+            <span class="model-batch-count">已选择 {{ selectedModelIds.length }} 个模型</span>
+            <button @click="selectAllModels" class="btn-model-batch-action">全选</button>
+            <button @click="clearSelectedModels" class="btn-model-batch-action">清空选择</button>
+            <button @click="batchShowModels" class="btn-model-batch-action btn-model-batch-show" :disabled="selectedModelIds.length === 0">批量显示</button>
+            <button @click="batchHideModels" class="btn-model-batch-action btn-model-batch-hide" :disabled="selectedModelIds.length === 0">批量隐藏</button>
+            <button @click="batchDeleteModels" class="btn-model-batch-action btn-model-batch-delete" :disabled="selectedModelIds.length === 0">批量删除</button>
           </div>
           
           <!-- 可用模型列表 -->
@@ -199,7 +210,14 @@
             <div v-for="group in addedModelsGrouped" :key="group.name" class="added-model-group">
               <div class="added-group-header">{{ group.name }}</div>
               <div class="added-models-grid">
-                <div v-for="model in group.models" :key="model.id" class="added-model-card">
+                <div v-for="model in group.models" :key="model.id" class="added-model-card" :class="{ 'batch-selected': modelBatchSelectMode && selectedModelIds.includes(model.id) }">
+                  <input
+                    v-if="modelBatchSelectMode"
+                    type="checkbox"
+                    :checked="selectedModelIds.includes(model.id)"
+                    @click.stop="toggleModelSelection(model.id)"
+                    class="model-checkbox"
+                  >
                   <span class="model-icon">{{ getModelIcon(model.id) }}</span>
                   <span class="model-name">{{ model.id }}</span>
                   <div class="model-actions">
@@ -383,6 +401,8 @@ const isRefreshingAll = ref(false) // 批量刷新状态
 const isRefreshingProviderModels = ref(false) // 单供应商刷新状态
 const batchSelectMode = ref(false) // 批量选择模式
 const selectedProviderIds = ref([]) // 已选择的供应商ID列表
+const modelBatchSelectMode = ref(false) // 模型批量选择模式
+const selectedModelIds = ref([]) // 已选择的模型ID列表
 
 // 风格选择相关
 const currentApiStyle = ref(apiStyleManager.getCurrentStyle())
@@ -519,6 +539,8 @@ function selectProvider(provider) {
   selectedProvider.value = provider
   modelSearch.value = ''
   showApiKey.value = false
+  modelBatchSelectMode.value = false
+  selectedModelIds.value = []
 }
 
 function updateAvailableModelsCache(providerId, models) {
@@ -658,6 +680,30 @@ function closeModelsList() {
   }
 }
 
+function toggleModelBatchMode() {
+  modelBatchSelectMode.value = !modelBatchSelectMode.value
+  if (!modelBatchSelectMode.value) {
+    selectedModelIds.value = []
+  }
+}
+
+function toggleModelSelection(modelId) {
+  const index = selectedModelIds.value.indexOf(modelId)
+  if (index >= 0) {
+    selectedModelIds.value.splice(index, 1)
+  } else {
+    selectedModelIds.value.push(modelId)
+  }
+}
+
+function selectAllModels() {
+  selectedModelIds.value = (selectedProvider.value?.models || []).map(model => model.id)
+}
+
+function clearSelectedModels() {
+  selectedModelIds.value = []
+}
+
 function toggleGroup(groupName) {
   if (!selectedProvider.value) return
   const providerId = selectedProvider.value.id
@@ -688,6 +734,7 @@ async function toggleModel(modelId) {
 
 async function removeModel(modelId) {
   selectedProvider.value.models = selectedProvider.value.models.filter(m => m.id !== modelId)
+  selectedModelIds.value = selectedModelIds.value.filter(id => id !== modelId)
   await axios.put(`/api/providers/${selectedProvider.value.id}`, selectedProvider.value)
   await loadProviders()
 }
@@ -696,6 +743,69 @@ async function toggleVisibility(modelId) {
   const model = selectedProvider.value.models.find(m => m.id === modelId)
   model.visible = !model.visible
   await axios.put(`/api/providers/${selectedProvider.value.id}`, selectedProvider.value)
+}
+
+async function saveSelectedProviderModels() {
+  const currentProviderId = selectedProvider.value.id
+  await axios.put(`/api/providers/${currentProviderId}`, selectedProvider.value)
+  await loadProviders()
+
+  const refreshedProvider = providers.value.find(p => p.id === currentProviderId)
+  if (refreshedProvider) {
+    selectedProvider.value = refreshedProvider
+  }
+}
+
+async function batchShowModels() {
+  if (selectedModelIds.value.length === 0) {
+    alert('请先选择要显示的模型')
+    return
+  }
+
+  selectedProvider.value.models = selectedProvider.value.models.map(model =>
+    selectedModelIds.value.includes(model.id)
+      ? { ...model, visible: true }
+      : model
+  )
+
+  const count = selectedModelIds.value.length
+  await saveSelectedProviderModels()
+  alert(`已批量显示 ${count} 个模型`)
+}
+
+async function batchHideModels() {
+  if (selectedModelIds.value.length === 0) {
+    alert('请先选择要隐藏的模型')
+    return
+  }
+
+  selectedProvider.value.models = selectedProvider.value.models.map(model =>
+    selectedModelIds.value.includes(model.id)
+      ? { ...model, visible: false }
+      : model
+  )
+
+  const count = selectedModelIds.value.length
+  await saveSelectedProviderModels()
+  alert(`已批量隐藏 ${count} 个模型`)
+}
+
+async function batchDeleteModels() {
+  const count = selectedModelIds.value.length
+  if (count === 0) {
+    alert('请先选择要删除的模型')
+    return
+  }
+
+  if (!confirm(`确定要删除选中的 ${count} 个模型吗？\n\n此操作不可恢复。`)) {
+    return
+  }
+
+  selectedProvider.value.models = selectedProvider.value.models.filter(model => !selectedModelIds.value.includes(model.id))
+  selectedModelIds.value = []
+
+  await saveSelectedProviderModels()
+  alert(`已批量删除 ${count} 个模型`)
 }
 
 async function toggleStatus() {
@@ -1860,6 +1970,93 @@ onUnmounted(() => {
   border: 1px solid #dee2e6;
   border-radius: 4px;
   gap: 8px;
+}
+
+.added-model-card.batch-selected {
+  background: #e7f1ff;
+  border-color: #86b7fe;
+}
+
+.model-checkbox {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+  accent-color: #007bff;
+}
+
+.btn-model-batch-select {
+  padding: 6px 12px;
+  border: 1px solid #dee2e6;
+  border-radius: 4px;
+  background: #f8f9fa;
+  color: #495057;
+  cursor: pointer;
+  font-size: 12px;
+  transition: all 0.2s;
+}
+
+.btn-model-batch-select:hover {
+  background: #e9ecef;
+}
+
+.btn-model-batch-select.active {
+  background: #e7f1ff;
+  color: #0d6efd;
+  border-color: #86b7fe;
+}
+
+.model-batch-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  background: #f8f9fa;
+  border: 1px solid #dee2e6;
+  border-radius: 6px;
+}
+
+.model-batch-count {
+  font-size: 12px;
+  color: #495057;
+  font-weight: 500;
+  margin-right: 4px;
+}
+
+.btn-model-batch-action {
+  padding: 6px 10px;
+  border: 1px solid #dee2e6;
+  border-radius: 4px;
+  background: white;
+  color: #495057;
+  cursor: pointer;
+  font-size: 12px;
+  transition: all 0.2s;
+}
+
+.btn-model-batch-action:hover:not(:disabled) {
+  background: #e9ecef;
+}
+
+.btn-model-batch-action:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.btn-model-batch-show {
+  color: #198754;
+  border-color: #b7dfc8;
+}
+
+.btn-model-batch-hide {
+  color: #fd7e14;
+  border-color: #ffd2ad;
+}
+
+.btn-model-batch-delete {
+  color: #dc3545;
+  border-color: #f1b0b7;
 }
 
 .added-model-card .model-name {
