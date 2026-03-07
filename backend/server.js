@@ -646,23 +646,99 @@ app.delete('/api/providers/:id', async (req, res) => {
   res.json({ success: true });
 });
 
+async function fetchProviderModelsFromRemote(provider, timeout = 10000) {
+  const apiType = provider.apiType || 'openai';
+  const url = buildApiUrl(provider.baseUrl, 'models', apiType, provider.customEndpoints);
+  const response = await axios.get(url, {
+    headers: { 'Authorization': `Bearer ${provider.apiKey}` },
+    timeout
+  });
+  return response.data.data || [];
+}
+
+function mergeProviderModelsWithVisibility(oldModels = [], remoteModels = []) {
+  const oldModelsMap = new Map(oldModels.map(m => [m.id, m]));
+  return remoteModels.map(model => {
+    const previousModel = oldModelsMap.get(model.id) || {};
+    return {
+      id: model.id,
+      visible: previousModel.visible !== undefined ? previousModel.visible : true,
+      type: previousModel.type || 'text'
+    };
+  });
+}
+
+async function refreshSingleProviderModels(provider, options = {}) {
+  const { timeout = 10000, clearOnFailure = false } = options;
+
+  try {
+    const remoteModels = await fetchProviderModelsFromRemote(provider, timeout);
+    provider.models = mergeProviderModelsWithVisibility(provider.models || [], remoteModels);
+
+    return {
+      success: true,
+      providerId: provider.id,
+      providerName: provider.name,
+      modelCount: provider.models.length
+    };
+  } catch (error) {
+    console.error(`Error fetching models for provider ${provider.name}:`, error.message);
+
+    if (clearOnFailure) {
+      provider.models = [];
+    }
+
+    return {
+      success: false,
+      providerId: provider.id,
+      providerName: provider.name,
+      error: error.message
+    };
+  }
+}
+
 app.get('/api/providers/:id/models', async (req, res) => {
   const data = await getApiSettings();
   const provider = data.providers.find(p => p.id === req.params.id);
   if (!provider) return res.status(404).json({ error: 'Provider not found' });
 
   try {
-    const apiType = provider.apiType || 'openai';
-    const url = buildApiUrl(provider.baseUrl, 'models', apiType, provider.customEndpoints);
-    const response = await axios.get(url, {
-      headers: { 'Authorization': `Bearer ${provider.apiKey}` },
-      timeout: 10000 // 增加超时时间
-    });
-    res.json(response.data.data || []);
+    const models = await fetchProviderModelsFromRemote(provider, 10000);
+    res.json(models);
   } catch (error) {
     console.error('Error fetching models:', error.message);
     res.status(500).json({ error: error.message });
   }
+});
+
+app.post('/api/providers/:id/refresh-models', async (req, res) => {
+  const data = await getApiSettings();
+  const provider = data.providers.find(p => p.id === req.params.id);
+  if (!provider) return res.status(404).json({ error: 'Provider not found' });
+
+  if (provider.disabled) {
+    return res.status(400).json({ error: '该提供商已被禁用，无法刷新模型' });
+  }
+
+  const result = await refreshSingleProviderModels(provider, {
+    timeout: 15000,
+    clearOnFailure: false
+  });
+
+  if (!result.success) {
+    return res.status(500).json({ error: result.error });
+  }
+
+  await safeWriteFile(API_SETTINGS_FILE, data);
+  invalidateApiSettingsCache();
+
+  res.json({
+    success: true,
+    providerId: provider.id,
+    providerName: provider.name,
+    modelCount: provider.models.length,
+    models: provider.models
+  });
 });
 
 // 批量刷新所有提供商的模型
@@ -694,50 +770,30 @@ app.post('/api/providers/refresh-all-models', async (req, res) => {
     });
   });
 
-  // 并发获取所有提供商的模型
-  const promises = activeProviders.map(async (provider) => {
-    try {
-      const apiType = provider.apiType || 'openai';
-      const url = buildApiUrl(provider.baseUrl, 'models', apiType, provider.customEndpoints);
-      const response = await axios.get(url, {
-        headers: { 'Authorization': `Bearer ${provider.apiKey}` },
-        timeout: 10000
-      });
+  const refreshResults = await Promise.all(
+    activeProviders.map(provider => refreshSingleProviderModels(provider, {
+      timeout: 10000,
+      clearOnFailure: true
+    }))
+  );
 
-      const models = response.data.data || [];
-
-      // 更新提供商的模型列表，保留visible属性
-      const oldModels = provider.models || [];
-      const oldModelsMap = new Map(oldModels.map(m => [m.id, m.visible]));
-
-      // 将获取到的模型转换为系统格式，保留之前的可见性设置
-      provider.models = models.map(model => ({
-        id: model.id,
-        visible: oldModelsMap.has(model.id) ? oldModelsMap.get(model.id) : true
-      }));
-
+  refreshResults.forEach(result => {
+    if (result.success) {
       results.success.push({
-        providerId: provider.id,
-        providerName: provider.name,
-        modelCount: provider.models.length
+        providerId: result.providerId,
+        providerName: result.providerName,
+        modelCount: result.modelCount
       });
       results.successCount++;
-    } catch (error) {
-      console.error(`Error fetching models for provider ${provider.name}:`, error.message);
-
-      // 刷新失败时清空该提供商的模型列表
-      provider.models = [];
-
+    } else {
       results.failed.push({
-        providerId: provider.id,
-        providerName: provider.name,
-        error: error.message
+        providerId: result.providerId,
+        providerName: result.providerName,
+        error: result.error
       });
       results.failedCount++;
     }
   });
-
-  await Promise.all(promises);
 
   // 保存更新后的配置
   await safeWriteFile(API_SETTINGS_FILE, data);

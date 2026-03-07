@@ -161,7 +161,10 @@
           <div class="models-toolbar">
             <label>模型 <span class="count">{{ selectedProvider.models?.length || 0 }}</span></label>
             <input v-model="modelSearch" placeholder="搜索模型平台ID..." class="search-input-small">
-            <button @click="fetchModels" class="btn-icon" title="刷新">🔄</button>
+            <button @click="fetchModels" class="btn-icon" title="查看远程模型列表">🔄</button>
+            <button @click="refreshProviderModels" class="btn-fetch-provider-models" :disabled="isRefreshingProviderModels" :title="isRefreshingProviderModels ? '获取中' : '一键获取并刷新当前提供商模型'">
+              {{ isRefreshingProviderModels ? '获取中...' : '⚡ 一键获取' }}
+            </button>
             <button @click="showAddModelModal = true" class="btn-icon" title="手动添加模型">➕</button>
             <button v-if="currentAvailableModels" @click="closeModelsList" class="btn-icon" title="关闭">×</button>
           </div>
@@ -377,6 +380,7 @@ const showAddGroup = ref(false)
 const editingGroup = ref(null)
 const groupForm = ref({ name: '', description: '' })
 const isRefreshingAll = ref(false) // 批量刷新状态
+const isRefreshingProviderModels = ref(false) // 单供应商刷新状态
 const batchSelectMode = ref(false) // 批量选择模式
 const selectedProviderIds = ref([]) // 已选择的供应商ID列表
 
@@ -517,23 +521,58 @@ function selectProvider(provider) {
   showApiKey.value = false
 }
 
+function updateAvailableModelsCache(providerId, models) {
+  availableModelsCache.value[providerId] = models
+
+  const groups = {}
+  models.forEach(model => {
+    const groupName = model.id.split(/[-/]/)[0] || 'other'
+    groups[groupName] = true
+  })
+  expandedGroupsCache.value[providerId] = groups
+}
+
 async function fetchModels() {
   try {
     const res = await axios.get(`/api/providers/${selectedProvider.value.id}/models`)
     const providerId = selectedProvider.value.id
-
-    // 缓存模型列表
-    availableModelsCache.value[providerId] = res.data
-
-    // 自动展开所有分组
-    const groups = {}
-    res.data.forEach(model => {
-      const groupName = model.id.split(/[-/]/)[0] || 'other'
-      groups[groupName] = true
-    })
-    expandedGroupsCache.value[providerId] = groups
+    updateAvailableModelsCache(providerId, res.data)
   } catch (e) {
     alert('获取模型失败: ' + (e.response?.data?.error || e.message))
+  }
+}
+
+async function refreshProviderModels() {
+  if (!selectedProvider.value || isRefreshingProviderModels.value) return
+
+  isRefreshingProviderModels.value = true
+
+  try {
+    const providerId = selectedProvider.value.id
+    const res = await axios.post(`/api/providers/${providerId}/refresh-models`)
+
+    const providerIndex = providers.value.findIndex(p => p.id === providerId)
+    if (providerIndex !== -1) {
+      providers.value[providerIndex] = {
+        ...providers.value[providerIndex],
+        models: res.data.models || []
+      }
+    }
+
+    if (selectedProvider.value?.id === providerId) {
+      selectedProvider.value = {
+        ...selectedProvider.value,
+        models: res.data.models || []
+      }
+    }
+
+    updateAvailableModelsCache(providerId, (res.data.models || []).map(model => ({ id: model.id })))
+
+    alert(`已刷新 ${res.data.providerName} 的模型列表，共获取 ${res.data.modelCount} 个模型`)
+  } catch (error) {
+    alert('一键获取失败: ' + (error.response?.data?.error || error.message))
+  } finally {
+    isRefreshingProviderModels.value = false
   }
 }
 
@@ -1758,6 +1797,29 @@ onUnmounted(() => {
   background: white;
   cursor: pointer;
   font-size: 12px;
+}
+
+.btn-fetch-provider-models {
+  padding: 6px 12px;
+  border: none;
+  border-radius: 4px;
+  background: #17a2b8;
+  color: white;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  transition: background 0.2s, opacity 0.2s;
+}
+
+.btn-fetch-provider-models:hover:not(:disabled) {
+  background: #138496;
+}
+
+.btn-fetch-provider-models:disabled {
+  background: #6c757d;
+  cursor: not-allowed;
+  opacity: 0.65;
 }
 
 .btn-toggle-model {
