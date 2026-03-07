@@ -387,19 +387,21 @@
 .style-select-trigger {
   display: flex;
   align-items: center;
-  gap: 0.4rem;
-  padding: 8px 12px;
-  background: white;
-  border: 1px solid #dee2e6;
-  border-radius: 6px;
+  gap: 0.45rem;
+  padding: 0.7rem 0.9rem;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid rgba(203, 213, 225, 0.95);
+  border-radius: 16px;
   cursor: pointer;
-  transition: all 0.2s;
+  transition: all 0.22s ease;
   user-select: none;
+  box-shadow: 0 10px 20px rgba(15, 23, 42, 0.05);
 }
 
 .style-select-trigger:hover {
   border-color: #0891b2;
-  box-shadow: 0 0 0 3px rgba(8, 145, 178, 0.1);
+  box-shadow: 0 0 0 4px rgba(8, 145, 178, 0.1), 0 16px 30px rgba(8, 145, 178, 0.1);
+  transform: translateY(-1px);
 }
 
 .style-icon {
@@ -418,15 +420,16 @@
 
 .style-dropdown {
   position: absolute;
-  top: calc(100% + 4px);
+  top: calc(100% + 8px);
   left: 0;
   right: 0;
   min-width: 280px;
   width: max-content;
-  background: white;
-  border: 1px solid #dee2e6;
-  border-radius: 6px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  background: rgba(255, 255, 255, 0.97);
+  backdrop-filter: blur(18px);
+  border: 1px solid rgba(226, 232, 240, 0.95);
+  border-radius: 18px;
+  box-shadow: 0 26px 54px rgba(15, 23, 42, 0.16);
   z-index: 1000;
   max-height: 400px;
   overflow-y: auto;
@@ -522,18 +525,20 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 8px 14px;
-  background: white;
-  border: 1px solid #dee2e6;
-  border-radius: 6px;
+  padding: 0.72rem 0.95rem;
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid rgba(203, 213, 225, 0.95);
+  border-radius: 16px;
   cursor: pointer;
-  transition: all 0.2s;
+  transition: all 0.22s ease;
   user-select: none;
+  box-shadow: 0 10px 20px rgba(15, 23, 42, 0.05);
 }
 
 .model-select-trigger:hover {
-  border-color: #007bff;
-  box-shadow: 0 0 0 3px rgba(0, 123, 255, 0.1);
+  border-color: #0891b2;
+  box-shadow: 0 0 0 4px rgba(8, 145, 178, 0.1), 0 16px 30px rgba(8, 145, 178, 0.1);
+  transform: translateY(-1px);
 }
 
 .selected-model {
@@ -554,13 +559,14 @@
 
 .model-dropdown {
   position: absolute;
-  top: calc(100% + 4px);
+  top: calc(100% + 8px);
   left: 0;
   right: 0;
-  background: white;
-  border: 1px solid #dee2e6;
-  border-radius: 6px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  background: rgba(255, 255, 255, 0.97);
+  backdrop-filter: blur(18px);
+  border: 1px solid rgba(226, 232, 240, 0.95);
+  border-radius: 18px;
+  box-shadow: 0 26px 54px rgba(15, 23, 42, 0.16);
   z-index: 1000;
   max-height: 400px;
   display: flex;
@@ -586,12 +592,12 @@
 }
 
 .model-option {
-  padding: 8px 14px;
+  padding: 0.75rem 0.95rem;
   cursor: pointer;
-  transition: background-color 0.15s;
+  transition: all 0.16s ease;
   font-size: 13px;
-  color: #495057;
-  border-bottom: 1px solid #f8f9fa;
+  color: #334155;
+  border-bottom: 1px solid rgba(241, 245, 249, 0.95);
 }
 
 .model-option:last-child {
@@ -599,13 +605,13 @@
 }
 
 .model-option:hover {
-  background-color: #f8f9fa;
+  background-color: rgba(248, 250, 252, 0.95);
 }
 
 .model-option.active {
-  background-color: #e7f3ff;
-  color: #007bff;
-  font-weight: 500;
+  background: linear-gradient(90deg, rgba(224, 242, 254, 0.95) 0%, rgba(240, 249, 255, 0.95) 100%);
+  color: #0f766e;
+  font-weight: 600;
 }
 
 .no-models {

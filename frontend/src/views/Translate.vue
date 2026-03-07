@@ -143,6 +143,16 @@ function saveTranslateState() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
 }
 
+function debounce(fn, delay = 300) {
+  let timer = null
+  return (...args) => {
+    clearTimeout(timer)
+    timer = setTimeout(() => fn(...args), delay)
+  }
+}
+
+const debouncedSaveTranslateState = debounce(saveTranslateState, 300)
+
 // 从 localStorage 恢复翻译状态
 function loadTranslateState() {
   try {
@@ -168,9 +178,9 @@ function clearTranslation() {
   localStorage.removeItem(STORAGE_KEY);
 }
 
-// 监听数据变化，自动保存
+// 监听数据变化，自动保存（防抖，避免输入时频繁写 localStorage）
 watch([sourceLanguage, targetLanguage, inputText, outputText, selectedPromptId, selectedModel], () => {
-  saveTranslateState();
+  debouncedSaveTranslateState()
 });
 
 const sourceLanguageOptions = computed(() =>
@@ -415,10 +425,11 @@ onMounted(() => {
 .translate-panel {
   width: 100%;
   min-height: 100%;
-  background: #ffffff;
-  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.96);
+  border-radius: 22px;
   padding: 1.5rem;
-  border: 1px solid #e2e8f0;
+  border: 1px solid rgba(226, 232, 240, 0.95);
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.06);
 }
 
 .language-selector {
@@ -445,26 +456,28 @@ onMounted(() => {
 }
 
 .btn-swap {
-  padding: 0.75rem 1rem;
-  background: #f1f5f9;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
+  padding: 0.82rem 0.95rem;
+  background: #ffffff;
+  border: 1px solid rgba(203, 213, 225, 0.95);
+  border-radius: 16px;
   cursor: pointer;
   font-size: 20px;
-  color: #64748b;
-  transition: all 0.2s;
+  color: #475569;
+  transition: transform 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
+  box-shadow: 0 6px 14px rgba(15, 23, 42, 0.05);
 }
 
 .btn-swap:hover {
-  background: #e2e8f0;
-  color: #0891b2;
+  color: #0f172a;
+  transform: translateY(-1px);
+  box-shadow: 0 8px 18px rgba(8, 145, 178, 0.08);
 }
 
 .translate-area {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 1.5rem;
-  margin-bottom: 1.5rem;
+  margin-bottom: 1.75rem;
   min-height: 420px;
 }
 
@@ -472,6 +485,11 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  padding: 0.9rem;
+  border-radius: 18px;
+  background: rgba(255,255,255,0.96);
+  border: 1px solid rgba(226, 232, 240, 0.92);
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.04);
 }
 
 .section-header {
@@ -499,30 +517,32 @@ onMounted(() => {
 
 .text-input {
   width: 100%;
-  padding: 1rem;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
+  padding: 0.95rem 1rem;
+  border: 1px solid rgba(203, 213, 225, 0.9);
+  border-radius: 16px;
   font-size: 14.5px;
   font-family: inherit;
   resize: vertical;
   min-height: 420px;
-  background: white;
+  background: #ffffff;
   color: #334155;
   outline: none;
   box-sizing: border-box;
   flex: 1;
-  line-height: 1.6;
+  line-height: 1.7;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease;
 }
 
 .text-input:focus {
   border-color: #0891b2;
+  box-shadow: 0 0 0 3px rgba(8, 145, 178, 0.1);
 }
 
 .text-output {
   width: 100%;
-  padding: 1rem;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
+  padding: 1rem 1.05rem;
+  border: 1px solid rgba(203, 213, 225, 0.9);
+  border-radius: 16px;
   font-size: 14.5px;
   min-height: 420px;
   background: #f8fafc;
@@ -533,14 +553,14 @@ onMounted(() => {
   overflow-y: auto;
   resize: vertical;
   flex: 1;
-  line-height: 1.6;
+  line-height: 1.7;
 }
 
 .text-output-placeholder {
   width: 100%;
   padding: 1rem;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
+  border: 1px solid rgba(203, 213, 225, 0.9);
+  border-radius: 16px;
   font-size: 14.5px;
   min-height: 420px;
   background: #f8fafc;
@@ -590,6 +610,10 @@ onMounted(() => {
   gap: 1rem;
   align-items: flex-end;
   margin-bottom: 1rem;
+  padding: 0.85rem;
+  border-radius: 18px;
+  background: rgba(255,255,255,0.94);
+  border: 1px solid rgba(226, 232, 240, 0.88);
 }
 
 .prompt-selector {
@@ -609,19 +633,22 @@ onMounted(() => {
 }
 
 .btn-translate {
-  padding: 0.75rem 2rem;
-  background: #0891b2;
+  padding: 0.82rem 2rem;
+  background: linear-gradient(135deg, #0f172a 0%, #155e75 100%);
   color: white;
   border: none;
-  border-radius: 8px;
+  border-radius: 999px;
   cursor: pointer;
-  font-size: 16.5px;
-  font-weight: 600;
-  transition: all 0.2s;
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  transition: transform 0.18s ease, box-shadow 0.18s ease, opacity 0.18s ease;
+  box-shadow: 0 8px 18px rgba(21, 94, 117, 0.18);
 }
 
 .btn-translate:hover:not(:disabled) {
-  background: #0e7490;
+  transform: translateY(-1px);
+  box-shadow: 0 10px 22px rgba(21, 94, 117, 0.22);
 }
 
 .btn-translate:disabled {

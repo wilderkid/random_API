@@ -392,21 +392,25 @@ onMounted(() => {
 <style scoped>
 .stats-dashboard {
   padding: 24px;
-  max-width: 1400px;
+  max-width: 1440px;
   margin: 0 auto;
 }
 
 h1 {
-  font-size: 28px;
-  font-weight: 600;
-  color: #1a1a1a;
+  font-size: 2.15rem;
+  font-weight: 800;
+  letter-spacing: -0.04em;
+  line-height: 1.05;
+  color: #0f172a;
   margin-bottom: 24px;
+  text-wrap: balance;
 }
 
 h2 {
-  font-size: 20px;
-  font-weight: 600;
-  color: #333;
+  font-size: 1.25rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: #0f172a;
   margin-bottom: 16px;
 }
 
@@ -417,28 +421,36 @@ h2 {
   gap: 12px;
   margin-bottom: 32px;
   flex-wrap: wrap;
+  padding: 16px 18px;
+  border-radius: 22px;
+  background: rgba(255,255,255,0.82);
+  border: 1px solid rgba(226, 232, 240, 0.92);
+  box-shadow: 0 18px 36px rgba(15, 23, 42, 0.06);
 }
 
 .time-range-btn {
-  padding: 10px 20px;
-  border: 1px solid #e0e0e0;
-  border-radius: 8px;
-  background: white;
-  color: #666;
+  padding: 10px 18px;
+  border: 1px solid rgba(203, 213, 225, 0.9);
+  border-radius: 999px;
+  background: rgba(255,255,255,0.9);
+  color: #64748b;
   font-size: 14px;
+  font-weight: 600;
   cursor: pointer;
-  transition: all 0.2s;
+  transition: all 0.22s ease;
 }
 
 .time-range-btn:hover {
-  border-color: #1890ff;
-  color: #1890ff;
+  border-color: #0891b2;
+  color: #0f172a;
+  transform: translateY(-1px);
 }
 
 .time-range-btn.active {
-  background: #1890ff;
+  background: linear-gradient(135deg, #0f172a 0%, #155e75 100%);
   color: white;
-  border-color: #1890ff;
+  border-color: transparent;
+  box-shadow: 0 14px 28px rgba(21, 94, 117, 0.22);
 }
 
 .custom-range {
@@ -472,18 +484,21 @@ h2 {
 }
 
 .refresh-btn {
-  padding: 8px 16px;
-  background: #52c41a;
+  padding: 9px 16px;
+  background: linear-gradient(135deg, #0f172a 0%, #155e75 100%);
   color: white;
   border: none;
-  border-radius: 6px;
+  border-radius: 999px;
   cursor: pointer;
   font-size: 14px;
-  transition: all 0.2s;
+  font-weight: 700;
+  transition: all 0.22s ease;
+  box-shadow: 0 14px 28px rgba(21, 94, 117, 0.22);
 }
 
 .refresh-btn:hover:not(:disabled) {
-  background: #389e0d;
+  transform: translateY(-1px);
+  box-shadow: 0 18px 32px rgba(21, 94, 117, 0.28);
 }
 
 .refresh-btn:disabled {
@@ -521,10 +536,12 @@ h2 {
 
 /* 概览卡片 */
 .overview-section {
-  background: white;
-  border-radius: 12px;
-  padding: 24px;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+  background: rgba(255, 255, 255, 0.9);
+  backdrop-filter: blur(16px);
+  border-radius: 26px;
+  padding: 26px;
+  border: 1px solid rgba(226, 232, 240, 0.95);
+  box-shadow: 0 24px 56px rgba(15, 23, 42, 0.08);
 }
 
 .cards-grid {
@@ -534,16 +551,17 @@ h2 {
 }
 
 .stat-card {
-  background: #f7f8fa;
-  border-radius: 10px;
-  padding: 20px;
-  border: 1px solid #e5e7eb;
-  transition: transform 0.2s, box-shadow 0.2s;
+  background: linear-gradient(180deg, rgba(255,255,255,0.96) 0%, rgba(246,249,252,0.92) 100%);
+  border-radius: 22px;
+  padding: 22px;
+  border: 1px solid rgba(226, 232, 240, 0.95);
+  transition: transform 0.22s ease, box-shadow 0.22s ease;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.7), 0 14px 28px rgba(15, 23, 42, 0.05);
 }
 
 .stat-card:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(0,0,0,0.12);
+  transform: translateY(-3px);
+  box-shadow: 0 18px 34px rgba(15, 23, 42, 0.1);
 }
 
 .stat-card.success {
@@ -568,9 +586,10 @@ h2 {
 }
 
 .card-value {
-  font-size: 28px;
-  font-weight: 700;
-  color: #1a1a1a;
+  font-size: 30px;
+  font-weight: 800;
+  letter-spacing: -0.04em;
+  color: #0f172a;
   margin-bottom: 4px;
 }
 
@@ -612,10 +631,12 @@ h2 {
 .models-section,
 .apikeys-section,
 .performance-section {
-  background: white;
-  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.9);
+  backdrop-filter: blur(16px);
+  border-radius: 26px;
   padding: 24px;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+  border: 1px solid rgba(226, 232, 240, 0.95);
+  box-shadow: 0 24px 56px rgba(15, 23, 42, 0.08);
 }
 
 /* 表格 */

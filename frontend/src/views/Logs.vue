@@ -739,13 +739,16 @@ onUnmounted(() => {
 <style scoped>
 .logs-page {
   padding: 20px;
-  max-width: 1600px;
+  max-width: 1680px;
   margin: 0 auto;
 }
 
 h2 {
-  margin-bottom: 20px;
-  color: #333;
+  margin-bottom: 22px;
+  color: #0f172a;
+  font-size: 1.9rem;
+  font-weight: 800;
+  letter-spacing: -0.03em;
 }
 
 /* 工具栏 */
@@ -753,10 +756,13 @@ h2 {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
-  margin-bottom: 20px;
-  padding: 15px;
-  background: #f5f5f5;
-  border-radius: 8px;
+  margin-bottom: 24px;
+  padding: 18px;
+  background: rgba(255, 255, 255, 0.88);
+  backdrop-filter: blur(14px);
+  border-radius: 22px;
+  border: 1px solid rgba(226, 232, 240, 0.95);
+  box-shadow: 0 20px 44px rgba(15, 23, 42, 0.07);
   flex-wrap: wrap;
   gap: 15px;
 }
@@ -804,10 +810,12 @@ h2 {
 }
 
 .input-field {
-  padding: 8px 12px;
-  border: 1px solid #ddd;
-  border-radius: 4px;
+  padding: 9px 12px;
+  border: 1px solid rgba(203, 213, 225, 0.95);
+  border-radius: 14px;
   font-size: 14px;
+  background: rgba(255,255,255,0.92);
+  transition: all 0.22s ease;
 }
 
 .select-field {
@@ -820,17 +828,21 @@ h2 {
 }
 
 .btn-search {
-  padding: 8px 16px;
-  background: #2196F3;
+  padding: 9px 16px;
+  background: linear-gradient(135deg, #0f172a 0%, #155e75 100%);
   color: white;
   border: none;
-  border-radius: 4px;
+  border-radius: 999px;
   cursor: pointer;
   font-size: 14px;
+  font-weight: 700;
+  box-shadow: 0 14px 26px rgba(21, 94, 117, 0.18);
+  transition: all 0.22s ease;
 }
 
 .btn-search:hover {
-  background: #0b7dda;
+  transform: translateY(-1px);
+  box-shadow: 0 18px 30px rgba(21, 94, 117, 0.26);
 }
 
 .realtime-toggle {
@@ -853,24 +865,27 @@ h2 {
 }
 
 .btn-action {
-  padding: 8px 16px;
+  padding: 9px 16px;
   border: none;
-  border-radius: 4px;
+  border-radius: 999px;
   cursor: pointer;
   font-size: 14px;
-  transition: background-color 0.3s;
+  font-weight: 700;
+  transition: all 0.22s ease;
   white-space: nowrap;
-  background: #4CAF50;
+  background: linear-gradient(135deg, #15803d 0%, #166534 100%);
   color: white;
-  min-width: 80px;
-  height: 36px;
+  min-width: 86px;
+  height: 38px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  box-shadow: 0 12px 24px rgba(22, 101, 52, 0.18);
 }
 
 .btn-action:hover {
-  background: #45a049;
+  transform: translateY(-1px);
+  box-shadow: 0 16px 28px rgba(15, 23, 42, 0.16);
 }
 
 .btn-action.btn-today {
@@ -927,26 +942,30 @@ h2 {
 }
 
 .error-message {
-  padding: 15px;
-  background: #ffebee;
-  color: #c62828;
-  border-radius: 4px;
+  padding: 16px 18px;
+  background: linear-gradient(180deg, #fff1f2 0%, #ffe4e6 100%);
+  color: #b91c1c;
+  border-radius: 18px;
+  border: 1px solid #fecdd3;
   margin-bottom: 20px;
+  box-shadow: 0 16px 30px rgba(185, 28, 28, 0.08);
 }
 
 /* 统计概览 */
 .stats-overview {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 15px;
-  margin-bottom: 20px;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 16px;
+  margin-bottom: 22px;
 }
 
 .stat-card {
-  padding: 15px;
-  background: #f8f9fa;
-  border-radius: 8px;
+  padding: 16px 18px;
+  background: linear-gradient(180deg, rgba(255,255,255,0.96) 0%, rgba(247,250,252,0.92) 100%);
+  border-radius: 18px;
+  border: 1px solid rgba(226, 232, 240, 0.95);
   border-left: 4px solid #2196F3;
+  box-shadow: 0 14px 28px rgba(15, 23, 42, 0.05);
 }
 
 .stat-card.success {
@@ -975,10 +994,12 @@ h2 {
 
 /* 日志列表 */
 .logs-content {
-  background: white;
-  border-radius: 8px;
-  padding: 20px;
-  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+  background: rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(16px);
+  border-radius: 24px;
+  padding: 22px;
+  border: 1px solid rgba(226, 232, 240, 0.95);
+  box-shadow: 0 24px 56px rgba(15, 23, 42, 0.08);
 }
 
 .no-data {
@@ -996,26 +1017,28 @@ h2 {
 }
 
 .log-entry {
-  border: 1px solid #e0e0e0;
-  border-radius: 6px;
+  border: 1px solid rgba(226, 232, 240, 0.95);
+  border-radius: 18px;
   overflow: hidden;
   flex-shrink: 0;
   min-height: 50px;
+  background: linear-gradient(180deg, rgba(255,255,255,0.98) 0%, rgba(247,250,252,0.96) 100%);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.04);
 }
 
 .log-header {
   display: flex;
   align-items: center;
-  padding: 12px 15px;
-  background: #fafafa;
+  padding: 13px 16px;
+  background: rgba(248, 250, 252, 0.8);
   cursor: pointer;
-  transition: background-color 0.2s;
+  transition: all 0.22s ease;
   gap: 10px;
   flex-wrap: wrap;
 }
 
 .log-header:hover {
-  background: #f0f0f0;
+  background: rgba(241, 245, 249, 0.95);
 }
 
 .log-badge {
