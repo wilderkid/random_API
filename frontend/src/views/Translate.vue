@@ -398,7 +398,7 @@ onMounted(() => {
 
 .language-select-group label {
   display: block;
-  font-size: 14px;
+  font-size: 14.5px;
   font-weight: 600;
   color: #334155;
   margin-bottom: 0.5rem;
@@ -409,7 +409,7 @@ onMounted(() => {
   padding: 0.75rem;
   border: 1px solid #e2e8f0;
   border-radius: 8px;
-  font-size: 14px;
+  font-size: 14.5px;
   background: white;
   color: #334155;
   outline: none;
@@ -462,13 +462,13 @@ onMounted(() => {
 }
 
 .section-title {
-  font-size: 14px;
+  font-size: 14.5px;
   font-weight: 600;
   color: #334155;
 }
 
 .char-count {
-  font-size: 12px;
+  font-size: 12.5px;
   color: #94a3b8;
 }
 
@@ -477,7 +477,7 @@ onMounted(() => {
   padding: 1rem;
   border: 1px solid #e2e8f0;
   border-radius: 8px;
-  font-size: 14px;
+  font-size: 14.5px;
   font-family: inherit;
   resize: vertical;
   min-height: 420px;
@@ -486,6 +486,7 @@ onMounted(() => {
   outline: none;
   box-sizing: border-box;
   flex: 1;
+  line-height: 1.6;
 }
 
 .text-input:focus {
@@ -497,7 +498,7 @@ onMounted(() => {
   padding: 1rem;
   border: 1px solid #e2e8f0;
   border-radius: 8px;
-  font-size: 14px;
+  font-size: 14.5px;
   min-height: 420px;
   background: #f8fafc;
   color: #334155;
@@ -507,6 +508,7 @@ onMounted(() => {
   overflow-y: auto;
   resize: vertical;
   flex: 1;
+  line-height: 1.6;
 }
 
 .text-output-placeholder {
@@ -514,7 +516,7 @@ onMounted(() => {
   padding: 1rem;
   border: 1px solid #e2e8f0;
   border-radius: 8px;
-  font-size: 14px;
+  font-size: 14.5px;
   min-height: 420px;
   background: #f8fafc;
   color: #94a3b8;
@@ -571,7 +573,7 @@ onMounted(() => {
 
 .prompt-selector label {
   display: block;
-  font-size: 14px;
+  font-size: 14.5px;
   font-weight: 600;
   color: #334155;
   margin-bottom: 0.5rem;
@@ -582,7 +584,7 @@ onMounted(() => {
   padding: 0.75rem;
   border: 1px solid #e2e8f0;
   border-radius: 8px;
-  font-size: 14px;
+  font-size: 14.5px;
   background: white;
   color: #334155;
   outline: none;
@@ -599,7 +601,7 @@ onMounted(() => {
   border: none;
   border-radius: 8px;
   cursor: pointer;
-  font-size: 16px;
+  font-size: 16.5px;
   font-weight: 600;
   transition: all 0.2s;
 }
@@ -619,7 +621,7 @@ onMounted(() => {
 
 .model-selector label {
   display: block;
-  font-size: 14px;
+  font-size: 14.5px;
   font-weight: 600;
   color: #334155;
   margin-bottom: 0.5rem;
@@ -630,7 +632,7 @@ onMounted(() => {
   padding: 0.75rem;
   border: 1px solid #e2e8f0;
   border-radius: 8px;
-  font-size: 14px;
+  font-size: 14.5px;
   background: white;
   color: #334155;
   outline: none;
@@ -654,7 +656,7 @@ onMounted(() => {
   border: 1px solid #e2e8f0;
   border-radius: 8px;
   cursor: pointer;
-  font-size: 14px;
+  font-size: 14.5px;
   color: #334155;
   font-weight: 500;
   transition: all 0.2s;
