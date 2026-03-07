@@ -353,24 +353,24 @@
 
 .model-selector {
   position: relative;
-  min-width: 500px;
-  max-width: 600px;
+  min-width: 450px;
+  max-width: 550px;
   flex-shrink: 0;
 }
 
 /* 风格选择器样式 */
 .style-selector {
   position: relative;
-  min-width: 200px;
-  max-width: 280px;
+  min-width: 180px;
+  max-width: 250px;
   flex-shrink: 0;
 }
 
 .style-select-trigger {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  padding: 10px 14px;
+  gap: 0.4rem;
+  padding: 8px 12px;
   background: white;
   border: 1px solid #dee2e6;
   border-radius: 6px;
@@ -385,7 +385,7 @@
 }
 
 .style-icon {
-  font-size: 16px;
+  font-size: 15px;
   line-height: 1;
 }
 
@@ -395,7 +395,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   color: #495057;
-  font-size: 14px;
+  font-size: 13px;
 }
 
 .style-dropdown {
@@ -422,8 +422,8 @@
 .style-option {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
-  padding: 12px 16px;
+  gap: 0.6rem;
+  padding: 10px 14px;
   cursor: pointer;
   transition: background-color 0.15s;
   border-bottom: 1px solid #f8f9fa;
@@ -444,25 +444,25 @@
 }
 
 .style-option-icon {
-  font-size: 18px;
+  font-size: 16px;
   line-height: 1;
   flex-shrink: 0;
 }
 
 .style-option-name {
   flex: 1;
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 500;
   color: #495057;
 }
 
 .style-option-desc {
-  font-size: 12px;
+  font-size: 11px;
   color: #6c757d;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 200px;
+  max-width: 180px;
 }
 
 /* 适配小屏幕 */
@@ -488,7 +488,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 16px;
+  padding: 8px 14px;
   background: white;
   border: 1px solid #dee2e6;
   border-radius: 6px;
@@ -508,13 +508,13 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   color: #495057;
-  font-size: 14px;
+  font-size: 13px;
 }
 
 .dropdown-arrow {
-  margin-left: 8px;
+  margin-left: 6px;
   color: #6c757d;
-  font-size: 12px;
+  font-size: 11px;
   transition: transform 0.2s;
 }
 
@@ -534,11 +534,11 @@
 }
 
 .model-search-input {
-  padding: 10px 12px;
+  padding: 8px 10px;
   border: none;
   border-bottom: 1px solid #dee2e6;
   outline: none;
-  font-size: 14px;
+  font-size: 13px;
   border-radius: 6px 6px 0 0;
 }
 
@@ -552,10 +552,10 @@
 }
 
 .model-option {
-  padding: 10px 16px;
+  padding: 8px 14px;
   cursor: pointer;
   transition: background-color 0.15s;
-  font-size: 14px;
+  font-size: 13px;
   color: #495057;
   border-bottom: 1px solid #f8f9fa;
 }
@@ -575,20 +575,20 @@
 }
 
 .no-models {
-  padding: 20px;
+  padding: 16px;
   text-align: center;
   color: #6c757d;
-  font-size: 14px;
+  font-size: 13px;
 }
 
 /* 图片预览容器样式 */
 .image-preview-container {
   display: flex;
-  gap: 12px;
-  padding: 12px;
+  gap: 10px;
+  padding: 10px;
   background-color: #f8f9fa;
-  border-radius: 8px;
-  margin-bottom: 12px;
+  border-radius: 6px;
+  margin-bottom: 10px;
   flex-wrap: wrap;
 }
 
@@ -601,10 +601,10 @@
 }
 
 .preview-image {
-  width: 100px;
-  height: 100px;
+  width: 90px;
+  height: 90px;
   object-fit: cover;
-  border-radius: 8px;
+  border-radius: 6px;
   border: 2px solid #dee2e6;
 }
 
@@ -632,9 +632,9 @@
 }
 
 .image-name {
-  font-size: 12px;
+  font-size: 11px;
   color: #6c757d;
-  max-width: 100px;
+  max-width: 90px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -643,15 +643,15 @@
 /* 消息中的图片样式 */
 .message-images {
   display: flex;
-  gap: 8px;
-  margin-bottom: 8px;
+  gap: 6px;
+  margin-bottom: 6px;
   flex-wrap: wrap;
 }
 
 .message-image {
-  max-width: 150px;
-  max-height: 150px;
-  border-radius: 8px;
+  max-width: 140px;
+  max-height: 140px;
+  border-radius: 6px;
   border: 1px solid #dee2e6;
   cursor: pointer;
   transition: transform 0.2s, box-shadow 0.2s;
@@ -666,14 +666,14 @@
 .rate-limit-warning {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
+  gap: 6px;
+  padding: 6px 10px;
   background-color: #fff3cd;
   border: 1px solid #ffeaa7;
   border-radius: 4px;
   color: #856404;
-  font-size: 14px;
-  margin-bottom: 8px;
+  font-size: 13px;
+  margin-bottom: 6px;
 }
 
 .warning-icon {
@@ -752,14 +752,14 @@
 .error-details-btn {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  margin-top: 8px;
-  padding: 4px 8px;
+  gap: 3px;
+  margin-top: 6px;
+  padding: 3px 6px;
   background-color: #f8f9fa;
   border: 1px solid #dee2e6;
   border-radius: 4px;
   cursor: pointer;
-  font-size: 12px;
+  font-size: 11px;
   color: #6c757d;
   transition: all 0.2s ease;
 }
@@ -929,18 +929,18 @@
 .file-preview-container {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 12px;
+  gap: 6px;
+  padding: 10px;
   background-color: #f8f9fa;
-  border-radius: 8px;
-  margin-bottom: 12px;
+  border-radius: 6px;
+  margin-bottom: 10px;
 }
 
 .file-preview-item {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
+  gap: 6px;
+  padding: 6px 10px;
   background-color: white;
   border: 1px solid #dee2e6;
   border-radius: 6px;
@@ -952,7 +952,7 @@
 
 .file-preview-item .file-name {
   flex: 1;
-  font-size: 14px;
+  font-size: 13px;
   color: #495057;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -960,7 +960,7 @@
 }
 
 .file-preview-item .file-size {
-  font-size: 12px;
+  font-size: 11px;
   color: #6c757d;
 }
 
@@ -988,18 +988,18 @@
 .message-files {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  margin-bottom: 8px;
+  gap: 5px;
+  margin-bottom: 6px;
 }
 
 .message-file {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 6px 10px;
+  gap: 5px;
+  padding: 5px 8px;
   background-color: #e9ecef;
   border-radius: 4px;
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .message-file .file-icon {
@@ -1142,9 +1142,9 @@
 /* 消息操作按钮样式 */
 .message-actions {
   display: flex;
-  gap: 8px;
-  margin-top: 8px;
-  padding-top: 8px;
+  gap: 6px;
+  margin-top: 6px;
+  padding-top: 6px;
   border-top: 1px solid #e9ecef;
   opacity: 0;
   transition: opacity 0.2s ease;
@@ -1157,13 +1157,13 @@
 .action-btn {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 4px 10px;
+  gap: 3px;
+  padding: 3px 8px;
   background-color: #f8f9fa;
   border: 1px solid #dee2e6;
   border-radius: 4px;
   cursor: pointer;
-  font-size: 12px;
+  font-size: 11px;
   color: #6c757d;
   transition: all 0.2s ease;
 }
@@ -1187,12 +1187,12 @@
 }
 
 .action-icon {
-  font-size: 14px;
+  font-size: 13px;
   line-height: 1;
 }
 
 .action-text {
-  font-size: 12px;
+  font-size: 11px;
 }
 
 /* 适配小屏幕 */
@@ -1238,20 +1238,20 @@
 
 /* 图片文本内容（进度信息、提示词等） */
 .image-text-content {
-  margin-bottom: 12px;
-  padding: 12px;
+  margin-bottom: 10px;
+  padding: 10px;
   background: #f8f9fa;
-  border-radius: 8px;
+  border-radius: 6px;
   border-left: 3px solid #0891b2;
-  font-size: 13px;
+  font-size: 12px;
   color: #495057;
-  line-height: 1.6;
-  max-height: 200px;
+  line-height: 1.5;
+  max-height: 180px;
   overflow-y: auto;
 }
 
 .image-text-content p {
-  margin: 0 0 8px 0;
+  margin: 0 0 6px 0;
 }
 
 .image-text-content p:last-child {
@@ -1260,19 +1260,19 @@
 
 .generated-images-container {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 300px));
-  gap: 16px;
-  margin: 12px 0;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 280px));
+  gap: 12px;
+  margin: 10px 0;
 }
 
 .generated-image-item {
   border: 1px solid #dee2e6;
-  border-radius: 8px;
+  border-radius: 6px;
   overflow: hidden;
   background: white;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
   transition: box-shadow 0.2s;
-  max-width: 300px;
+  max-width: 280px;
 }
 
 .generated-image-item:hover {
@@ -1284,8 +1284,8 @@
   position: relative;
   cursor: pointer;
   overflow: hidden;
-  border-radius: 8px 8px 0 0;
-  max-height: 250px;
+  border-radius: 6px 6px 0 0;
+  max-height: 220px;
 }
 
 /* 生成的图片预览 - 缩略图样式 */
@@ -1293,7 +1293,7 @@
   width: 100%;
   height: auto;
   max-width: 100%;
-  max-height: 250px;
+  max-height: 220px;
   object-fit: cover;
   display: block;
   transition: transform 0.3s ease;
@@ -1327,32 +1327,32 @@
 }
 
 .preview-icon {
-  font-size: 32px;
-  margin-bottom: 8px;
+  font-size: 28px;
+  margin-bottom: 6px;
 }
 
 .preview-text {
   color: #fff;
-  font-size: 14px;
+  font-size: 13px;
 }
 
 /* 图片操作按钮区域 */
 .image-actions {
-  padding: 10px;
+  padding: 8px;
   display: flex;
-  gap: 8px;
+  gap: 6px;
   justify-content: center;
   background: #f8f9fa;
 }
 
 .btn-view {
-  padding: 6px 12px;
+  padding: 5px 10px;
   background: #28a745;
   color: white;
   border: none;
   border-radius: 4px;
   cursor: pointer;
-  font-size: 13px;
+  font-size: 12px;
   transition: background 0.2s;
 }
 
@@ -1361,14 +1361,14 @@
 }
 
 .btn-download {
-  padding: 6px 12px;
+  padding: 5px 10px;
   background: #007bff;
   color: white;
   border: none;
   border-radius: 4px;
   cursor: pointer;
   text-decoration: none;
-  font-size: 13px;
+  font-size: 12px;
   transition: background 0.2s;
   display: inline-block;
 }
@@ -1379,23 +1379,23 @@
 
 /* 修订后的提示词 */
 .revised-prompt {
-  padding: 8px 10px;
+  padding: 6px 8px;
   margin: 0;
-  font-size: 11px;
+  font-size: 10px;
   color: #6c757d;
   background: #f8f9fa;
   border-top: 1px solid #dee2e6;
-  line-height: 1.4;
-  max-height: 60px;
+  line-height: 1.3;
+  max-height: 50px;
   overflow-y: auto;
 }
 
 /* 图片元数据 */
 .image-metadata {
-  padding: 8px 10px;
+  padding: 6px 8px;
   background: #f8f9fa;
   border-top: 1px solid #dee2e6;
-  font-size: 11px;
+  font-size: 10px;
   color: #6c757d;
 }
 
@@ -1435,7 +1435,7 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 12px 16px;
+  padding: 10px 14px;
   background: #2a2a2a;
   border-bottom: 1px solid #3a3a3a;
 }
@@ -1443,17 +1443,17 @@
 .viewer-controls {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
 }
 
 .viewer-btn {
-  padding: 8px 14px;
+  padding: 6px 12px;
   background: #3a3a3a;
   border: none;
   border-radius: 6px;
   color: #fff;
   cursor: pointer;
-  font-size: 14px;
+  font-size: 13px;
   transition: background 0.2s;
 }
 
@@ -1463,21 +1463,21 @@
 
 .zoom-level {
   color: #aaa;
-  font-size: 14px;
-  min-width: 60px;
+  font-size: 13px;
+  min-width: 55px;
   text-align: center;
-  padding: 0 8px;
+  padding: 0 6px;
 }
 
 .viewer-close {
-  width: 36px;
-  height: 36px;
+  width: 32px;
+  height: 32px;
   background: #dc3545;
   border: none;
   border-radius: 50%;
   color: #fff;
   cursor: pointer;
-  font-size: 18px;
+  font-size: 16px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1495,10 +1495,10 @@
   align-items: center;
   justify-content: center;
   overflow: auto;
-  padding: 20px;
-  min-height: 400px;
-  min-width: 500px;
-  max-height: calc(95vh - 130px);
+  padding: 16px;
+  min-height: 350px;
+  min-width: 450px;
+  max-height: calc(95vh - 120px);
   background: #111;
 }
 
@@ -1515,23 +1515,23 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 12px 16px;
+  padding: 10px 14px;
   background: #2a2a2a;
   border-top: 1px solid #3a3a3a;
 }
 
 .viewer-hint {
   color: #888;
-  font-size: 12px;
+  font-size: 11px;
 }
 
 .viewer-download {
-  padding: 10px 20px;
+  padding: 8px 16px;
   background: #007bff;
   color: #fff;
   text-decoration: none;
   border-radius: 6px;
-  font-size: 14px;
+  font-size: 13px;
   transition: background 0.2s;
 }
 

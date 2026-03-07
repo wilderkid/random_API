@@ -256,11 +256,6 @@ function swapLanguages() {
   const temp = sourceLanguage.value;
   sourceLanguage.value = targetLanguage.value;
   targetLanguage.value = temp;
-
-  // 同时交换输入和输出文本
-  const tempText = inputText.value;
-  inputText.value = outputText.value;
-  outputText.value = tempText;
 }
 
 async function translate() {
@@ -376,16 +371,17 @@ onMounted(() => {
 <style scoped>
 .translate-container {
   display: flex;
-  justify-content: center;
-  padding: 2rem;
+  width: 100%;
+  min-height: calc(100vh - 100px);
+  padding: 0;
 }
 
 .translate-panel {
   width: 100%;
-  max-width: 1200px;
+  min-height: 100%;
   background: #ffffff;
   border-radius: 12px;
-  padding: 2rem;
+  padding: 1.5rem;
   border: 1px solid #e2e8f0;
 }
 
@@ -444,11 +440,13 @@ onMounted(() => {
   grid-template-columns: 1fr 1fr;
   gap: 1.5rem;
   margin-bottom: 1.5rem;
+  min-height: 420px;
 }
 
 .input-section, .output-section {
   display: flex;
   flex-direction: column;
+  min-height: 0;
 }
 
 .section-header {
@@ -482,11 +480,12 @@ onMounted(() => {
   font-size: 14px;
   font-family: inherit;
   resize: vertical;
-  min-height: 242px;
+  min-height: 420px;
   background: white;
   color: #334155;
   outline: none;
   box-sizing: border-box;
+  flex: 1;
 }
 
 .text-input:focus {
@@ -499,7 +498,7 @@ onMounted(() => {
   border: 1px solid #e2e8f0;
   border-radius: 8px;
   font-size: 14px;
-  min-height: 242px;
+  min-height: 420px;
   background: #f8fafc;
   color: #334155;
   white-space: pre-wrap;
@@ -507,6 +506,7 @@ onMounted(() => {
   box-sizing: border-box;
   overflow-y: auto;
   resize: vertical;
+  flex: 1;
 }
 
 .text-output-placeholder {
@@ -515,13 +515,14 @@ onMounted(() => {
   border: 1px solid #e2e8f0;
   border-radius: 8px;
   font-size: 14px;
-  min-height: 242px;
+  min-height: 420px;
   background: #f8fafc;
   color: #94a3b8;
   display: flex;
   align-items: center;
   justify-content: center;
   box-sizing: border-box;
+  flex: 1;
 }
 
 .btn-copy-small {
@@ -666,8 +667,17 @@ onMounted(() => {
 }
 
 @media (max-width: 768px) {
+  .translate-container {
+    min-height: auto;
+  }
+
+  .translate-panel {
+    padding: 1rem;
+  }
+
   .translate-area {
     grid-template-columns: 1fr;
+    min-height: auto;
   }
 
   .language-selector {
@@ -677,6 +687,12 @@ onMounted(() => {
 
   .btn-swap {
     transform: rotate(90deg);
+  }
+
+  .text-input,
+  .text-output,
+  .text-output-placeholder {
+    min-height: 240px;
   }
 }
 </style>
