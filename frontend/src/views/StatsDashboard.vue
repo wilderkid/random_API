@@ -70,10 +70,10 @@
             <div class="card-value">{{ avgDuration }}s</div>
           </div>
           <div class="stat-card" v-if="stats.tokenStats">
-            <div class="card-label">Token使用量</div>
+            <div class="card-label">总 Token 量</div>
             <div class="card-value">{{ formatNumber(stats.tokenStats.totalTokens) }}</div>
             <div class="card-sub">
-              {{ formatNumber(stats.tokenStats.totalPromptTokens) }} / {{ formatNumber(stats.tokenStats.totalCompletionTokens) }}
+              Prompt: {{ formatNumber(stats.tokenStats.totalPromptTokens) }} / Completion: {{ formatNumber(stats.tokenStats.totalCompletionTokens) }}
             </div>
           </div>
           <div class="stat-card" v-if="stats.costStats">
@@ -124,16 +124,22 @@
                 <th>调用次数</th>
                 <th>成功率</th>
                 <th>平均响应时间</th>
+                <th>Prompt Tokens</th>
+                <th>Completion Tokens</th>
+                <th>Total Tokens</th>
               </tr>
             </thead>
             <tbody>
-              <template v-for="(provider, providerName) in stats.providerStats" :key="providerName">
+              <template v-for="(provider, providerName) in stats.providerStats">
                 <tr v-for="(model, modelName) in provider.models" :key="`${providerName}-${modelName}`">
                   <td>{{ providerName }}</td>
                   <td>{{ modelName }}</td>
                   <td>{{ formatNumber(model.total) }}</td>
                   <td :class="getRateClass(model)">{{ calculateRate(model) }}%</td>
                   <td>{{ formatDuration(model.avgDuration) }}</td>
+                  <td>{{ formatNumber(model.totalPromptTokens) }}</td>
+                  <td>{{ formatNumber(model.totalCompletionTokens) }}</td>
+                  <td class="token-total-cell">{{ formatNumber(model.totalTokens) }}</td>
                 </tr>
               </template>
             </tbody>
@@ -155,7 +161,7 @@
               </tr>
             </thead>
             <tbody>
-              <template v-for="(provider, providerName) in stats.providerStats" :key="providerName">
+              <template v-for="(provider, providerName) in stats.providerStats">
                 <tr v-for="(apiKey, keyName) in provider.apiKeys" :key="`${providerName}-${keyName}`">
                   <td>{{ providerName }}</td>
                   <td>{{ keyName }}</td>
@@ -586,6 +592,11 @@ h2 {
   display: flex;
   align-items: center;
   gap: 4px;
+}
+
+.token-total-cell {
+  font-weight: 700;
+  color: #1677ff;
 }
 
 .card-trend.trend-up {

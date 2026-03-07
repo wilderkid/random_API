@@ -1659,6 +1659,43 @@ function buildApiUrl(baseUrl, endpoint, apiType = 'openai', customEndpoints = nu
   }
 }
 
+function estimateTokenCount(text) {
+  if (!text) return 0
+  const normalized = String(text)
+  return Math.max(1, Math.ceil(normalized.length / 4))
+}
+
+function extractTextFromMessageContent(content) {
+  if (!content) return ''
+  if (typeof content === 'string') return content
+  if (Array.isArray(content)) {
+    return content
+      .map(part => {
+        if (typeof part === 'string') return part
+        if (part?.type === 'text') return part.text || ''
+        return ''
+      })
+      .join('\n')
+  }
+  return ''
+}
+
+function estimateTokenUsageFromMessages(messages, completionText = '') {
+  const promptText = (messages || [])
+    .map(msg => extractTextFromMessageContent(msg.content))
+    .join('\n')
+
+  const promptTokens = estimateTokenCount(promptText)
+  const completionTokens = estimateTokenCount(completionText)
+
+  return {
+    promptTokens,
+    completionTokens,
+    totalTokens: promptTokens + completionTokens,
+    estimated: true
+  }
+}
+
 function buildChatRequestBody(modelId, messages, params, apiType = 'openai', images = null, systemPrompt = null, tools = null, toolChoice = null) {
   log.verbose(`[DEBUG] buildChatRequestBody: modelId=${modelId}, apiType=${apiType}, messages=${messages.length}, images=${images ? images.length : 'none'}, systemPrompt=${systemPrompt ? 'yes' : 'no'}, tools=${tools ? tools.length : 'none'}`);
 
@@ -3048,8 +3085,9 @@ function convertAnthropicJsonToOpenAI(anthropicResponse) {
 }
 
 // Performance optimization: Simplified streaming response handler
-async function handleStreamingResponse(response, res, stream, selectedProvider, pureModelName, userSettings, pollingConfig, sessionIdentifier, apiType, skipConverter = false) {
+async function handleStreamingResponse(response, res, stream, selectedProvider, pureModelName, userSettings, pollingConfig, sessionIdentifier, apiType, requestMessages = [], skipConverter = false) {
   const originalContentType = response.headers['content-type'];
+  let tokenUsage = null;
 
   // Set appropriate response headers based on client request
   if (stream) {
@@ -3081,6 +3119,7 @@ async function handleStreamingResponse(response, res, stream, selectedProvider, 
     let dataReceived = false;
     let sseEventCount = 0;
     let hasToolCalls = false;
+    let streamedText = '';
 
     response.data.on('data', (chunk) => {
       const chunkStr = chunk.toString();
@@ -3099,10 +3138,19 @@ async function handleStreamingResponse(response, res, stream, selectedProvider, 
             const delta = data.choices?.[0]?.delta;
             const finishReason = data.choices?.[0]?.finish_reason;
 
+            if (data.usage) {
+              tokenUsage = {
+                promptTokens: data.usage.prompt_tokens || 0,
+                completionTokens: data.usage.completion_tokens || 0,
+                totalTokens: data.usage.total_tokens || 0
+              };
+            }
+
             // 打印关键信息
             if (sseEventCount <= 3 || delta?.tool_calls || finishReason) {
               console.log(`[SSE调试] 事件 #${sseEventCount}:`);
               if (delta?.content) {
+                streamedText += delta.content;
                 console.log(`  content: "${delta.content.substring(0, 100)}${delta.content.length > 100 ? '...' : ''}"`);
               }
               if (delta?.tool_calls) {
@@ -3123,6 +3171,9 @@ async function handleStreamingResponse(response, res, stream, selectedProvider, 
     response.data.on('end', () => {
       console.log('[DEBUG] SSE stream ended normally');
       console.log(`[SSE调试] 总事件数: ${sseEventCount}, 包含工具调用: ${hasToolCalls}`);
+      if (!tokenUsage) {
+        tokenUsage = estimateTokenUsageFromMessages(requestMessages, streamedText)
+      }
       if (!responseCompleted) {
         responseCompleted = true;
         backgroundProcessor.handleSuccess(selectedProvider, pureModelName, userSettings, pollingConfig, sessionIdentifier);
@@ -3208,6 +3259,8 @@ async function handleStreamingResponse(response, res, stream, selectedProvider, 
       res.end();
     }
   });
+
+  return { tokenUsage };
 }
 
 // ==================== 图像生成模型支持 ====================
@@ -4066,7 +4119,11 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
           const requestBody = {
             ...req.body,
             model: providerModelId,
-            stream: true
+            stream: true,
+            stream_options: {
+              ...(req.body.stream_options || {}),
+              include_usage: true
+            }
           };
 
           const headers = {
@@ -4141,7 +4198,7 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
 
           // Use simplified streaming response handler
           // 透传模式：跳过格式转换器，直接透传数据
-          await handleStreamingResponse(response, res, stream, selectedProvider, pureModelName, userSettings, pollingConfig, sessionIdentifier, apiType, true);
+          const streamResult = await handleStreamingResponse(response, res, stream, selectedProvider, pureModelName, userSettings, pollingConfig, sessionIdentifier, apiType, messages, true);
 
           // Stream request successfully initiated, exit loop
           console.log(`[流式] 流式响应处理完成`);
@@ -4171,7 +4228,7 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
                 successfulProvider: selectedProvider.id,
                 totalAttempts: 1,
                 totalDuration: perfTracker.getTotalDuration(),
-                tokenUsage: null,  // 流式响应无法立即获取token使用量
+                tokenUsage: streamResult?.tokenUsage || null,
                 estimatedCost: null
               },
               metadata: { failoverOccurred: attempt > 0, isStreaming: true }

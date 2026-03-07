@@ -1034,7 +1034,10 @@ function parseModernLogs(logEntries) {
                 success: 0,
                 failed: 0,
                 avgDuration: 0,
-                totalDuration: 0
+                totalDuration: 0,
+                totalPromptTokens: 0,
+                totalCompletionTokens: 0,
+                totalTokens: 0
               };
             }
 
@@ -1050,6 +1053,12 @@ function parseModernLogs(logEntries) {
               stats.providerStats[providerName].models[modelName].avgDuration =
                 stats.providerStats[providerName].models[modelName].totalDuration /
                 stats.providerStats[providerName].models[modelName].total;
+            }
+
+            if (result?.tokenUsage) {
+              stats.providerStats[providerName].models[modelName].totalPromptTokens += result.tokenUsage.promptTokens || 0;
+              stats.providerStats[providerName].models[modelName].totalCompletionTokens += result.tokenUsage.completionTokens || 0;
+              stats.providerStats[providerName].models[modelName].totalTokens += result.tokenUsage.totalTokens || 0;
             }
           }
 
