@@ -12,12 +12,13 @@
         <!-- 分组筛选 -->
         <div class="filter-section">
           <label>分组筛选</label>
-          <select v-model="selectedGroupFilter" class="filter-select">
-            <option value="">全部分组</option>
-            <option v-for="group in groups" :key="group.id" :value="group.id">
-              {{ group.name }}
-            </option>
-          </select>
+          <SearchableSelect
+            v-model="selectedGroupFilter"
+            :options="groupFilterOptions"
+            class="filter-select"
+            placeholder="全部分组"
+            search-placeholder="搜索分组..."
+          />
         </div>
 
         <!-- 标签筛选 -->
@@ -107,15 +108,14 @@
         <!-- 分组选择 -->
         <div class="config-section">
           <label>所属分组</label>
-          <select
+          <SearchableSelect
             v-model="editForm.groupId"
+            :options="groupFilterOptionsNoAll"
             :disabled="!isEditing"
             class="input-field"
-          >
-            <option v-for="group in groups" :key="group.id" :value="group.id">
-              {{ group.name }}
-            </option>
-          </select>
+            placeholder="请选择分组"
+            search-placeholder="搜索分组..."
+          />
         </div>
 
         <!-- 标签 -->
@@ -215,9 +215,13 @@
 
 <script>
 import axios from 'axios';
+import SearchableSelect from '../components/SearchableSelect.vue';
 
 export default {
   name: 'PromptLibrary',
+  components: {
+    SearchableSelect
+  },
   data() {
     return {
       prompts: [],
@@ -290,6 +294,21 @@ export default {
 
       // 只返回有提示词的分组
       return Object.values(grouped).filter(g => g.prompts.length > 0);
+    },
+    groupFilterOptions() {
+      return [
+        { label: '全部分组', value: '' },
+        ...this.groups.map(group => ({
+          label: group.name,
+          value: group.id
+        }))
+      ];
+    },
+    groupFilterOptionsNoAll() {
+      return this.groups.map(group => ({
+        label: group.name,
+        value: group.id
+      }));
     }
   },
   async mounted() {

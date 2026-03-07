@@ -15,21 +15,26 @@
     <div class="view-controls">
       <div class="control-group">
         <label>显示模式:</label>
-        <select v-model="viewMode" @change="onViewModeChange" class="control-select">
-          <option value="all">所有模型（包含重复）</option>
-          <option value="grouped">按分组显示</option>
-          <option value="unique">去重模型</option>
-        </select>
+        <SearchableSelect
+          v-model="viewMode"
+          :options="viewModeOptions"
+          class="control-select"
+          placeholder="选择显示模式"
+          search-placeholder="搜索显示模式..."
+          @change="onViewModeChange"
+        />
       </div>
 
       <div class="control-group" v-if="viewMode === 'grouped'">
         <label>选择分组:</label>
-        <select v-model="selectedGroup" @change="updateDisplayedModels" class="control-select">
-          <option value="">所有分组</option>
-          <option v-for="group in availableGroupsList" :key="group.id" :value="group.id">
-            {{ group.name }} ({{ getGroupModelCount(group.id) }}个模型)
-          </option>
-        </select>
+        <SearchableSelect
+          v-model="selectedGroup"
+          :options="groupOptions"
+          class="control-select"
+          placeholder="所有分组"
+          search-placeholder="搜索分组..."
+          @change="updateDisplayedModels"
+        />
       </div>
 
       <div class="control-group">
@@ -134,6 +139,7 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import axios from 'axios'
+import SearchableSelect from '../components/SearchableSelect.vue'
 
 const settings = ref({ pollingConfig: { available: {}, excluded: [] } })
 const providers = ref([])
@@ -245,6 +251,20 @@ const availableGroupsList = computed(() => {
     name: getGroupName(groupId)
   }))
 })
+
+const viewModeOptions = computed(() => [
+  { label: '所有模型（包含重复）', value: 'all' },
+  { label: '按分组显示', value: 'grouped' },
+  { label: '去重模型', value: 'unique' }
+])
+
+const groupOptions = computed(() => [
+  { label: '所有分组', value: '' },
+  ...availableGroupsList.value.map(group => ({
+    label: `${group.name} (${getGroupModelCount(group.id)}个模型)`,
+    value: group.id
+  }))
+])
 
 const disabledItems = computed(() => {
   const disabled = []

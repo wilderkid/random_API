@@ -32,12 +32,13 @@
                 ref="modelSearchInput"
                 @click.stop
               >
-              <div class="model-options">
+              <div class="model-options" ref="modelOptionsContainer">
                 <div
                   v-for="m in filteredModels"
                   :key="m.value"
                   :class="['model-option', { active: currentModel === m.value }]"
                   @click="selectModel(m.value)"
+                  :ref="el => setModelOptionRef(m.value, el)"
                 >
                   {{ m.label }}
                 </div>
@@ -56,17 +57,28 @@
               <span class="dropdown-arrow">{{ showStyleDropdown ? '▲' : '▼' }}</span>
             </div>
             <div v-if="showStyleDropdown" class="style-dropdown">
-              <div class="style-options">
+              <input
+                v-model="styleSearchQuery"
+                placeholder="搜索风格..."
+                class="style-search-input"
+                ref="styleSearchInput"
+                @click.stop
+              >
+              <div class="style-options" ref="styleOptionsContainer">
                 <div
-                  v-for="style in availableStyles"
+                  v-for="style in filteredStyles"
                   :key="style.id"
                   :class="['style-option', { active: currentStyle === style.id }]"
                   @click="selectStyle(style.id)"
                   :title="style.description"
+                  :ref="el => setStyleOptionRef(style.id, el)"
                 >
                   <span class="style-option-icon">{{ style.icon }}</span>
                   <span class="style-option-name">{{ style.name }}</span>
                   <span class="style-option-desc">{{ style.description }}</span>
+                </div>
+                <div v-if="filteredStyles.length === 0" class="no-models">
+                  未找到匹配的风格
                 </div>
               </div>
             </div>
@@ -175,12 +187,13 @@
         <!-- 文本模型参数 -->
         <div v-if="currentModelType === 'text'" class="text-params">
           <label>系统提示词:
-            <select v-model="selectedPromptId" class="prompt-select">
-              <option value="">无（不使用提示词）</option>
-              <option v-for="prompt in prompts" :key="prompt.id" :value="prompt.id">
-                {{ prompt.name }}
-              </option>
-            </select>
+            <SearchableSelect
+              v-model="selectedPromptId"
+              :options="promptSelectOptions"
+              class="prompt-select"
+              placeholder="无（不使用提示词）"
+              search-placeholder="搜索提示词..."
+            />
           </label>
           <div v-if="selectedPrompt" class="prompt-preview">
             <div class="prompt-preview-header">
@@ -197,25 +210,30 @@
         <!-- 生图模型参数 -->
         <div v-if="currentModelType === 'image'" class="image-params">
           <label>图片尺寸:
-            <select v-model="imageParams.size">
-              <option value="1024x1024">1024x1024 (方形)</option>
-              <option value="1024x1792">1024x1792 (竖版)</option>
-              <option value="1792x1024">1792x1024 (横版)</option>
-            </select>
+            <SearchableSelect
+              v-model="imageParams.size"
+              :options="imageSizeOptions"
+              placeholder="选择图片尺寸"
+              search-placeholder="搜索图片尺寸..."
+            />
           </label>
 
           <label>图片质量:
-            <select v-model="imageParams.quality">
-              <option value="standard">标准</option>
-              <option value="hd">高清</option>
-            </select>
+            <SearchableSelect
+              v-model="imageParams.quality"
+              :options="imageQualityOptions"
+              placeholder="选择图片质量"
+              search-placeholder="搜索图片质量..."
+            />
           </label>
 
           <label>图片风格:
-            <select v-model="imageParams.style">
-              <option value="vivid">生动</option>
-              <option value="natural">自然</option>
-            </select>
+            <SearchableSelect
+              v-model="imageParams.style"
+              :options="imageStyleOptions"
+              placeholder="选择图片风格"
+              search-placeholder="搜索图片风格..."
+            />
           </label>
 
           <label>生成数量:
@@ -414,9 +432,25 @@
   overflow-y: auto;
 }
 
+.style-search-input {
+  width: 100%;
+  padding: 8px 10px;
+  border: none;
+  border-bottom: 1px solid #dee2e6;
+  outline: none;
+  font-size: 13px;
+  border-radius: 6px 6px 0 0;
+}
+
+.style-search-input:focus {
+  border-bottom-color: #0891b2;
+}
+
 .style-options {
   display: flex;
   flex-direction: column;
+  overflow-y: auto;
+  max-height: 350px;
 }
 
 .style-option {
@@ -1547,6 +1581,7 @@ import axios from 'axios'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import contentStyleManager from '../utils/contentStyleManager.js'
+import SearchableSelect from '../components/SearchableSelect.vue'
 import '../styles/notion-style.css'
 import '../styles/konayuki-style.css'
 import '../styles/everforest-style.css'
@@ -1565,6 +1600,8 @@ const showModelDropdown = ref(false)
 const modelSearchQuery = ref('')
 const modelSelectorRef = ref(null)
 const modelSearchInput = ref(null)
+const modelOptionsContainer = ref(null)
+const modelOptionRefs = new Map()
 const pollingEnabled = ref(false)
 const userSettings = ref({})
 const frequency = ref(10)
@@ -1585,6 +1622,10 @@ const selectedPromptId = ref('')
 // 风格选择器相关
 const showStyleDropdown = ref(false)
 const styleSelectorRef = ref(null)
+const styleSearchQuery = ref('')
+const styleSearchInput = ref(null)
+const styleOptionsContainer = ref(null)
+const styleOptionRefs = new Map()
 // 从风格管理器获取初始风格，确保状态同步
 const currentStyle = ref(contentStyleManager.getCurrentStyle())
 
@@ -1693,6 +1734,42 @@ const currentStyleConfig = computed(() => {
 const availableStyles = computed(() => {
   return contentStyleManager.getAvailableStyles()
 })
+
+const filteredStyles = computed(() => {
+  const query = styleSearchQuery.value.toLowerCase().trim()
+  if (!query) return availableStyles.value
+
+  return availableStyles.value.filter(style =>
+    style.name.toLowerCase().includes(query) ||
+    style.description.toLowerCase().includes(query) ||
+    style.id.toLowerCase().includes(query)
+  )
+})
+
+const promptSelectOptions = computed(() => [
+  { label: '无（不使用提示词）', value: '' },
+  ...prompts.value.map(prompt => ({
+    label: prompt.name,
+    value: prompt.id,
+    description: prompt.description || ''
+  }))
+])
+
+const imageSizeOptions = computed(() => [
+  { label: '1024x1024 (方形)', value: '1024x1024' },
+  { label: '1024x1792 (竖版)', value: '1024x1792' },
+  { label: '1792x1024 (横版)', value: '1792x1024' }
+])
+
+const imageQualityOptions = computed(() => [
+  { label: '标准', value: 'standard' },
+  { label: '高清', value: 'hd' }
+])
+
+const imageStyleOptions = computed(() => [
+  { label: '生动', value: 'vivid' },
+  { label: '自然', value: 'natural' }
+])
 
 // 计算当前模型是否可以启用轮询
 const canEnablePolling = computed(() => {
@@ -1905,11 +1982,31 @@ async function loadPrompts() {
 }
 
 // 模型选择器相关方法
+function setModelOptionRef(modelValue, el) {
+  if (el) {
+    modelOptionRefs.set(modelValue, el)
+  } else {
+    modelOptionRefs.delete(modelValue)
+  }
+}
+
+function scrollToCurrentModel() {
+  nextTick(() => {
+    const container = modelOptionsContainer.value
+    const selectedEl = modelOptionRefs.get(currentModel.value)
+    if (!container || !selectedEl) return
+
+    const targetScrollTop = selectedEl.offsetTop - (container.clientHeight / 2) + (selectedEl.clientHeight / 2)
+    container.scrollTop = Math.max(0, targetScrollTop)
+  })
+}
+
 function toggleModelDropdown() {
   showModelDropdown.value = !showModelDropdown.value
   if (showModelDropdown.value) {
     nextTick(() => {
       modelSearchInput.value?.focus()
+      scrollToCurrentModel()
     })
   } else {
     modelSearchQuery.value = ''
@@ -1925,17 +2022,46 @@ function selectModel(value) {
 
 function onModelSearch() {
   // 搜索时自动触发过滤，由计算属性 filteredModels 处理
+  scrollToCurrentModel()
 }
 
 // 风格选择器相关方法
+function setStyleOptionRef(styleId, el) {
+  if (el) {
+    styleOptionRefs.set(styleId, el)
+  } else {
+    styleOptionRefs.delete(styleId)
+  }
+}
+
+function scrollToCurrentStyle() {
+  nextTick(() => {
+    const container = styleOptionsContainer.value
+    const selectedEl = styleOptionRefs.get(currentStyle.value)
+    if (!container || !selectedEl) return
+
+    const targetScrollTop = selectedEl.offsetTop - (container.clientHeight / 2) + (selectedEl.clientHeight / 2)
+    container.scrollTop = Math.max(0, targetScrollTop)
+  })
+}
+
 function toggleStyleDropdown() {
   showStyleDropdown.value = !showStyleDropdown.value
+  if (showStyleDropdown.value) {
+    nextTick(() => {
+      styleSearchInput.value?.focus()
+      scrollToCurrentStyle()
+    })
+  } else {
+    styleSearchQuery.value = ''
+  }
 }
 
 function selectStyle(styleId) {
   currentStyle.value = styleId
   contentStyleManager.setCurrentStyle(styleId)
   showStyleDropdown.value = false
+  styleSearchQuery.value = ''
   // 清除渲染缓存，确保使用新风格重新渲染
   renderedCache.clear()
   // 重新渲染所有消息
@@ -1962,6 +2088,7 @@ function handleClickOutside(event) {
   }
   if (styleSelectorRef.value && !styleSelectorRef.value.contains(event.target)) {
     showStyleDropdown.value = false
+    styleSearchQuery.value = ''
   }
 }
 

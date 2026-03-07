@@ -69,12 +69,13 @@
             <h3>默认模型选择</h3>
             <label>
               默认模型:
-              <select v-model="settings.defaultModel" class="input-field">
-                <option value="">请选择默认模型</option>
-                <option v-for="model in allModels" :key="model.value" :value="model.value">
-                  {{ model.label }}
-                </option>
-              </select>
+              <SearchableSelect
+                v-model="settings.defaultModel"
+                :options="defaultModelOptions"
+                class="input-field"
+                placeholder="请选择默认模型"
+                search-placeholder="搜索默认模型..."
+              />
             </label>
             <p class="hint-text">设置后，新建对话时将自动选择此模型</p>
           </section>
@@ -94,12 +95,13 @@
             <h3>默认提示词选择</h3>
             <label>
               默认提示词:
-              <select v-model="settings.defaultPromptId" class="input-field">
-                <option value="">无（不使用提示词）</option>
-                <option v-for="prompt in allPrompts" :key="prompt.id" :value="prompt.id">
-                  {{ prompt.name }}
-                </option>
-              </select>
+              <SearchableSelect
+                v-model="settings.defaultPromptId"
+                :options="defaultPromptOptions"
+                class="input-field"
+                placeholder="无（不使用提示词）"
+                search-placeholder="搜索默认提示词..."
+              />
             </label>
             <p class="hint-text">设置后，聊天时将默认选择此提示词作为系统提示词</p>
 
@@ -129,13 +131,13 @@
             <h3>消息显示风格</h3>
             <label>
               默认主题:
-              <select v-model="settings.defaultStyle" class="input-field">
-                <option value="">默认（简洁风格）</option>
-                <option value="notion">Notion（文档风格）</option>
-                <option value="konayuki">Konayuki（温暖风格）</option>
-                <option value="everforest">Everforest（自然绿意）</option>
-                <option value="happysimple">HappySimple（活泼可爱）</option>
-              </select>
+              <SearchableSelect
+                v-model="settings.defaultStyle"
+                :options="styleOptions"
+                class="input-field"
+                placeholder="默认（简洁风格）"
+                search-placeholder="搜索主题风格..."
+              />
             </label>
             <p class="hint-text">设置后，聊天页面将自动使用此主题显示 AI 回复内容</p>
 
@@ -207,12 +209,13 @@
             <h3>默认翻译模型</h3>
             <label>
               默认模型:
-              <select v-model="settings.translateDefaultModel" class="input-field">
-                <option value="">请选择默认模型</option>
-                <option v-for="model in allModels" :key="model.value" :value="model.value">
-                  {{ model.label }}
-                </option>
-              </select>
+              <SearchableSelect
+                v-model="settings.translateDefaultModel"
+                :options="defaultModelOptions"
+                class="input-field"
+                placeholder="请选择默认模型"
+                search-placeholder="搜索翻译默认模型..."
+              />
             </label>
             <p class="hint-text">设置后，翻译页面将自动选择此模型</p>
           </section>
@@ -221,12 +224,13 @@
             <h3>默认翻译提示词</h3>
             <label>
               默认提示词:
-              <select v-model="settings.translateDefaultPromptId" class="input-field">
-                <option value="">使用默认提示词</option>
-                <option v-for="prompt in translatePrompts" :key="prompt.id" :value="prompt.id">
-                  {{ prompt.name }}
-                </option>
-              </select>
+              <SearchableSelect
+                v-model="settings.translateDefaultPromptId"
+                :options="translatePromptOptions"
+                class="input-field"
+                placeholder="使用默认提示词"
+                search-placeholder="搜索翻译默认提示词..."
+              />
             </label>
             <p class="hint-text">设置后，翻译页面将自动选择此提示词</p>
           </section>
@@ -268,18 +272,20 @@
             <div class="quick-translations-list">
               <div v-for="(qt, index) in settings.quickTranslations" :key="qt.id" class="quick-translation-item">
                 <input v-model="qt.name" class="input-field" placeholder="按钮名称（如：中→英）">
-                <select v-model="qt.sourceLanguage" class="input-field">
-                  <option value="">选择源语言</option>
-                  <option v-for="lang in sourceLanguages" :key="lang.id" :value="lang.name">
-                    {{ lang.name }}
-                  </option>
-                </select>
-                <select v-model="qt.targetLanguage" class="input-field">
-                  <option value="">选择目标语言</option>
-                  <option v-for="lang in targetLanguages" :key="lang.id" :value="lang.name">
-                    {{ lang.name }}
-                  </option>
-                </select>
+                <SearchableSelect
+                  v-model="qt.sourceLanguage"
+                  :options="sourceLanguageOptions"
+                  class="input-field"
+                  placeholder="选择源语言"
+                  search-placeholder="搜索源语言..."
+                />
+                <SearchableSelect
+                  v-model="qt.targetLanguage"
+                  :options="targetLanguageOptions"
+                  class="input-field"
+                  placeholder="选择目标语言"
+                  search-placeholder="搜索目标语言..."
+                />
                 <button @click="removeQuickTranslation(index)" class="btn-delete-small">删除</button>
               </div>
             </div>
@@ -364,6 +370,7 @@
 import { ref, onMounted, computed } from 'vue'
 import axios from 'axios'
 import contentStyleManager from '../utils/contentStyleManager.js'
+import SearchableSelect from '../components/SearchableSelect.vue'
 
 const settings = ref({
   defaultParams: { temperature: 0.7, max_tokens: 2000, top_p: 1 },
@@ -399,6 +406,45 @@ const apiBaseUrl = computed(() => {
 })
 
 // 计算选中的提示词预览
+const sourceLanguageOptions = computed(() =>
+  sourceLanguages.value.map(lang => ({ label: lang.name, value: lang.name }))
+)
+
+const targetLanguageOptions = computed(() =>
+  targetLanguages.value.map(lang => ({ label: lang.name, value: lang.name }))
+)
+
+const defaultModelOptions = computed(() => [
+  { label: '请选择默认模型', value: '' },
+  ...allModels.value.map(model => ({ label: model.label, value: model.value }))
+])
+
+const defaultPromptOptions = computed(() => [
+  { label: '无（不使用提示词）', value: '' },
+  ...allPrompts.value.map(prompt => ({
+    label: prompt.name,
+    value: prompt.id,
+    description: prompt.description || ''
+  }))
+])
+
+const translatePromptOptions = computed(() => [
+  { label: '使用默认提示词', value: '' },
+  ...translatePrompts.value.map(prompt => ({
+    label: prompt.name,
+    value: prompt.id,
+    description: prompt.description || ''
+  }))
+])
+
+const styleOptions = computed(() => [
+  { label: '默认（简洁风格）', value: '' },
+  { label: 'Notion（文档风格）', value: 'notion' },
+  { label: 'Konayuki（温暖风格）', value: 'konayuki' },
+  { label: 'Everforest（自然绿意）', value: 'everforest' },
+  { label: 'HappySimple（活泼可爱）', value: 'happysimple' }
+])
+
 const selectedPromptPreview = computed(() => {
   if (!settings.value.defaultPromptId) return null
   return allPrompts.value.find(p => p.id === settings.value.defaultPromptId)

@@ -17,24 +17,26 @@
       <div class="language-selector">
         <div class="language-select-group">
           <label>源语言</label>
-          <select v-model="sourceLanguage" class="language-select">
-            <option value="">选择源语言</option>
-            <option v-for="lang in sourceLanguages" :key="lang.id" :value="lang.name">
-              {{ lang.name }}
-            </option>
-          </select>
+          <SearchableSelect
+            v-model="sourceLanguage"
+            :options="sourceLanguageOptions"
+            class="language-select"
+            placeholder="选择源语言"
+            search-placeholder="搜索源语言..."
+          />
         </div>
 
         <button @click="swapLanguages" class="btn-swap" title="交换语言">⇄</button>
 
         <div class="language-select-group">
           <label>目标语言</label>
-          <select v-model="targetLanguage" class="language-select">
-            <option value="">选择目标语言</option>
-            <option v-for="lang in targetLanguages" :key="lang.id" :value="lang.name">
-              {{ lang.name }}
-            </option>
-          </select>
+          <SearchableSelect
+            v-model="targetLanguage"
+            :options="targetLanguageOptions"
+            class="language-select"
+            placeholder="选择目标语言"
+            search-placeholder="搜索目标语言..."
+          />
         </div>
       </div>
 
@@ -72,12 +74,13 @@
       <div class="translate-controls">
         <div class="prompt-selector">
           <label>翻译提示词</label>
-          <select v-model="selectedPromptId" class="prompt-select">
-            <option value="">使用默认提示词</option>
-            <option v-for="prompt in translatePrompts" :key="prompt.id" :value="prompt.id">
-              {{ prompt.name }}
-            </option>
-          </select>
+          <SearchableSelect
+            v-model="selectedPromptId"
+            :options="translatePromptOptions"
+            class="prompt-select"
+            placeholder="使用默认提示词"
+            search-placeholder="搜索翻译提示词..."
+          />
         </div>
 
         <button
@@ -92,12 +95,13 @@
       <!-- 模型选择 -->
       <div class="model-selector">
         <label>选择模型</label>
-        <select v-model="selectedModel" class="model-select">
-          <option value="">请选择模型</option>
-          <option v-for="model in allModels" :key="model.value" :value="model.value">
-            {{ model.label }}
-          </option>
-        </select>
+        <SearchableSelect
+          v-model="selectedModel"
+          :options="translateModelOptions"
+          class="model-select"
+          placeholder="请选择模型"
+          search-placeholder="搜索模型..."
+        />
       </div>
     </div>
   </div>
@@ -106,6 +110,7 @@
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue';
 import axios from 'axios';
+import SearchableSelect from '../components/SearchableSelect.vue';
 
 const sourceLanguage = ref('');
 const targetLanguage = ref('');
@@ -167,6 +172,37 @@ function clearTranslation() {
 watch([sourceLanguage, targetLanguage, inputText, outputText, selectedPromptId, selectedModel], () => {
   saveTranslateState();
 });
+
+const sourceLanguageOptions = computed(() =>
+  sourceLanguages.value.map(lang => ({
+    label: lang.name,
+    value: lang.name
+  }))
+);
+
+const targetLanguageOptions = computed(() =>
+  targetLanguages.value.map(lang => ({
+    label: lang.name,
+    value: lang.name
+  }))
+);
+
+const translatePromptOptions = computed(() => [
+  { label: '使用默认提示词', value: '' },
+  ...translatePrompts.value.map(prompt => ({
+    label: prompt.name,
+    value: prompt.id,
+    description: prompt.description || ''
+  }))
+]);
+
+const translateModelOptions = computed(() => [
+  { label: '请选择模型', value: '' },
+  ...allModels.value.map(model => ({
+    label: model.label,
+    value: model.value
+  }))
+]);
 
 const canTranslate = computed(() => {
   return inputText.value.trim() &&
@@ -406,17 +442,6 @@ onMounted(() => {
 
 .language-select {
   width: 100%;
-  padding: 0.75rem;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  font-size: 14.5px;
-  background: white;
-  color: #334155;
-  outline: none;
-}
-
-.language-select:focus {
-  border-color: #0891b2;
 }
 
 .btn-swap {
@@ -581,17 +606,6 @@ onMounted(() => {
 
 .prompt-select {
   width: 100%;
-  padding: 0.75rem;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  font-size: 14.5px;
-  background: white;
-  color: #334155;
-  outline: none;
-}
-
-.prompt-select:focus {
-  border-color: #0891b2;
 }
 
 .btn-translate {
@@ -629,17 +643,6 @@ onMounted(() => {
 
 .model-select {
   width: 100%;
-  padding: 0.75rem;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  font-size: 14.5px;
-  background: white;
-  color: #334155;
-  outline: none;
-}
-
-.model-select:focus {
-  border-color: #0891b2;
 }
 
 /* 快捷转换按钮样式 */

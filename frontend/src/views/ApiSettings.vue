@@ -11,17 +11,26 @@
             <span class="dropdown-arrow">{{ showApiStyleDropdown ? '▲' : '▼' }}</span>
           </div>
           <div v-if="showApiStyleDropdown" class="api-style-dropdown">
-            <div class="api-style-options">
+            <input
+              v-model="apiStyleSearchQuery"
+              placeholder="搜索风格..."
+              class="api-style-search-input"
+              ref="apiStyleSearchInput"
+              @click.stop
+            >
+            <div class="api-style-options" ref="apiStyleOptionsContainer">
               <div
-                v-for="style in availableApiStyles"
+                v-for="style in filteredApiStyles"
                 :key="style.id"
                 :class="['api-style-option', { active: currentApiStyle === style.id }]"
                 @click="selectApiStyle(style.id)"
                 :title="style.description"
+                :ref="el => setApiStyleOptionRef(style.id, el)"
               >
                 <span class="api-style-option-icon">{{ style.icon }}</span>
                 <span class="api-style-option-name">{{ style.name }}</span>
               </div>
+              <div v-if="filteredApiStyles.length === 0" class="api-style-empty">未找到匹配的风格</div>
             </div>
           </div>
         </div>
@@ -112,11 +121,14 @@
         <!-- 分组选择 -->
         <div class="config-section">
           <label>所属分组</label>
-          <select v-model="selectedProvider.groupId" @change="updateProviderGroup" class="input-field">
-            <option v-for="group in groups" :key="group.id" :value="group.id">
-              {{ group.name }}
-            </option>
-          </select>
+          <SearchableSelect
+            v-model="selectedProvider.groupId"
+            :options="groupSelectOptions"
+            class="input-field"
+            placeholder="请选择分组"
+            search-placeholder="搜索分组..."
+            @change="updateProviderGroup"
+          />
         </div>
         
         <!-- API 密钥 -->
@@ -132,10 +144,14 @@
         <!-- API 类型 -->
         <div class="config-section">
           <label>API 兼容格式</label>
-          <select v-model="selectedProvider.apiType" @change="updateProviderApiType" class="input-field">
-            <option value="openai">OpenAI 兼容格式</option>
-            <option value="anthropic">Anthropic 兼容格式</option>
-          </select>
+          <SearchableSelect
+            v-model="selectedProvider.apiType"
+            :options="apiTypeOptions"
+            class="input-field"
+            placeholder="请选择 API 兼容格式"
+            search-placeholder="搜索 API 兼容格式..."
+            @change="updateProviderApiType"
+          />
           <small class="hint">OpenAI格式: /v1/chat/completions | Anthropic格式: /v1/messages</small>
         </div>
         
@@ -257,19 +273,24 @@
         </label>
         <label>
           API 兼容格式
-          <select v-model="providerForm.apiType" class="input-field">
-            <option value="openai">OpenAI 兼容格式</option>
-            <option value="anthropic">Anthropic 兼容格式</option>
-          </select>
+          <SearchableSelect
+            v-model="providerForm.apiType"
+            :options="apiTypeOptions"
+            class="input-field"
+            placeholder="请选择 API 兼容格式"
+            search-placeholder="搜索 API 兼容格式..."
+          />
           <small class="hint">OpenAI格式使用 /v1/chat/completions，Anthropic格式使用 /v1/messages</small>
         </label>
         <label>
           所属分组
-          <select v-model="providerForm.groupId" class="input-field">
-            <option v-for="group in groups" :key="group.id" :value="group.id">
-              {{ group.name }}
-            </option>
-          </select>
+          <SearchableSelect
+            v-model="providerForm.groupId"
+            :options="groupSelectOptions"
+            class="input-field"
+            placeholder="请选择分组"
+            search-placeholder="搜索分组..."
+          />
         </label>
         <!-- 高级设置折叠面板 -->
         <div class="advanced-settings">
@@ -374,6 +395,7 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import axios from 'axios'
 import apiStyleManager from '../utils/apiStyleManager.js'
+import SearchableSelect from '../components/SearchableSelect.vue'
 import '../styles/api-simple-style.css'
 import '../styles/api-dark-style.css'
 import '../styles/api-dashboard-style.css'
@@ -408,6 +430,10 @@ const selectedModelIds = ref([]) // 已选择的模型ID列表
 const currentApiStyle = ref(apiStyleManager.getCurrentStyle())
 const showApiStyleDropdown = ref(false)
 const apiStyleSelectorRef = ref(null)
+const apiStyleSearchQuery = ref('')
+const apiStyleSearchInput = ref(null)
+const apiStyleOptionsContainer = ref(null)
+const apiStyleOptionRefs = new Map()
 
 const filteredProviders = computed(() => {
   const query = searchProvider.value.toLowerCase()
@@ -489,6 +515,30 @@ const currentApiStyleConfig = computed(() => {
 const availableApiStyles = computed(() => {
   return apiStyleManager.getAvailableStyles()
 })
+
+const filteredApiStyles = computed(() => {
+  const query = apiStyleSearchQuery.value.toLowerCase().trim()
+  if (!query) return availableApiStyles.value
+
+  return availableApiStyles.value.filter(style =>
+    style.name.toLowerCase().includes(query) ||
+    style.description.toLowerCase().includes(query) ||
+    style.id.toLowerCase().includes(query)
+  )
+})
+
+const groupSelectOptions = computed(() =>
+  groups.value.map(group => ({
+    label: group.name,
+    value: group.id,
+    description: group.description || ''
+  }))
+)
+
+const apiTypeOptions = computed(() => [
+  { label: 'OpenAI 兼容格式', value: 'openai', description: '/v1/chat/completions' },
+  { label: 'Anthropic 兼容格式', value: 'anthropic', description: '/v1/messages' }
+])
 
 async function loadProviders() {
   const res = await axios.get('/api/providers')
@@ -1126,14 +1176,42 @@ async function updateProviderApiType() {
 }
 
 // 风格切换函数
+function setApiStyleOptionRef(styleId, el) {
+  if (el) {
+    apiStyleOptionRefs.set(styleId, el)
+  } else {
+    apiStyleOptionRefs.delete(styleId)
+  }
+}
+
+function scrollToCurrentApiStyle() {
+  nextTick(() => {
+    const container = apiStyleOptionsContainer.value
+    const selectedEl = apiStyleOptionRefs.get(currentApiStyle.value)
+    if (!container || !selectedEl) return
+
+    const targetScrollTop = selectedEl.offsetTop - (container.clientHeight / 2) + (selectedEl.clientHeight / 2)
+    container.scrollTop = Math.max(0, targetScrollTop)
+  })
+}
+
 function toggleApiStyleDropdown() {
   showApiStyleDropdown.value = !showApiStyleDropdown.value
+  if (showApiStyleDropdown.value) {
+    nextTick(() => {
+      apiStyleSearchInput.value?.focus()
+      scrollToCurrentApiStyle()
+    })
+  } else {
+    apiStyleSearchQuery.value = ''
+  }
 }
 
 function selectApiStyle(styleId) {
   currentApiStyle.value = styleId
   apiStyleManager.setCurrentStyle(styleId)
   showApiStyleDropdown.value = false
+  apiStyleSearchQuery.value = ''
   // 保存到用户设置
   saveApiStyleToSettings(styleId)
 }
@@ -1151,6 +1229,7 @@ async function saveApiStyleToSettings(styleId) {
 function handleClickOutside(event) {
   if (apiStyleSelectorRef.value && !apiStyleSelectorRef.value.contains(event.target)) {
     showApiStyleDropdown.value = false
+    apiStyleSearchQuery.value = ''
   }
 }
 
@@ -1366,13 +1445,27 @@ onUnmounted(() => {
   border-radius: 8px;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
   z-index: 1000;
-  max-height: 300px;
-  overflow-y: auto;
+  overflow: hidden;
+}
+
+.api-style-search-input {
+  width: 100%;
+  padding: 8px 10px;
+  border: none;
+  border-bottom: 1px solid #dee2e6;
+  outline: none;
+  font-size: 13px;
+}
+
+.api-style-search-input:focus {
+  border-bottom-color: #0891b2;
 }
 
 .api-style-options {
   display: flex;
   flex-direction: column;
+  max-height: 300px;
+  overflow-y: auto;
 }
 
 .api-style-option {
@@ -1417,6 +1510,13 @@ onUnmounted(() => {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.api-style-empty {
+  padding: 12px;
+  text-align: center;
+  color: #94a3b8;
+  font-size: 13px;
 }
 
 .api-settings-container {

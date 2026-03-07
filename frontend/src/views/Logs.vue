@@ -17,23 +17,27 @@
           <!-- 日志级别筛选 -->
           <div class="filter-group">
             <label>级别：</label>
-            <select v-model="filters.level" class="input-field select-field" @change="applyFilters">
-              <option value="">全部</option>
-              <option v-for="level in logLevels" :key="level.value" :value="level.value">
-                {{ level.label }}
-              </option>
-            </select>
+            <SearchableSelect
+              v-model="filters.level"
+              :options="logLevelOptions"
+              class="input-field select-field"
+              placeholder="全部"
+              search-placeholder="搜索日志级别..."
+              @change="applyFilters"
+            />
           </div>
 
           <!-- 日志类型筛选 -->
           <div class="filter-group">
             <label>类型：</label>
-            <select v-model="filters.type" class="input-field select-field" @change="applyFilters">
-              <option value="">全部</option>
-              <option v-for="type in logTypes" :key="type.value" :value="type.value">
-                {{ type.label }}
-              </option>
-            </select>
+            <SearchableSelect
+              v-model="filters.type"
+              :options="logTypeOptions"
+              class="input-field select-field"
+              placeholder="全部"
+              search-placeholder="搜索日志类型..."
+              @change="applyFilters"
+            />
           </div>
 
           <!-- 搜索框 -->
@@ -154,9 +158,14 @@
       <div v-if="pagination.total > 0" class="pagination">
         <div class="pagination-left">
           <label class="page-size-label">每页显示：</label>
-          <select v-model.number="pagination.limit" @change="changePageSize(pagination.limit)" class="page-size-select">
-            <option v-for="size in pageSizeOptions" :key="size" :value="size">{{ size }} 条</option>
-          </select>
+          <SearchableSelect
+            v-model="pagination.limit"
+            :options="pageSizeSelectOptions"
+            class="page-size-select"
+            placeholder="选择每页条数"
+            search-placeholder="搜索分页条数..."
+            @change="onPageSizeChange"
+          />
         </div>
         <div class="pagination-controls">
           <button
@@ -222,6 +231,7 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import axios from 'axios'
+import SearchableSelect from '../components/SearchableSelect.vue'
 
 const API_BASE = window.location.origin
 
@@ -299,6 +309,20 @@ const deleteOldLogsDialog = ref({
 })
 
 // 计算属性
+const logLevelOptions = computed(() => [
+  { label: '全部', value: '' },
+  ...logLevels.map(level => ({ label: level.label, value: level.value }))
+])
+
+const logTypeOptions = computed(() => [
+  { label: '全部', value: '' },
+  ...logTypes.map(type => ({ label: type.label, value: type.value }))
+])
+
+const pageSizeSelectOptions = computed(() =>
+  pageSizeOptions.map(size => ({ label: `${size} 条`, value: size }))
+)
+
 const canDelete = computed(() => {
   return filters.value.startDate && filters.value.endDate
 })
@@ -454,9 +478,14 @@ function nextPage() {
 
 // 改变每页显示条目数
 function changePageSize(newSize) {
-  pagination.value.limit = newSize
+  pagination.value.limit = Number(newSize)
   pagination.value.offset = 0
   loadLogs()
+}
+
+function onPageSizeChange(option) {
+  const value = typeof option === 'object' && option !== null ? option.value : pagination.value.limit
+  changePageSize(value)
 }
 
 // 导出日志
