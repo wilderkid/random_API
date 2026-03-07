@@ -69,6 +69,74 @@ function formatTimestamp(date = new Date()) {
   return date.toISOString();
 }
 
+// 安全序列化：避免循环引用、复杂原生对象、超深层对象导致日志写入失败
+function sanitizeForJson(value, seen = new WeakSet(), depth = 0) {
+  if (value === null || value === undefined) return value;
+  if (depth > 6) return '[MaxDepthExceeded]';
+
+  const valueType = typeof value;
+
+  if (valueType === 'string' || valueType === 'number' || valueType === 'boolean') {
+    return value;
+  }
+
+  if (valueType === 'bigint') {
+    return value.toString();
+  }
+
+  if (valueType === 'function') {
+    return `[Function ${value.name || 'anonymous'}]`;
+  }
+
+  if (value instanceof Error) {
+    return {
+      name: value.name,
+      message: value.message,
+      code: value.code || null,
+      stack: value.stack || null
+    };
+  }
+
+  if (Buffer.isBuffer(value)) {
+    return value.toString('utf8');
+  }
+
+  if (Array.isArray(value)) {
+    return value.map(item => sanitizeForJson(item, seen, depth + 1));
+  }
+
+  if (valueType === 'object') {
+    if (seen.has(value)) {
+      return '[Circular]';
+    }
+    seen.add(value);
+
+    if (value instanceof Date) {
+      return value.toISOString();
+    }
+
+    const plain = {};
+    for (const key of Object.keys(value)) {
+      if (
+        key === 'socket' ||
+        key === 'connection' ||
+        key === 'agent' ||
+        key === 'req' ||
+        key === 'res' ||
+        key === 'request' ||
+        key === 'response' ||
+        key === '_httpMessage'
+      ) {
+        continue;
+      }
+      plain[key] = sanitizeForJson(value[key], seen, depth + 1);
+    }
+    return plain;
+  }
+
+  return String(value);
+}
+
 // 创建日志条目对象
 function createLogEntry({
   level = LogLevel.INFO,
@@ -86,8 +154,8 @@ function createLogEntry({
     message,
     userId,
     traceId: traceId || generateTraceId(),
-    data,
-    metadata,
+    data: sanitizeForJson(data),
+    metadata: sanitizeForJson(metadata),
     hostname: require('os').hostname(),
     pid: process.pid
   };
@@ -100,14 +168,15 @@ async function writeLog(logEntry) {
     const logFileName = getLogFileName();
     const logFilePath = path.join(LOGS_DIR, logFileName);
 
-    const logLine = JSON.stringify(logEntry) + '\n';
+    const safeLogEntry = sanitizeForJson(logEntry);
+    const logLine = JSON.stringify(safeLogEntry) + '\n';
 
     await fs.appendFile(logFilePath, logLine, 'utf8');
 
     // 通知实时监听器
-    notifyListeners(logEntry);
+    notifyListeners(safeLogEntry);
 
-    return logEntry;
+    return safeLogEntry;
   } catch (error) {
     console.error('Error writing log:', error);
   }

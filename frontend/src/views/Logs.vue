@@ -146,9 +146,40 @@
               <span class="detail-label">追踪ID：</span>
               <span class="detail-value trace-id">{{ log.traceId }}</span>
             </div>
-            <div v-if="log.data && Object.keys(log.data).length > 0" class="detail-row">
-              <span class="detail-label">数据：</span>
-              <pre class="detail-json">{{ JSON.stringify(log.data, null, 2) }}</pre>
+
+            <div v-if="getErrorSummary(log)" class="error-summary-card">
+              <div class="error-summary-header">错误摘要</div>
+              <div class="error-summary-message">{{ getErrorSummary(log) }}</div>
+              <div class="error-summary-meta">
+                <span v-if="getStatusCode(log)" class="error-chip">HTTP {{ getStatusCode(log) }}</span>
+                <span v-if="getErrorCode(log)" class="error-chip">{{ getErrorCode(log) }}</span>
+                <span v-if="getProviderName(log)" class="error-chip">{{ getProviderName(log) }}</span>
+                <span v-if="getModelName(log)" class="error-chip">{{ getModelName(log) }}</span>
+              </div>
+            </div>
+
+            <div v-if="getRequestInfo(log)" class="detail-row">
+              <span class="detail-label">请求：</span>
+              <div class="detail-value detail-stack">
+                <span v-if="getRequestInfo(log).method">方法: {{ getRequestInfo(log).method }}</span>
+                <span v-if="getRequestInfo(log).url">地址: {{ getRequestInfo(log).url }}</span>
+                <span v-if="getRequestInfo(log).timeout">超时: {{ getRequestInfo(log).timeout }}ms</span>
+              </div>
+            </div>
+
+            <div v-if="getResponseData(log)" class="detail-row detail-row-block">
+              <span class="detail-label">响应详情：</span>
+              <pre class="detail-json detail-json-error">{{ formatJson(getResponseData(log)) }}</pre>
+            </div>
+
+            <div v-if="log.metadata && Object.keys(log.metadata).length > 0" class="detail-row detail-row-block">
+              <span class="detail-label">元数据：</span>
+              <pre class="detail-json">{{ formatJson(log.metadata) }}</pre>
+            </div>
+
+            <div v-if="log.data && Object.keys(log.data).length > 0" class="detail-row detail-row-block">
+              <span class="detail-label">完整数据：</span>
+              <pre class="detail-json">{{ formatJson(log.data) }}</pre>
             </div>
           </div>
         </div>
@@ -448,6 +479,52 @@ function getLogLevelClass(level) {
 function getShortMessage(message) {
   if (!message) return ''
   return message.length > 80 ? message.substring(0, 80) + '...' : message
+}
+
+function formatJson(value) {
+  try {
+    return JSON.stringify(value, null, 2)
+  } catch {
+    return String(value)
+  }
+}
+
+function getProviderName(log) {
+  return log?.data?.provider || log?.data?.providers?.[0]?.providerName || log?.metadata?.providerName || null
+}
+
+function getModelName(log) {
+  return log?.data?.model || log?.data?.request?.model || log?.metadata?.model || null
+}
+
+function getStatusCode(log) {
+  return (
+    log?.data?.statusCode ||
+    log?.metadata?.status ||
+    log?.data?.providers?.find?.(p => p.statusCode)?.statusCode ||
+    null
+  )
+}
+
+function getErrorCode(log) {
+  return log?.data?.errorCode || log?.metadata?.errorCode || log?.metadata?.code || null
+}
+
+function getRequestInfo(log) {
+  return log?.metadata?.request || null
+}
+
+function getResponseData(log) {
+  return log?.metadata?.responseData || null
+}
+
+function getErrorSummary(log) {
+  return (
+    log?.data?.errorMessage ||
+    log?.metadata?.providerMessage ||
+    log?.data?.providers?.find?.(p => p.error)?.error ||
+    null
+  )
 }
 
 // 格式化时间
@@ -1039,6 +1116,48 @@ h2 {
   border-top: 1px solid #e0e0e0;
 }
 
+.error-summary-card {
+  margin: 10px 0 14px;
+  padding: 12px;
+  background: #fff5f5;
+  border: 1px solid #fecaca;
+  border-left: 4px solid #ef4444;
+  border-radius: 8px;
+}
+
+.error-summary-header {
+  font-size: 12px;
+  font-weight: 700;
+  color: #b91c1c;
+  margin-bottom: 6px;
+}
+
+.error-summary-message {
+  color: #7f1d1d;
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.error-summary-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.error-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: #fee2e2;
+  color: #991b1b;
+  font-size: 12px;
+  font-weight: 600;
+}
+
 .detail-row {
   display: flex;
   margin-bottom: 8px;
@@ -1049,17 +1168,28 @@ h2 {
   margin-bottom: 0;
 }
 
+.detail-row-block {
+  align-items: stretch;
+}
+
 .detail-label {
   font-weight: 500;
   color: #666;
   min-width: 80px;
   font-size: 13px;
+  flex-shrink: 0;
 }
 
 .detail-value {
   color: #333;
   font-size: 13px;
   word-break: break-word;
+}
+
+.detail-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
 .trace-id {
@@ -1078,6 +1208,13 @@ h2 {
   font-size: 12px;
   overflow-x: auto;
   max-width: 100%;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.detail-json-error {
+  background: #fff7ed;
+  border: 1px solid #fed7aa;
 }
 
 /* 分页 */

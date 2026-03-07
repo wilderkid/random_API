@@ -25,6 +25,22 @@ const {
   PerformanceTracker,      // 新增
   generateTraceId         // 新增
 } = require('./logger');
+const { initializeDatabase } = require('./db');
+const {
+  migrateJsonDataToSqlite,
+  getApiSettingsFromDb,
+  saveApiSettingsToDb,
+  getUserSettingsFromDb,
+  saveUserSettingsToDb,
+  getPromptsFromDb,
+  savePromptsToDb,
+  getLanguagesFromDb,
+  saveLanguagesToDb,
+  getConversationsFromDb,
+  getConversationByIdFromDb,
+  saveConversationToDb,
+  deleteConversationFromDb
+} = require('./repositories');
 
 const app = express();
 const PORT = 3000;
@@ -363,20 +379,14 @@ async function getApiSettings() {
   if (apiSettingsCache && (now - apiSettingsCacheTime) < CACHE_TTL) {
     return apiSettingsCache;
   }
-  
+
   try {
-    const data = JSON.parse(await fs.readFile(API_SETTINGS_FILE, 'utf8'));
-    // 确保数据结构包含groups字段
-    if (!data.groups) {
-      data.groups = [
-        { id: 'default', name: '默认分组', description: '未分组的提供商' }
-      ];
-    }
+    const data = getApiSettingsFromDb();
     apiSettingsCache = data;
     apiSettingsCacheTime = now;
     return data;
   } catch (error) {
-    console.error('Error reading API settings:', error);
+    console.error('Error reading API settings from SQLite:', error);
     return {
       providers: [],
       groups: [
@@ -391,23 +401,23 @@ async function getUserSettings() {
   if (userSettingsCache && (now - userSettingsCacheTime) < CACHE_TTL) {
     return userSettingsCache;
   }
-  
+
   try {
-    const data = JSON.parse(await fs.readFile(USER_SETTINGS_FILE, 'utf8'));
+    const data = getUserSettingsFromDb();
     userSettingsCache = data;
     userSettingsCacheTime = now;
     return data;
   } catch (error) {
-    console.error('Error reading user settings:', error);
+    console.error('Error reading user settings from SQLite:', error);
     return {
       defaultParams: { temperature: 0.7, max_tokens: 2000, top_p: 1 },
       globalFrequency: 10,
       pollingConfig: { available: {}, excluded: {}, disabled: {} },
-      pollingState: {}, // 存储每个模型的轮询状态
-      modelFailCounts: {}, // 存储每个模型在每个提供商的失败计数
-      proxyApiKey: '', // 代理接口密钥（向后兼容）
-      proxyApiKeys: {}, // 多API密钥管理
-      conversationProviderMap: {} // 会话-提供商映射（用于对话连续性）
+      pollingState: {},
+      modelFailCounts: {},
+      proxyApiKey: '',
+      proxyApiKeys: {},
+      conversationProviderMap: {}
     };
   }
 }
@@ -441,15 +451,12 @@ async function getLanguages() {
   }
 
   try {
-    const data = JSON.parse(await fs.readFile(LANGUAGES_FILE, 'utf8'));
-    if (!data.sourceLanguages) data.sourceLanguages = [];
-    if (!data.targetLanguages) data.targetLanguages = [];
-
+    const data = getLanguagesFromDb();
     languagesCache = data;
     languagesCacheTime = now;
     return data;
   } catch (error) {
-    console.error('Error reading languages:', error);
+    console.error('Error reading languages from SQLite:', error);
     return {
       sourceLanguages: [],
       targetLanguages: []
@@ -459,7 +466,7 @@ async function getLanguages() {
 
 // 保存语言数据
 async function saveLanguages(data) {
-  await safeWriteFile(LANGUAGES_FILE, data);
+  saveLanguagesToDb(data);
   invalidateLanguagesCache();
 }
 
@@ -471,17 +478,12 @@ async function getPrompts() {
   }
 
   try {
-    const data = JSON.parse(await fs.readFile(PROMPTS_FILE, 'utf8'));
-    // 确保数据结构完整
-    if (!data.prompts) data.prompts = [];
-    if (!data.groups) data.groups = [{ id: 'default', name: '默认分组', description: '未分组的提示词' }];
-    if (!data.tags) data.tags = [];
-
+    const data = getPromptsFromDb();
     promptsCache = data;
     promptsCacheTime = now;
     return data;
   } catch (error) {
-    console.error('Error reading prompts:', error);
+    console.error('Error reading prompts from SQLite:', error);
     return {
       prompts: [],
       groups: [{ id: 'default', name: '默认分组', description: '未分组的提示词' }],
@@ -492,7 +494,7 @@ async function getPrompts() {
 
 // 保存提示词库
 async function savePrompts(data) {
-  await safeWriteFile(PROMPTS_FILE, data);
+  savePromptsToDb(data);
   invalidatePromptsCache();
 }
 
@@ -529,7 +531,7 @@ app.post('/api/providers/import', async (req, res) => {
         providers: oldFormatProviders,
         groups: [{ id: 'default', name: '默认分组', description: '未分组的提供商' }]
       };
-      await safeWriteFile(API_SETTINGS_FILE, newSettings);
+      saveApiSettingsToDb(newSettings);
       invalidateApiSettingsCache();
       return res.json({ success: true, message: `成功导入 ${oldFormatProviders.length} 个提供商（旧格式）。` });
     }
@@ -545,7 +547,7 @@ app.post('/api/providers/import', async (req, res) => {
     }
 
     const newSettings = { providers, groups };
-    await safeWriteFile(API_SETTINGS_FILE, newSettings);
+    saveApiSettingsToDb(newSettings);
     invalidateApiSettingsCache();
     res.json({ success: true, message: `成功导入 ${providers.length} 个提供商和 ${groups.length} 个分组。` });
   } catch (error) {
@@ -565,7 +567,7 @@ app.post('/api/providers', async (req, res) => {
     apiType: req.body.apiType || 'openai' // 默认为OpenAI兼容格式
   };
   data.providers.push(newProvider);
-  await safeWriteFile(API_SETTINGS_FILE, data);
+  saveApiSettingsToDb(data);
   invalidateApiSettingsCache(); // 缓存失效
   res.json(newProvider);
 });
@@ -575,7 +577,7 @@ app.put('/api/providers/:id', async (req, res) => {
   const index = data.providers.findIndex(p => p.id === req.params.id);
   if (index !== -1) {
     data.providers[index] = { ...data.providers[index], ...req.body };
-    await safeWriteFile(API_SETTINGS_FILE, data);
+    saveApiSettingsToDb(data);
     invalidateApiSettingsCache(); // 缓存失效
     res.json(data.providers[index]);
   } else {
@@ -599,7 +601,7 @@ app.delete('/api/providers/batch', async (req, res) => {
     data.providers = data.providers.filter(p => !idsSet.has(p.id));
     const deletedCount = originalCount - data.providers.length;
 
-    await safeWriteFile(API_SETTINGS_FILE, data);
+    saveApiSettingsToDb(data);
     invalidateApiSettingsCache();
 
     console.log(`[供应商管理] 批量删除了 ${deletedCount} 个供应商`);
@@ -622,7 +624,7 @@ app.delete('/api/providers/all', async (req, res) => {
 
     data.providers = [];
 
-    await safeWriteFile(API_SETTINGS_FILE, data);
+    saveApiSettingsToDb(data);
     invalidateApiSettingsCache();
 
     console.log(`[供应商管理] 清除了所有供应商，共 ${deletedCount} 个`);
@@ -641,7 +643,7 @@ app.delete('/api/providers/all', async (req, res) => {
 app.delete('/api/providers/:id', async (req, res) => {
   const data = await getApiSettings();
   data.providers = data.providers.filter(p => p.id !== req.params.id);
-  await safeWriteFile(API_SETTINGS_FILE, data);
+  saveApiSettingsToDb(data);
   invalidateApiSettingsCache(); // 缓存失效
   res.json({ success: true });
 });
@@ -729,7 +731,7 @@ app.post('/api/providers/:id/refresh-models', async (req, res) => {
     return res.status(500).json({ error: result.error });
   }
 
-  await safeWriteFile(API_SETTINGS_FILE, data);
+  saveApiSettingsToDb(data);
   invalidateApiSettingsCache();
 
   res.json({
@@ -796,7 +798,7 @@ app.post('/api/providers/refresh-all-models', async (req, res) => {
   });
 
   // 保存更新后的配置
-  await safeWriteFile(API_SETTINGS_FILE, data);
+  saveApiSettingsToDb(data);
   invalidateApiSettingsCache();
 
   res.json(results);
@@ -850,7 +852,7 @@ app.post('/api/groups', async (req, res) => {
   }
   
   data.groups.push(newGroup);
-  await safeWriteFile(API_SETTINGS_FILE, data);
+  saveApiSettingsToDb(data);
   invalidateApiSettingsCache();
   res.json(newGroup);
 });
@@ -878,7 +880,7 @@ app.put('/api/groups/:id', async (req, res) => {
     data.groups[index].description = description;
   }
   
-  await safeWriteFile(API_SETTINGS_FILE, data);
+  saveApiSettingsToDb(data);
   invalidateApiSettingsCache();
   res.json(data.groups[index]);
 });
@@ -906,7 +908,7 @@ app.delete('/api/groups/:id', async (req, res) => {
   });
   
   data.groups.splice(groupIndex, 1);
-  await safeWriteFile(API_SETTINGS_FILE, data);
+  saveApiSettingsToDb(data);
   invalidateApiSettingsCache();
   res.json({ success: true, message: '分组已删除，提供商已移至默认分组' });
 });
@@ -933,43 +935,46 @@ app.put('/api/providers/:id/group', async (req, res) => {
   }
   
   data.providers[providerIndex].groupId = groupId;
-  await safeWriteFile(API_SETTINGS_FILE, data);
+  saveApiSettingsToDb(data);
   invalidateApiSettingsCache();
   res.json(data.providers[providerIndex]);
 });
 
 app.get('/api/conversations', async (req, res) => {
-  const files = await fs.readdir(CONVERSATIONS_DIR);
-  const conversations = await Promise.all(files.map(async file => {
-    const content = await fs.readFile(path.join(CONVERSATIONS_DIR, file), 'utf8');
-    return JSON.parse(content);
-  }));
+  const conversations = getConversationsFromDb();
   res.json(conversations);
 });
 
 app.post('/api/conversations', async (req, res) => {
-  const conversation = { id: Date.now().toString(), title: '', messages: [], model: req.body.model || '' };
-  await safeWriteFile(path.join(CONVERSATIONS_DIR, `${conversation.id}.json`), conversation);
+  const conversation = {
+    id: Date.now().toString(),
+    title: '',
+    messages: [],
+    model: req.body.model || ''
+  };
+  saveConversationToDb(conversation);
   res.json(conversation);
 });
 
 app.get('/api/conversations/:id', async (req, res) => {
-  try {
-    const content = await fs.readFile(path.join(CONVERSATIONS_DIR, `${req.params.id}.json`), 'utf8');
-    res.json(JSON.parse(content));
-  } catch {
-    res.status(404).json({ error: 'Conversation not found' });
+  const conversation = getConversationByIdFromDb(req.params.id);
+  if (!conversation) {
+    return res.status(404).json({ error: 'Conversation not found' });
   }
+  res.json(conversation);
 });
 
 app.put('/api/conversations/:id', async (req, res) => {
-  const filePath = path.join(CONVERSATIONS_DIR, `${req.params.id}.json`);
-  await safeWriteFile(filePath, req.body);
-  res.json(req.body);
+  const conversation = {
+    ...req.body,
+    id: req.params.id
+  };
+  const savedConversation = saveConversationToDb(conversation);
+  res.json(savedConversation || conversation);
 });
 
 app.delete('/api/conversations/:id', async (req, res) => {
-  await fs.unlink(path.join(CONVERSATIONS_DIR, `${req.params.id}.json`));
+  deleteConversationFromDb(req.params.id);
   res.json({ success: true });
 });
 
@@ -1573,9 +1578,9 @@ app.put('/api/settings', async (req, res) => {
     }
   };
 
-  await safeWriteFile(USER_SETTINGS_FILE, mergedSettings);
+  const savedSettings = saveUserSettingsToDb(mergedSettings);
   invalidateUserSettingsCache(); // 缓存失效
-  res.json(mergedSettings);
+  res.json(savedSettings);
 });
 
 // 提示词变量替换函数
@@ -2119,7 +2124,7 @@ function getNextPollingProvider(providers, modelName, config, userSettings) {
 // 保存轮询状态到文件
 async function savePollingState(userSettings) {
   try {
-    await safeWriteFile(USER_SETTINGS_FILE, userSettings);
+    saveUserSettingsToDb(userSettings);
     invalidateUserSettingsCache(); // 缓存失效
     console.log('Polling state saved successfully');
   } catch (error) {
@@ -2355,7 +2360,7 @@ async function incrementFailCount(providerId) {
       provider.disabled = true;
       console.log(`Provider ${provider.name} disabled after 3 failures`);
     }
-    await safeWriteFile(API_SETTINGS_FILE, data);
+    saveApiSettingsToDb(data);
     invalidateApiSettingsCache(); // 缓存失效
   }
 }
@@ -2365,7 +2370,7 @@ async function resetFailCount(providerId) {
   const provider = data.providers.find(p => p.id === providerId);
   if (provider) {
     provider.failCount = 0;
-    await safeWriteFile(API_SETTINGS_FILE, data);
+    saveApiSettingsToDb(data);
     invalidateApiSettingsCache(); // 缓存失效
   }
 }
@@ -2500,7 +2505,15 @@ class BackgroundTaskProcessor {
     this.addTask(async () => {
       try {
         await Promise.all([
-          logApiCall(selectedProvider.name, pureModelName, false, errorMessage),
+          logApiCall({
+            provider: selectedProvider.name,
+            model: pureModelName,
+            success: false,
+            errorMessage,
+            metadata: {
+              providerId: selectedProvider.id
+            }
+          }),
           incrementModelFailCount(selectedProvider.id, pureModelName, userSettings)
         ]);
         await savePollingState(userSettings);
@@ -2511,34 +2524,76 @@ class BackgroundTaskProcessor {
   }
 }
 
-// Performance optimization: Efficient error parser
+// Performance optimization: Structured error parser
 function parseErrorResponse(error) {
-  if (!error.response?.data) {
-    return error.message;
+  const details = {
+    message: error?.message || 'Unknown error',
+    code: error?.code || null,
+    status: error?.response?.status || null,
+    statusText: error?.response?.statusText || null,
+    providerMessage: null,
+    responseData: null,
+    request: {
+      method: error?.config?.method?.toUpperCase?.() || null,
+      url: error?.config?.url || null,
+      timeout: error?.config?.timeout || null
+    }
   }
 
   try {
-    let errorData = '';
-    const data = error.response.data;
+    const data = error?.response?.data
+    if (data === undefined || data === null) {
+      return details
+    }
 
     if (Buffer.isBuffer(data)) {
-      errorData = data.toString('utf8');
+      details.responseData = data.toString('utf8')
     } else if (typeof data === 'object') {
-      return data.error?.message || JSON.stringify(data);
+      details.responseData = data
     } else {
-      errorData = String(data);
+      const text = String(data)
+      try {
+        details.responseData = JSON.parse(text)
+      } catch {
+        details.responseData = text
+      }
     }
 
-    // Try to parse as JSON
-    try {
-      const parsed = JSON.parse(errorData);
-      return parsed.error?.message || parsed.message || errorData;
-    } catch {
-      return errorData;
+    if (typeof details.responseData === 'object' && details.responseData !== null) {
+      details.providerMessage =
+        details.responseData?.error?.message ||
+        details.responseData?.message ||
+        details.responseData?.error ||
+        null
+    } else if (typeof details.responseData === 'string') {
+      details.providerMessage = details.responseData
+    }
+
+    if (details.providerMessage) {
+      details.message = details.providerMessage
     }
   } catch {
-    return error.message;
+    // keep fallback details.message
   }
+
+  return details
+}
+
+function formatErrorForLog(errorDetails) {
+  if (!errorDetails) return 'Unknown error'
+
+  const parts = []
+  if (errorDetails.status) {
+    parts.push(`HTTP ${errorDetails.status}${errorDetails.statusText ? ` ${errorDetails.statusText}` : ''}`)
+  }
+  if (errorDetails.code) {
+    parts.push(`Code: ${errorDetails.code}`)
+  }
+  if (errorDetails.message) {
+    parts.push(errorDetails.message)
+  }
+
+  return parts.join(' | ') || 'Unknown error'
 }
 
 // Performance optimization: Unified error response handler
@@ -3347,11 +3402,26 @@ async function generateImage(provider, prompt, params, res, modelId) {
     log.error(`[ImageGen] Error generating image:`, error.message);
 
     // 使用高效的错误解析器
-    const errorMessage = parseErrorResponse(error);
-    log.verbose(`[ImageGen] Parsed error message:`, errorMessage);
+    const errorDetails = parseErrorResponse(error)
+    const errorMessage = formatErrorForLog(errorDetails)
+    log.verbose(`[ImageGen] Parsed error details:`, errorDetails)
 
     // 记录失败的API调用
-    await logApiCall(provider.name, modelId, false, errorMessage);
+    await logApiCall({
+      provider: provider.name,
+      model: modelId,
+      success: false,
+      errorMessage,
+      errorCode: errorDetails.code,
+      metadata: {
+        status: errorDetails.status,
+        statusText: errorDetails.statusText,
+        request: errorDetails.request,
+        responseData: errorDetails.responseData,
+        providerMessage: errorDetails.providerMessage,
+        errorType: 'image_generation_error'
+      }
+    })
 
     // 发送错误消息
     if (!res.headersSent) {
@@ -3363,7 +3433,11 @@ async function generateImage(provider, prompt, params, res, modelId) {
     res.write(`data: ${JSON.stringify({
       error: {
         message: errorMessage,
-        type: 'image_generation_error'
+        type: 'image_generation_error',
+        code: errorDetails.code,
+        status: errorDetails.status,
+        statusText: errorDetails.statusText,
+        details: errorDetails
       }
     })}\n\n`);
     res.end();
@@ -3490,11 +3564,26 @@ async function streamChat(provider, messages, params, res, modelId, images, syst
     log.error(`[DEBUG] streamChat error occurred:`, error.message);
 
     // Use efficient error parser
-    const errorMessage = parseErrorResponse(error);
-    log.verbose(`[DEBUG] Parsed error message:`, errorMessage);
+    const errorDetails = parseErrorResponse(error);
+    const errorMessage = formatErrorForLog(errorDetails);
+    log.verbose(`[DEBUG] Parsed error details:`, errorDetails);
 
     // Record failed API call
-    await logApiCall(provider.name, modelId || provider.defaultModel, false, errorMessage);
+    await logApiCall({
+      provider: provider.name,
+      model: modelId || provider.defaultModel,
+      success: false,
+      errorMessage,
+      errorCode: errorDetails.code,
+      metadata: {
+        status: errorDetails.status,
+        statusText: errorDetails.statusText,
+        request: errorDetails.request,
+        responseData: errorDetails.responseData,
+        providerMessage: errorDetails.providerMessage,
+        apiType
+      }
+    });
     throw error;
   }
 }
@@ -3568,7 +3657,7 @@ async function verifyProxyApiKey(req, res, next) {
     try {
       userSettings.proxyApiKeys[validKey.id].usageCount = (userSettings.proxyApiKeys[validKey.id].usageCount || 0) + 1;
       userSettings.proxyApiKeys[validKey.id].lastUsed = new Date().toISOString();
-      await safeWriteFile(USER_SETTINGS_FILE, userSettings);
+      saveUserSettingsToDb(userSettings);
       invalidateUserSettingsCache();
     } catch (error) {
       console.error('Error updating key usage stats:', error);
@@ -4382,7 +4471,7 @@ app.post('/api/proxy-keys', async (req, res) => {
     
     userSettings.proxyApiKeys[keyId] = newKey;
     
-    await safeWriteFile(USER_SETTINGS_FILE, userSettings);
+    saveUserSettingsToDb(userSettings);
     invalidateUserSettingsCache();
     
     res.json({ id: keyId, ...newKey });
@@ -4410,7 +4499,7 @@ app.put('/api/proxy-keys/:id', async (req, res) => {
       ...allowedUpdates
     };
     
-    await safeWriteFile(USER_SETTINGS_FILE, userSettings);
+    saveUserSettingsToDb(userSettings);
     invalidateUserSettingsCache();
     
     res.json({ id: keyId, ...userSettings.proxyApiKeys[keyId] });
@@ -4433,7 +4522,7 @@ app.post('/api/proxy-keys/:id/regenerate', async (req, res) => {
     const newApiKey = generateApiKey();
     userSettings.proxyApiKeys[keyId].apiKey = newApiKey;
     
-    await safeWriteFile(USER_SETTINGS_FILE, userSettings);
+    saveUserSettingsToDb(userSettings);
     invalidateUserSettingsCache();
     
     res.json({ apiKey: newApiKey });
@@ -4455,7 +4544,7 @@ app.delete('/api/proxy-keys/:id', async (req, res) => {
     
     delete userSettings.proxyApiKeys[keyId];
     
-    await safeWriteFile(USER_SETTINGS_FILE, userSettings);
+    saveUserSettingsToDb(userSettings);
     invalidateUserSettingsCache();
     
     res.json({ success: true });
@@ -4828,7 +4917,19 @@ app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, '../frontend/dist/index.html'));
 });
 
-initDataDir().then(() => {
+initDataDir().then(async () => {
+  initializeDatabase();
+  try {
+    const migrationResult = await migrateJsonDataToSqlite();
+    if (migrationResult?.migrated) {
+      console.log('[SQLite] JSON 数据已迁移到 SQLite');
+    } else {
+      console.log('[SQLite] 跳过迁移:', migrationResult?.reason || 'unknown');
+    }
+  } catch (error) {
+    console.error('[SQLite] 数据迁移失败:', error);
+  }
+
   app.listen(PORT, () => {
     console.log(`Server running on http://localhost:${PORT}`);
     console.log(`OpenAI compatible API available at http://localhost:${PORT}/v1`);
