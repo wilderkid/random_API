@@ -1554,9 +1554,28 @@ app.get('/api/settings', async (req, res) => {
 });
 
 app.put('/api/settings', async (req, res) => {
-  await safeWriteFile(USER_SETTINGS_FILE, req.body);
+  const currentSettings = await getUserSettings();
+
+  const mergedSettings = {
+    ...currentSettings,
+    ...req.body,
+    defaultParams: {
+      ...(currentSettings.defaultParams || {}),
+      ...(req.body.defaultParams || {})
+    },
+    pollingConfig: {
+      ...(currentSettings.pollingConfig || {}),
+      ...(req.body.pollingConfig || {})
+    },
+    proxyApiKeys: {
+      ...(currentSettings.proxyApiKeys || {}),
+      ...(req.body.proxyApiKeys || {})
+    }
+  };
+
+  await safeWriteFile(USER_SETTINGS_FILE, mergedSettings);
   invalidateUserSettingsCache(); // 缓存失效
-  res.json(req.body);
+  res.json(mergedSettings);
 });
 
 // 提示词变量替换函数
