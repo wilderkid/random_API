@@ -714,12 +714,24 @@ onMounted(() => {
   }
 
   .language-selector {
-    flex-direction: column;
-    align-items: stretch;
+    flex-direction: row;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 0.75rem;
+  }
+
+  .language-select-group {
+    flex: 0 1 calc(50% - 2rem);
+    min-width: 0;
   }
 
   .btn-swap {
-    transform: rotate(90deg);
+    flex: 0 0 52px;
+    width: 52px;
+    height: 52px;
+    padding: 0;
+    transform: none;
+    align-self: flex-end;
   }
 
   .text-input,

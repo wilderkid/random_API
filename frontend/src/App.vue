@@ -2,7 +2,18 @@
   <div class="app">
     <nav class="navbar">
       <div class="nav-brand">Random_API</div>
-      <div class="nav-links">
+      <button
+        class="nav-menu-toggle"
+        type="button"
+        :aria-expanded="mobileMenuOpen ? 'true' : 'false'"
+        aria-label="切换导航菜单"
+        @click="mobileMenuOpen = !mobileMenuOpen"
+      >
+        <span></span>
+        <span></span>
+        <span></span>
+      </button>
+      <div :class="['nav-links', { 'is-open': mobileMenuOpen }]" @click="mobileMenuOpen = false">
         <router-link to="/">聊天</router-link>
         <router-link to="/translate">翻译</router-link>
         <router-link to="/settings/apis">API 管理</router-link>
@@ -21,4 +32,7 @@
 </template>
 
 <script setup>
+import { ref } from 'vue'
+
+const mobileMenuOpen = ref(false)
 </script>

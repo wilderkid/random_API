@@ -422,8 +422,8 @@ onMounted(() => {
 
 <style scoped>
 .stats-dashboard {
-  padding: 24px;
-  max-width: 1440px;
+  padding: clamp(16px, 2vw, 24px);
+  max-width: min(100%, 1680px);
   margin: 0 auto;
 }
 
@@ -490,14 +490,16 @@ h2 {
   gap: 8px;
   padding: 0 16px;
   border-left: 1px solid #e0e0e0;
+  flex-wrap: wrap;
 }
 
 .date-input {
   padding: 8px 12px;
   border: 1px solid #e0e0e0;
-  border-radius: 6px;
+  border-radius: 10px;
   font-size: 14px;
   color: #333;
+  min-width: 150px;
 }
 
 .apply-btn {
@@ -575,7 +577,7 @@ h2 {
 
 .cards-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
   gap: 20px;
 }
 
@@ -675,6 +677,7 @@ h2 {
 
 .stats-table {
   width: 100%;
+  min-width: 720px;
   border-collapse: collapse;
 }
 
@@ -727,7 +730,7 @@ h2 {
 /* 性能网格 */
 .performance-grid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 20px;
 }
 
@@ -752,28 +755,167 @@ h2 {
 }
 
 /* 响应式 */
+@media (min-width: 1600px) {
+  .stats-dashboard {
+    max-width: 1880px;
+  }
+
+  .cards-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .performance-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 1920px) {
+  .stats-dashboard {
+    max-width: 2100px;
+    padding-inline: clamp(24px, 2.8vw, 40px);
+  }
+
+  .cards-grid {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
+
+  .card-value {
+    font-size: 34px;
+  }
+}
+
+@media (max-width: 1024px) {
+  .time-range-selector {
+    align-items: stretch;
+  }
+
+  .custom-range {
+    width: 100%;
+    padding: 12px 0 0;
+    border-left: none;
+    border-top: 1px solid #e0e0e0;
+  }
+
+  .refresh-btn {
+    margin-left: auto;
+  }
+
+  .performance-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 @media (max-width: 768px) {
   .stats-dashboard {
     padding: 16px;
   }
 
+  h1 {
+    font-size: 1.7rem;
+    margin-bottom: 20px;
+  }
+
+  h2 {
+    font-size: 1.1rem;
+  }
+
   .time-range-selector {
     flex-direction: column;
     align-items: stretch;
+    padding: 14px;
+    border-radius: 18px;
+  }
+
+  .time-range-btn,
+  .refresh-btn,
+  .apply-btn {
+    min-height: 42px;
+  }
+
+  .custom-range {
+    gap: 10px;
+  }
+
+  .date-input,
+  .apply-btn,
+  .refresh-btn {
+    width: 100%;
+  }
+
+  .overview-section,
+  .providers-section,
+  .models-section,
+  .apikeys-section,
+  .performance-section {
+    padding: 18px;
+    border-radius: 20px;
   }
 
   .cards-grid {
     grid-template-columns: 1fr;
+    gap: 14px;
+  }
+
+  .stat-card {
+    padding: 18px;
+    border-radius: 18px;
+  }
+
+  .card-value {
+    font-size: 26px;
   }
 
   .performance-grid {
-    grid-template-columns: repeat(2, 1fr);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px;
+  }
+
+  .stats-table {
+    min-width: 640px;
   }
 
   .stats-table th,
   .stats-table td {
     padding: 10px 12px;
     font-size: 13px;
+  }
+}
+
+@media (max-width: 480px) {
+  .stats-dashboard {
+    padding: 12px;
+  }
+
+  h1 {
+    font-size: 1.45rem;
+  }
+
+  .time-range-selector,
+  .overview-section,
+  .providers-section,
+  .models-section,
+  .apikeys-section,
+  .performance-section {
+    padding: 14px;
+    border-radius: 16px;
+  }
+
+  .custom-range {
+    flex-direction: column;
+    align-items: stretch;
+    padding-top: 10px;
+  }
+
+  .performance-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .perf-card {
+    padding: 16px;
+  }
+
+  .card-sub {
+    line-height: 1.5;
   }
 }
 </style>

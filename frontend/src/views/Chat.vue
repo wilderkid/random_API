@@ -1,6 +1,6 @@
 <template>
   <div class="chat-container">
-    <aside class="sidebar">
+    <aside :class="['sidebar', { 'mobile-open': mobileSidebarOpen }]">
       <div class="sidebar-header">
         <input v-model="searchQuery" placeholder="搜索对话..." class="search-input">
         <button @click="createNewConversation" class="btn-new">新建对话</button>
@@ -24,9 +24,17 @@
         </div>
       </div>
     </aside>
+    <div v-if="mobileSidebarOpen" class="mobile-panel-backdrop" @click="mobileSidebarOpen = false"></div>
     
     <div class="chat-main">
       <div class="chat-header">
+        <button
+          class="mobile-panel-toggle"
+          type="button"
+          @click="mobileSidebarOpen = !mobileSidebarOpen"
+        >
+          {{ mobileSidebarOpen ? '收起对话' : '对话列表' }}
+        </button>
         <div class="header-controls">
           <div class="model-selector" ref="modelSelectorRef">
             <div class="model-select-trigger" @click="toggleModelDropdown">
@@ -164,46 +172,56 @@
           <span class="countdown">{{ rateLimitInfo.waitTime }}秒</span>
         </div>
 
-        <div v-if="uploadedImages.length > 0 || currentModelType === 'image'" class="image-mode-hint">
-          <span class="hint-icon">🖼️</span>
-          <span v-if="currentModelType === 'image'">当前是生图模型：将根据输入文本生成图片，上传图片通常不会参与生成。</span>
-          <span v-else>当前已附带图片：这些图片将作为多模态输入发送给模型进行识别或分析。</span>
-        </div>
-        
-        <div class="toolbar">
-          <button @click="showParams = !showParams" class="btn-tool">参数配置</button>
-          <label class="btn-tool" style="cursor: pointer;">
-            📷 上传图片
-            <input type="file" accept="image/*" @change="handleImageUpload" style="display: none;" ref="imageInput" multiple>
-          </label>
-          <label class="btn-tool" style="cursor: pointer;">
-            📄 上传文件
-            <input type="file" :accept="supportedFileTypes" @change="handleFileUpload" style="display: none;" ref="fileInput" multiple>
-          </label>
-          <label class="toggle" :class="{ disabled: !canEnablePolling }">
-            <input type="checkbox" v-model="pollingEnabled" :disabled="!canEnablePolling" @change="onPollingToggle">
-            <span>轮询模式</span>
-            <span v-if="!canEnablePolling" class="polling-disabled-hint">（当前模型无重复提供商）</span>
-          </label>
-          <input v-model.number="frequency" type="number" placeholder="频率限制" class="input-freq">
-        </div>
-        
-        <!-- 图片预览区域 -->
-        <div v-if="uploadedImages.length > 0" class="image-preview-container">
-          <div v-for="(img, index) in uploadedImages" :key="index" class="image-preview-item">
-            <img :src="img.dataUrl" :alt="img.name" class="preview-image">
-            <button @click="removeImage(index)" class="btn-remove-image">×</button>
-            <span class="image-name">{{ img.name }}</span>
+        <button
+          class="mobile-tools-toggle"
+          type="button"
+          @click="mobileToolsOpen = !mobileToolsOpen"
+        >
+          {{ mobileToolsOpen ? '收起工具' : '展开工具' }}
+        </button>
+
+        <div :class="['mobile-tools-panel', { 'is-open': mobileToolsOpen }]">
+          <div v-if="uploadedImages.length > 0 || currentModelType === 'image'" class="image-mode-hint">
+            <span class="hint-icon">🖼️</span>
+            <span v-if="currentModelType === 'image'">当前是生图模型：将根据输入文本生成图片，上传图片通常不会参与生成。</span>
+            <span v-else>当前已附带图片：这些图片将作为多模态输入发送给模型进行识别或分析。</span>
           </div>
-        </div>
-        
-        <!-- 文件预览区域 -->
-        <div v-if="uploadedFiles.length > 0" class="file-preview-container">
-          <div v-for="(file, index) in uploadedFiles" :key="index" class="file-preview-item">
-            <span class="file-icon">📄</span>
-            <span class="file-name">{{ file.name }}</span>
-            <span class="file-size">({{ formatFileSize(file.size) }})</span>
-            <button @click="removeFile(index)" class="btn-remove-file">×</button>
+          
+          <div class="toolbar">
+            <button @click="showParams = !showParams" class="btn-tool">参数配置</button>
+            <label class="btn-tool" style="cursor: pointer;">
+              📷 上传图片
+              <input type="file" accept="image/*" @change="handleImageUpload" style="display: none;" ref="imageInput" multiple>
+            </label>
+            <label class="btn-tool" style="cursor: pointer;">
+              📄 上传文件
+              <input type="file" :accept="supportedFileTypes" @change="handleFileUpload" style="display: none;" ref="fileInput" multiple>
+            </label>
+            <label class="toggle" :class="{ disabled: !canEnablePolling }">
+              <input type="checkbox" v-model="pollingEnabled" :disabled="!canEnablePolling" @change="onPollingToggle">
+              <span>轮询模式</span>
+              <span v-if="!canEnablePolling" class="polling-disabled-hint">（当前模型无重复提供商）</span>
+            </label>
+            <input v-model.number="frequency" type="number" placeholder="频率限制" class="input-freq">
+          </div>
+          
+          <!-- 图片预览区域 -->
+          <div v-if="uploadedImages.length > 0" class="image-preview-container">
+            <div v-for="(img, index) in uploadedImages" :key="index" class="image-preview-item">
+              <img :src="img.dataUrl" :alt="img.name" class="preview-image">
+              <button @click="removeImage(index)" class="btn-remove-image">×</button>
+              <span class="image-name">{{ img.name }}</span>
+            </div>
+          </div>
+          
+          <!-- 文件预览区域 -->
+          <div v-if="uploadedFiles.length > 0" class="file-preview-container">
+            <div v-for="(file, index) in uploadedFiles" :key="index" class="file-preview-item">
+              <span class="file-icon">📄</span>
+              <span class="file-name">{{ file.name }}</span>
+              <span class="file-size">({{ formatFileSize(file.size) }})</span>
+              <button @click="removeFile(index)" class="btn-remove-file">×</button>
+            </div>
           </div>
         </div>
         <textarea v-model="inputText"
@@ -458,6 +476,15 @@
 }
 
 /* 模型选择器样式 */
+.mobile-panel-toggle,
+.mobile-tools-toggle {
+  display: none;
+}
+
+.mobile-panel-backdrop {
+  display: none;
+}
+
 .chat-header {
   display: flex;
   align-items: center;
@@ -1457,10 +1484,331 @@
   font-size: 11px;
 }
 
+/* 分尺寸布局优化，避免简单纵向堆叠 */
+@media (min-width: 1600px) {
+  .chat-container {
+    display: grid;
+    grid-template-columns: minmax(300px, 360px) minmax(0, 1fr);
+    align-items: stretch;
+  }
+
+  .conversation-list {
+    gap: 0.55rem;
+  }
+
+  .messages {
+    padding: 1rem 1.25rem;
+  }
+
+  .input-area {
+    padding: 1rem 1.25rem 1.1rem;
+  }
+
+  .header-controls {
+    display: grid;
+    grid-template-columns: minmax(520px, 1.3fr) minmax(220px, 0.55fr);
+    align-items: center;
+  }
+}
+
+@media (min-width: 1920px) {
+  .chat-container {
+    grid-template-columns: 360px minmax(0, 1fr);
+  }
+
+  .header-controls {
+    grid-template-columns: minmax(620px, 1.5fr) minmax(260px, 0.6fr);
+    gap: 1.25rem;
+  }
+
+  .message {
+    max-width: min(70%, 1080px);
+  }
+
+  .toolbar {
+    display: grid;
+    grid-template-columns: repeat(5, max-content);
+    align-items: center;
+    justify-content: start;
+  }
+}
+
+@media (max-width: 1280px) and (min-width: 901px) {
+  .chat-container {
+    display: grid;
+    grid-template-columns: minmax(240px, 280px) minmax(0, 1fr);
+  }
+
+  .header-controls {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 220px;
+    gap: 0.75rem;
+  }
+
+  .model-selector {
+    min-width: 0;
+    max-width: none;
+  }
+
+  .style-selector {
+    min-width: 0;
+    max-width: none;
+  }
+
+  .toolbar {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, max-content)) minmax(220px, 1fr) 120px;
+    align-items: center;
+  }
+
+  .toggle {
+    justify-content: center;
+  }
+
+  .send-actions {
+    justify-content: flex-end;
+  }
+}
+
+@media (max-width: 900px) and (min-width: 641px) {
+  .chat-container {
+    display: grid;
+    grid-template-columns: 100%;
+    grid-template-rows: auto minmax(0, 1fr);
+    height: 100%;
+    min-height: 0;
+  }
+
+  .sidebar {
+    padding: 0.75rem;
+  }
+
+  .sidebar-header {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 120px;
+    align-items: center;
+    margin-bottom: 0.65rem;
+  }
+
+  .conversation-list {
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(220px, 260px);
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding-bottom: 0.35rem;
+    scroll-snap-type: x proximity;
+  }
+
+  .conversation-item {
+    min-height: 72px;
+    align-items: flex-start;
+    scroll-snap-align: start;
+  }
+
+  .chat-header {
+    padding-bottom: 0.5rem;
+  }
+
+  .header-controls {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 200px;
+    gap: 0.75rem;
+  }
+
+  .model-selector,
+  .style-selector {
+    min-width: 0;
+    max-width: none;
+  }
+
+  .toolbar {
+    display: grid;
+    grid-template-columns: repeat(4, max-content);
+    align-items: center;
+  }
+
+  .toggle {
+    grid-column: 1 / -2;
+  }
+
+  .input-freq {
+    width: 100%;
+  }
+}
+
 /* 适配小屏幕 */
-@media (max-width: 768px) {
+@media (max-width: 640px) {
+  .chat-container {
+    display: grid;
+    grid-template-columns: 100%;
+    grid-template-rows: minmax(0, 1fr);
+    gap: 0;
+    height: 100%;
+    min-height: 0;
+    position: relative;
+  }
+
+  .sidebar {
+    position: fixed;
+    top: 9.25rem;
+    left: 0.75rem;
+    bottom: 0.75rem;
+    width: min(84vw, 320px);
+    z-index: 80;
+    padding: 0.7rem;
+    border-radius: 18px;
+    transform: translateX(calc(-100% - 1rem));
+    transition: transform 0.22s ease;
+  }
+
+  .sidebar.mobile-open {
+    transform: translateX(0);
+  }
+
+  .mobile-panel-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(15, 23, 42, 0.28);
+    z-index: 70;
+  }
+
+  .sidebar-header {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 0.55rem;
+    align-items: center;
+    margin-bottom: 0.55rem;
+  }
+
+  .btn-new {
+    white-space: nowrap;
+    padding-inline: 0.85rem;
+  }
+
+  .conversation-list {
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+    overflow-x: hidden;
+    gap: 0.55rem;
+    padding-bottom: 0.25rem;
+    scroll-snap-type: none;
+  }
+
+  .conversation-item {
+    min-height: 68px;
+    align-items: flex-start;
+    scroll-snap-align: none;
+  }
+
+  .conversation-meta-row {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.25rem;
+  }
+
+  .chat-main {
+    border-radius: 16px;
+    min-height: 0;
+    height: 100%;
+    position: relative;
+    overflow: hidden;
+    padding-top: 6.25rem;
+  }
+
+  .chat-header {
+    position: fixed;
+    top: 5.35rem;
+    left: 0.75rem;
+    right: 0.75rem;
+    z-index: 65;
+    padding: 0.7rem 0.8rem 0.55rem;
+    gap: 0.6rem;
+    align-items: stretch;
+    flex-direction: column;
+    background: rgba(255, 255, 255, 0.96);
+    backdrop-filter: blur(14px);
+    border: 1px solid rgba(226, 232, 240, 0.92);
+    border-radius: 16px;
+    box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
+  }
+
+  .mobile-panel-toggle,
+  .mobile-tools-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 40px;
+    padding: 0.6rem 0.85rem;
+    border: 1px solid rgba(203, 213, 225, 0.95);
+    border-radius: 14px;
+    background: rgba(255, 255, 255, 0.96);
+    color: #155e75;
+    font-size: 0.85rem;
+    font-weight: 700;
+  }
+
+  .header-controls {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 0.55rem;
+    align-items: stretch;
+  }
+
+  .model-selector {
+    min-width: 0;
+    max-width: none;
+  }
+
+  .style-selector {
+    min-width: 112px;
+    max-width: 132px;
+  }
+
+  .style-icon {
+    margin-right: -0.15rem;
+  }
+
+  .selected-style {
+    display: none;
+  }
+
+  .style-select-trigger,
+  .model-select-trigger {
+    min-height: 44px;
+    padding: 0.72rem 0.8rem;
+  }
+
+  .style-dropdown,
+  .model-dropdown {
+    position: fixed;
+    top: 11.8rem;
+    left: 0.75rem;
+    right: 0.75rem;
+    min-width: 0;
+    width: auto;
+    max-width: none;
+    z-index: 95;
+    max-height: min(50dvh, 420px);
+  }
+
+  .messages {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 0.75rem;
+    gap: 0.65rem;
+  }
+
+  .message {
+    max-width: 100%;
+  }
+
   .message-actions {
     opacity: 1;
+    flex-wrap: wrap;
   }
 
   .action-text {
@@ -1469,6 +1817,112 @@
 
   .action-btn {
     padding: 6px 8px;
+  }
+
+  .input-area {
+    flex-shrink: 0;
+    padding: 0.75rem;
+    background: rgba(255, 255, 255, 0.96);
+  }
+
+  .mobile-tools-panel {
+    display: none;
+    margin-bottom: 0.55rem;
+  }
+
+  .mobile-tools-panel.is-open {
+    display: block;
+  }
+
+  .toolbar {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.55rem;
+    margin-bottom: 0.55rem;
+  }
+
+  .btn-tool,
+  .toggle,
+  .input-freq {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .toggle {
+    min-height: 38px;
+    padding: 0.55rem 0.75rem;
+    border: 1px solid rgba(203, 213, 225, 0.95);
+    border-radius: 14px;
+    background: rgba(248, 250, 252, 0.88);
+    flex-wrap: wrap;
+  }
+
+  .send-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.55rem;
+  }
+
+  .btn-stop,
+  .btn-send {
+    width: 100%;
+  }
+
+  .btn-scroll-bottom {
+    right: 0.75rem;
+    bottom: 8rem;
+  }
+}
+
+@media (max-width: 480px) {
+  .sidebar {
+    width: calc(100vw - 1rem);
+    top: 10rem;
+    left: 0.5rem;
+    bottom: 0.5rem;
+  }
+
+  .chat-main {
+    height: 100%;
+    padding-top: 8.9rem;
+  }
+
+  .sidebar-header {
+    grid-template-columns: 1fr;
+  }
+
+  .chat-header {
+    left: 0.5rem;
+    right: 0.5rem;
+    top: 5.1rem;
+  }
+
+  .header-controls {
+    grid-template-columns: 1fr;
+  }
+
+  .style-dropdown,
+  .model-dropdown {
+    left: 0.5rem;
+    right: 0.5rem;
+    top: 13.35rem;
+  }
+
+  .style-selector {
+    min-width: 0;
+    max-width: none;
+  }
+
+  .selected-style {
+    display: inline;
+  }
+
+  .toolbar {
+    grid-template-columns: 1fr;
+  }
+
+  .send-actions {
+    grid-template-columns: 1fr;
   }
 }
 </style>
@@ -1834,6 +2288,8 @@ const pollingEnabled = ref(false)
 const userSettings = ref({})
 const frequency = ref(10)
 const showParams = ref(false)
+const mobileSidebarOpen = ref(false)
+const mobileToolsOpen = ref(false)
 const params = ref({ temperature: 0.7, max_tokens: 2000, top_p: 1 })
 const messagesContainer = ref(null)
 const showScrollToBottom = ref(false)
@@ -2385,6 +2841,7 @@ async function createConversation() {
 async function createNewConversation() {
   await createConversation()
   messages.value = []
+  mobileSidebarOpen.value = false
 }
 
 async function selectConversation(id) {
@@ -2399,6 +2856,7 @@ async function selectConversation(id) {
   currentConv.value = conversation
   messages.value = conversation.messages || []
   currentModel.value = conversation.model || currentModel.value
+  mobileSidebarOpen.value = false
 }
 
 async function deleteConversation(id) {
