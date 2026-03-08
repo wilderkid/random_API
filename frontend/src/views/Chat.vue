@@ -163,6 +163,12 @@
           <span>{{ rateLimitInfo.message }}</span>
           <span class="countdown">{{ rateLimitInfo.waitTime }}秒</span>
         </div>
+
+        <div v-if="uploadedImages.length > 0 || currentModelType === 'image'" class="image-mode-hint">
+          <span class="hint-icon">🖼️</span>
+          <span v-if="currentModelType === 'image'">当前是生图模型：将根据输入文本生成图片，上传图片通常不会参与生成。</span>
+          <span v-else>当前已附带图片：这些图片将作为多模态输入发送给模型进行识别或分析。</span>
+        </div>
         
         <div class="toolbar">
           <button @click="showParams = !showParams" class="btn-tool">参数配置</button>
@@ -3539,17 +3545,17 @@ function handleImageUpload(event) {
       return
     }
     
-    // 检查文件大小，限制为5MB
-    const maxSize = 5 * 1024 * 1024 // 5MB
+    // 检查文件大小，限制为10MB
+    const maxSize = 10 * 1024 * 1024 // 10MB
     if (file.size > maxSize) {
-      alert(`图片文件过大，请选择小于5MB的图片。当前文件大小：${(file.size / 1024 / 1024).toFixed(2)}MB`)
+      alert(`图片文件过大，请选择小于10MB的图片。当前文件大小：${(file.size / 1024 / 1024).toFixed(2)}MB`)
       return
     }
     
     const reader = new FileReader()
     reader.onload = (e) => {
-      // 压缩图片
-      compressImage(e.target.result, file.name, (compressedDataUrl) => {
+      // 仅在接近上限时压缩，尽量保留清晰度
+      compressImage(e.target.result, file.name, file.size, (compressedDataUrl) => {
         uploadedImages.value.push({
           name: file.name,
           dataUrl: compressedDataUrl,
@@ -3595,48 +3601,51 @@ async function filterLargeImages(images) {
 }
 
 // 图片压缩函数
-function compressImage(dataUrl, fileName, callback) {
+function compressImage(dataUrl, fileName, originalSize, callback) {
+  const targetMaxSize = 10 * 1024 * 1024 // 10MB
+
+  // 未超限则直接使用原图，避免不必要压缩
+  if (originalSize <= targetMaxSize) {
+    callback(dataUrl)
+    return
+  }
+
   const img = new Image()
   img.onload = () => {
     const canvas = document.createElement('canvas')
     const ctx = canvas.getContext('2d')
-    
-    // 计算压缩后的尺寸，最大宽度或高度为512px（进一步减小）
-    const maxSize = 512
+
     let { width, height } = img
-    
+    const maxDimension = 2048
+
     if (width > height) {
-      if (width > maxSize) {
-        height = (height * maxSize) / width
-        width = maxSize
+      if (width > maxDimension) {
+        height = (height * maxDimension) / width
+        width = maxDimension
       }
     } else {
-      if (height > maxSize) {
-        width = (width * maxSize) / height
-        height = maxSize
+      if (height > maxDimension) {
+        width = (width * maxDimension) / height
+        height = maxDimension
       }
     }
-    
+
     canvas.width = width
     canvas.height = height
-    
-    // 绘制压缩后的图片
     ctx.drawImage(img, 0, 0, width, height)
-    
-    // 多级压缩策略
-    let quality = 0.7
+
+    let quality = 0.92
     let compressedDataUrl = canvas.toDataURL('image/jpeg', quality)
-    let compressedSize = compressedDataUrl.length * 0.75 // 估算字节大小
-    
-    // 如果图片还是太大，继续降低质量
-    while (compressedSize > 1 * 1024 * 1024 && quality > 0.1) { // 限制在1MB以内
-      quality -= 0.1
+    let compressedSize = compressedDataUrl.length * 0.75
+
+    while (compressedSize > targetMaxSize && quality > 0.4) {
+      quality -= 0.08
       compressedDataUrl = canvas.toDataURL('image/jpeg', quality)
       compressedSize = compressedDataUrl.length * 0.75
     }
-    
-    console.log(`图片压缩完成: ${fileName}, 原始尺寸: ${img.width}x${img.height}, 压缩后尺寸: ${width}x${height}, 质量: ${quality}, 估算大小: ${(compressedSize / 1024 / 1024).toFixed(2)}MB`)
-    
+
+    console.log(`图片压缩完成: ${fileName}, 原始尺寸: ${img.width}x${img.height}, 压缩后尺寸: ${width}x${height}, 质量: ${quality.toFixed(2)}, 估算大小: ${(compressedSize / 1024 / 1024).toFixed(2)}MB`)
+
     callback(compressedDataUrl)
   }
   img.src = dataUrl
@@ -3755,9 +3764,9 @@ function handlePaste(event) {
       const file = item.getAsFile()
       if (!file) continue
 
-      const maxSize = 5 * 1024 * 1024
+      const maxSize = 10 * 1024 * 1024
       if (file.size > maxSize) {
-        alert(`图片文件过大，请选择小于5MB的图片。当前文件大小：${(file.size / 1024 / 1024).toFixed(2)}MB`)
+        alert(`图片文件过大，请选择小于10MB的图片。当前文件大小：${(file.size / 1024 / 1024).toFixed(2)}MB`)
         continue
       }
 
@@ -3765,7 +3774,7 @@ function handlePaste(event) {
 
       const reader = new FileReader()
       reader.onload = (e) => {
-        compressImage(e.target.result, fileName, (compressedDataUrl) => {
+        compressImage(e.target.result, fileName, file.size, (compressedDataUrl) => {
           uploadedImages.value.push({
             name: fileName,
             dataUrl: compressedDataUrl,

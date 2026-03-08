@@ -3362,9 +3362,9 @@ function parseImageResponse(data, apiType) {
   if (apiType === 'openai') {
     return {
       images: data.data.map(img => ({
-        url: img.url || img.b64_json,
+        url: img.url || (img.b64_json ? `data:image/png;base64,${img.b64_json}` : null),
         revisedPrompt: img.revised_prompt
-      })),
+      })).filter(img => !!img.url),
       metadata: {
         created: data.created
       }
