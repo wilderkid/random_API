@@ -848,20 +848,21 @@ h2 {
 
 .btn-search {
   padding: 9px 16px;
-  background: linear-gradient(135deg, #0f172a 0%, #155e75 100%);
+  background: #0891b2;
   color: white;
   border: none;
   border-radius: 999px;
   cursor: pointer;
   font-size: 14px;
   font-weight: 700;
-  box-shadow: 0 14px 26px rgba(21, 94, 117, 0.18);
+  box-shadow: 0 8px 16px rgba(8, 145, 178, 0.18);
   transition: all 0.22s ease;
 }
 
 .btn-search:hover {
+  background: #0e7490;
   transform: translateY(-1px);
-  box-shadow: 0 18px 30px rgba(21, 94, 117, 0.26);
+  box-shadow: 0 10px 20px rgba(8, 145, 178, 0.24);
 }
 
 .realtime-toggle {
@@ -907,11 +908,11 @@ h2 {
 }
 
 .btn-action.btn-today {
-  background: #2196F3;
+  background: #0891b2;
 }
 
 .btn-action.btn-today:hover {
-  background: #0b7dda;
+  background: #0e7490;
 }
 
 .btn-action.btn-recent {

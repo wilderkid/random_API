@@ -634,7 +634,7 @@ onMounted(() => {
 
 .btn-translate {
   padding: 0.82rem 2rem;
-  background: linear-gradient(135deg, #0f172a 0%, #155e75 100%);
+  background: #0891b2;
   color: white;
   border: none;
   border-radius: 999px;
@@ -642,13 +642,14 @@ onMounted(() => {
   font-size: 16px;
   font-weight: 700;
   letter-spacing: -0.01em;
-  transition: transform 0.18s ease, box-shadow 0.18s ease, opacity 0.18s ease;
-  box-shadow: 0 8px 18px rgba(21, 94, 117, 0.18);
+  transition: transform 0.18s ease, box-shadow 0.18s ease, opacity 0.18s ease, background-color 0.18s ease;
+  box-shadow: 0 8px 18px rgba(8, 145, 178, 0.18);
 }
 
 .btn-translate:hover:not(:disabled) {
+  background: #0e7490;
   transform: translateY(-1px);
-  box-shadow: 0 10px 22px rgba(21, 94, 117, 0.22);
+  box-shadow: 0 10px 22px rgba(8, 145, 178, 0.22);
 }
 
 .btn-translate:disabled {

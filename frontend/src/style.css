@@ -79,9 +79,9 @@ body {
 }
 
 .nav-links a.router-link-active {
-  background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+  background: #0891b2;
   color: white;
-  box-shadow: 0 10px 18px rgba(15, 23, 42, 0.18);
+  box-shadow: 0 8px 16px rgba(8, 145, 178, 0.22);
 }
 
 .main-content {
@@ -262,7 +262,7 @@ body {
 }
 
 .message.user {
-  background: linear-gradient(135deg, #0f172a 0%, #155e75 100%);
+  background: #0891b2;
   align-self: flex-end;
   color: white;
 }
@@ -307,7 +307,7 @@ body {
   background: rgba(255, 255, 255, 0.96);
   border: 1px solid rgba(203, 213, 225, 0.95);
   border-radius: 999px;
-  color: #155e75;
+  color: #0891b2;
   cursor: pointer;
   font-weight: 600;
   font-size: 13px;
@@ -381,7 +381,7 @@ body {
 
 .btn-send {
   padding: 0.72rem 1.65rem;
-  background: linear-gradient(135deg, #0f172a 0%, #155e75 100%);
+  background: #0891b2;
   border: none;
   border-radius: 999px;
   color: white;
@@ -389,13 +389,14 @@ body {
   font-weight: 700;
   font-size: 0.92rem;
   letter-spacing: -0.01em;
-  box-shadow: 0 8px 18px rgba(21, 94, 117, 0.16);
-  transition: transform 0.22s ease, box-shadow 0.22s ease, opacity 0.22s ease;
+  box-shadow: 0 8px 18px rgba(8, 145, 178, 0.18);
+  transition: transform 0.22s ease, box-shadow 0.22s ease, opacity 0.22s ease, background-color 0.22s ease;
 }
 
 .btn-send:hover {
+  background: #0e7490;
   transform: translateY(-1px);
-  box-shadow: 0 10px 22px rgba(21, 94, 117, 0.2);
+  box-shadow: 0 10px 22px rgba(8, 145, 178, 0.22);
 }
 
 .btn-send:disabled {

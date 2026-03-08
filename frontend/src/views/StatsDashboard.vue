@@ -478,10 +478,10 @@ h2 {
 }
 
 .time-range-btn.active {
-  background: linear-gradient(135deg, #0f172a 0%, #155e75 100%);
+  background: #0891b2;
   color: white;
   border-color: transparent;
-  box-shadow: 0 14px 28px rgba(21, 94, 117, 0.22);
+  box-shadow: 0 12px 24px rgba(8, 145, 178, 0.2);
 }
 
 .custom-range {
@@ -502,7 +502,7 @@ h2 {
 
 .apply-btn {
   padding: 8px 16px;
-  background: #1890ff;
+  background: #0891b2;
   color: white;
   border: none;
   border-radius: 6px;
@@ -511,12 +511,12 @@ h2 {
 }
 
 .apply-btn:hover {
-  background: #0066cc;
+  background: #0e7490;
 }
 
 .refresh-btn {
   padding: 9px 16px;
-  background: linear-gradient(135deg, #0f172a 0%, #155e75 100%);
+  background: #0891b2;
   color: white;
   border: none;
   border-radius: 999px;
@@ -524,7 +524,7 @@ h2 {
   font-size: 14px;
   font-weight: 700;
   transition: background-color 0.18s ease, opacity 0.18s ease;
-  box-shadow: 0 6px 14px rgba(21, 94, 117, 0.14);
+  box-shadow: 0 6px 14px rgba(8, 145, 178, 0.14);
 }
 
 .refresh-btn:hover:not(:disabled) {
