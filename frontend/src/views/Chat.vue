@@ -6,10 +6,20 @@
         <button @click="createNewConversation" class="btn-new">新建对话</button>
       </div>
       <div class="conversation-list">
-        <div v-for="conv in filteredConversations" :key="conv.id" 
-             :class="['conversation-item', { active: currentConv?.id === conv.id }]"
+        <div v-for="conv in filteredConversations" :key="conv.id"
+             :class="['conversation-item', { active: currentConv?.id === conv.id, error: hasConversationError(conv), pending: isConversationPending(conv) }]"
              @click="selectConversation(conv.id)">
-          <span>{{ conv.title || '新对话' }}</span>
+          <div class="conversation-main">
+            <div class="conversation-title-row">
+              <span class="conversation-title">{{ conv.title || '新对话' }}</span>
+              <span v-if="hasConversationError(conv)" class="conversation-status-dot error"></span>
+              <span v-else-if="isConversationPending(conv)" class="conversation-status-dot pending"></span>
+            </div>
+            <div class="conversation-meta-row">
+              <span class="conversation-snippet">{{ getConversationSnippet(conv) }}</span>
+              <span class="conversation-time">{{ formatConversationTime(conv) }}</span>
+            </div>
+          </div>
           <button @click.stop="deleteConversation(conv.id)" class="btn-delete">×</button>
         </div>
       </div>
@@ -86,8 +96,8 @@
         </div>
       </div>
       
-      <div class="messages" ref="messagesContainer">
-        <div v-for="(msg, i) in messages" :key="i" :class="['message', msg.role, { 'error': msg.error, 'streaming': msg.streaming }]">
+      <div class="messages" ref="messagesContainer" @scroll="handleMessagesScroll">
+        <div v-for="(msg, i) in messages" :key="i" :class="['message', msg.role, { 'error': msg.error, 'streaming': msg.streaming, 'editing': editingMessageIndex === i }]">
           <div v-if="msg.images && msg.images.length > 0" class="message-images">
             <img v-for="(img, idx) in msg.images" :key="idx"
                  :src="img.dataUrl"
@@ -102,16 +112,33 @@
               <span class="file-name">{{ file.name }}</span>
             </div>
           </div>
-          <div class="message-content" :class="getMessageStyleClass(msg)" v-html="getRenderedContent(msg, i)"></div>
-          <div v-if="msg.error && msg.errorDetails" class="error-details-btn" @click="showErrorDetails(msg.errorDetails)">
-            <span class="details-icon">🔍</span>
-            <span>查看详情</span>
-          </div>
+          <template v-if="editingMessageIndex === i && msg.role === 'user'">
+            <textarea
+              v-model="editingMessageText"
+              class="message-edit-box"
+              @keydown.esc.prevent="cancelEditMessage"
+            ></textarea>
+            <div class="message-inline-actions">
+              <button class="action-btn" @click="cancelEditMessage">取消</button>
+              <button class="action-btn action-btn-primary" @click="saveEditedMessage">保存并重发</button>
+            </div>
+          </template>
+          <template v-else>
+            <div class="message-content" :class="getMessageStyleClass(msg)" v-html="getRenderedContent(msg, i)"></div>
+            <div v-if="msg.error && msg.errorDetails" class="error-details-btn" @click="showErrorDetails(msg.errorDetails)">
+              <span class="details-icon">🔍</span>
+              <span>查看详情</span>
+            </div>
+          </template>
           <!-- 消息操作按钮 -->
           <div class="message-actions" v-if="!msg.streaming">
             <button class="action-btn" @click="copyMessage(msg)" title="复制消息">
               <span class="action-icon">📋</span>
               <span class="action-text">复制</span>
+            </button>
+            <button v-if="msg.role === 'user'" class="action-btn" @click="startEditMessage(i)" title="编辑消息">
+              <span class="action-icon">✏️</span>
+              <span class="action-text">编辑</span>
             </button>
             <button class="action-btn action-btn-danger" @click="deleteMessage(i)" title="删除消息">
               <span class="action-icon">🗑️</span>
@@ -124,6 +151,10 @@
           </div>
         </div>
       </div>
+
+      <button v-if="showScrollToBottom" class="btn-scroll-bottom" @click="scrollToLatest">
+        ↓ 回到底部
+      </button>
       
       <div class="input-area">
         <!-- 速率限制提示 -->
@@ -174,9 +205,18 @@
                   @paste="handlePaste"
                   placeholder="输入消息... (Enter 发送, Shift+Enter 换行, Ctrl+V 粘贴图片)"
                   class="input-box"></textarea>
-        <button @click="sendMessage" :disabled="!inputText.trim() || !currentModel || rateLimitInfo.isLimited" class="btn-send">
-          {{ rateLimitInfo.isLimited ? `等待 ${rateLimitInfo.waitTime}s` : '发送' }}
-        </button>
+        <div class="send-actions">
+          <button
+            v-if="isSending"
+            @click="stopGeneration"
+            class="btn-stop"
+          >
+            停止生成
+          </button>
+          <button @click="sendMessage" :disabled="isSending || (!inputText.trim() && uploadedImages.length === 0 && uploadedFiles.length === 0) || !currentModel || rateLimitInfo.isLimited" class="btn-send">
+            {{ isSending ? '生成中...' : (rateLimitInfo.isLimited ? `等待 ${rateLimitInfo.waitTime}s` : '发送') }}
+          </button>
+        </div>
       </div>
     </div>
     
@@ -354,6 +394,63 @@
 </template>
 
 <style scoped>
+.conversation-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.conversation-title-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-bottom: 0.2rem;
+}
+
+.conversation-title {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-meta-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.conversation-snippet {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.76rem;
+  color: #64748b;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-time {
+  font-size: 0.72rem;
+  color: #94a3b8;
+  flex-shrink: 0;
+}
+
+.conversation-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.conversation-status-dot.error {
+  background: #ef4444;
+}
+
+.conversation-status-dot.pending {
+  background: #f59e0b;
+}
+
 /* 模型选择器样式 */
 .chat-header {
   display: flex;
@@ -725,10 +822,86 @@
   color: #d63031;
 }
 
+.editing-banner {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+  padding: 0.75rem 0.9rem;
+  background: rgba(255, 248, 220, 0.95);
+  border: 1px solid rgba(245, 158, 11, 0.25);
+  border-radius: 14px;
+  color: #92400e;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.editing-actions {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.send-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.btn-tool-primary {
+  background: rgba(8, 145, 178, 0.12);
+  border-color: rgba(8, 145, 178, 0.3);
+  color: #0f766e;
+}
+
+.btn-stop {
+  padding: 0.72rem 1.4rem;
+  background: rgba(255, 255, 255, 0.96);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  border-radius: 999px;
+  color: #b91c1c;
+  cursor: pointer;
+  font-weight: 700;
+  font-size: 0.9rem;
+  transition: all 0.2s ease;
+}
+
+.btn-stop:hover {
+  background: #fff1f2;
+  border-color: #ef4444;
+  transform: translateY(-1px);
+}
+
+.btn-scroll-bottom {
+  position: absolute;
+  right: 1.25rem;
+  bottom: 7rem;
+  z-index: 10;
+  padding: 0.65rem 1rem;
+  background: rgba(15, 23, 42, 0.94);
+  color: #fff;
+  border: none;
+  border-radius: 999px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  font-weight: 700;
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.18);
+  transition: all 0.2s ease;
+}
+
+.btn-scroll-bottom:hover {
+  transform: translateY(-1px);
+  background: #155e75;
+}
+
 .btn-send:disabled {
   background-color: #ddd;
   color: #999;
   cursor: not-allowed;
+  box-shadow: none;
+  transform: none;
 }
 
 /* 错误消息样式 */
@@ -1614,6 +1787,9 @@ const frequency = ref(10)
 const showParams = ref(false)
 const params = ref({ temperature: 0.7, max_tokens: 2000, top_p: 1 })
 const messagesContainer = ref(null)
+const showScrollToBottom = ref(false)
+const editingMessageIndex = ref(null)
+const editingMessageText = ref('')
 const imageInput = ref(null)
 const fileInput = ref(null)
 const uploadedImages = ref([])
@@ -2098,6 +2274,54 @@ function handleClickOutside(event) {
   }
 }
 
+function generateConversationTitle(text) {
+  if (!text) return '新对话'
+
+  const cleaned = text
+    .replace(/\s+/g, ' ')
+    .replace(/[\n\r]+/g, ' ')
+    .replace(/[「」【】]/g, '')
+    .trim()
+
+  if (!cleaned) return '新对话'
+
+  const firstSentence = cleaned.split(/[。！？!?]/)[0].trim()
+  const baseTitle = firstSentence || cleaned
+  return baseTitle.length > 22 ? `${baseTitle.slice(0, 22)}…` : baseTitle
+}
+
+function getConversationSnippet(conv) {
+  const messagesList = conv?.messages || []
+  const latestMessage = [...messagesList].reverse().find(msg => typeof msg.content === 'string' && msg.content.trim())
+  if (!latestMessage) return '暂无消息'
+
+  const text = latestMessage.content.replace(/\s+/g, ' ').trim()
+  return text.length > 26 ? `${text.slice(0, 26)}…` : text
+}
+
+function hasConversationError(conv) {
+  return (conv?.messages || []).some(msg => msg.error)
+}
+
+function isConversationPending(conv) {
+  const messagesList = conv?.messages || []
+  return messagesList.length > 0 && messagesList[messagesList.length - 1]?.streaming
+}
+
+function formatConversationTime(conv) {
+  const source = conv?.updatedAt || conv?.createdAt || conv?.id
+  const date = new Date(source)
+  if (Number.isNaN(date.getTime())) return ''
+
+  const now = new Date()
+  const isToday = date.toDateString() === now.toDateString()
+  if (isToday) {
+    return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+  }
+
+  return date.toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' })
+}
+
 async function createConversation() {
   const res = await axios.post('/api/conversations', { model: currentModel.value })
   conversations.value.push(res.data)
@@ -2144,6 +2368,7 @@ async function deleteConversation(id) {
 
 // 延迟发送队列
 let delayedSendTimer = null
+let currentAbortController = null
 // 发送锁，防止并发发送
 let isSending = ref(false)
 
@@ -2210,9 +2435,11 @@ async function sendMessage() {
     // 根据模型类型选择参数
     const requestParams = currentModelType.value === 'image' ? imageParams.value : params.value
 
+    currentAbortController = new AbortController()
     const response = await fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      signal: currentAbortController.signal,
       body: JSON.stringify({
         messages: messages.value.slice(0, -1),
         model: currentModel.value,
@@ -2292,7 +2519,9 @@ async function sendMessage() {
     // 详细的错误信息显示
     let errorMessage = '发送消息失败'
 
-    if (e.name === 'TypeError' && e.message.includes('fetch')) {
+    if (e.name === 'AbortError') {
+      errorMessage = '已停止生成'
+    } else if (e.name === 'TypeError' && e.message.includes('fetch')) {
       errorMessage = '网络连接失败，请检查网络连接'
     } else if (e.name === 'SyntaxError' && e.message.includes('JSON')) {
       errorMessage = 'JSON数据格式错误，可能是服务器响应异常'
@@ -2329,6 +2558,7 @@ async function sendMessage() {
     }
   } finally {
     // 释放发送锁
+    currentAbortController = null
     isSending.value = false
   }
 
@@ -2339,9 +2569,11 @@ async function sendMessage() {
 // 延迟请求执行函数
 async function executeDelayedRequest(assistantMsg) {
   try {
+    currentAbortController = new AbortController()
     const response = await fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      signal: currentAbortController.signal,
       body: JSON.stringify({
         messages: messages.value.slice(0, -1),
         model: currentModel.value,
@@ -2388,7 +2620,9 @@ async function executeDelayedRequest(assistantMsg) {
     // 详细的错误信息显示
     let errorMessage = '延迟请求失败'
     
-    if (e.name === 'TypeError' && e.message.includes('fetch')) {
+    if (e.name === 'AbortError') {
+      errorMessage = '已停止生成'
+    } else if (e.name === 'TypeError' && e.message.includes('fetch')) {
       errorMessage = '网络连接失败，请检查网络连接'
     } else if (e.name === 'SyntaxError' && e.message.includes('JSON')) {
       errorMessage = 'JSON数据格式错误，可能是服务器响应异常'
@@ -2422,6 +2656,7 @@ async function executeDelayedRequest(assistantMsg) {
     })
   } finally {
     // 释放发送锁
+    currentAbortController = null
     isSending.value = false
   }
 
@@ -2574,6 +2809,20 @@ async function processStreamResponse(response, assistantMsg) {
   }
 }
 
+function stopGeneration() {
+  if (delayedSendTimer) {
+    clearInterval(delayedSendTimer)
+    delayedSendTimer = null
+  }
+
+  if (currentAbortController) {
+    currentAbortController.abort()
+  }
+
+  rateLimitInfo.value.isLimited = false
+  rateLimitInfo.value.message = ''
+}
+
 // 保存对话
 async function saveConversation() {
   currentConv.value.messages = messages.value
@@ -2592,22 +2841,43 @@ async function saveConversation() {
 // 性能优化：优化滚动函数，减少不必要的滚动
 let lastScrollHeight = 0
 let isScrolling = false
+const autoScrollThreshold = 120
 
-function scrollToBottom() {
+function isNearBottom() {
+  if (!messagesContainer.value) return true
+  const container = messagesContainer.value
+  const distanceToBottom = container.scrollHeight - container.scrollTop - container.clientHeight
+  return distanceToBottom <= autoScrollThreshold
+}
+
+function handleMessagesScroll() {
+  showScrollToBottom.value = !isNearBottom()
+}
+
+function scrollToBottom(force = false) {
   if (messagesContainer.value && !isScrolling) {
     const container = messagesContainer.value
     const currentScrollHeight = container.scrollHeight
+
+    if (!force && !isNearBottom()) {
+      return
+    }
     
     // 只有当内容高度发生变化时才滚动
-    if (currentScrollHeight !== lastScrollHeight) {
+    if (currentScrollHeight !== lastScrollHeight || force) {
       isScrolling = true
       requestAnimationFrame(() => {
         container.scrollTop = currentScrollHeight
         lastScrollHeight = currentScrollHeight
+        showScrollToBottom.value = false
         isScrolling = false
       })
     }
   }
+}
+
+function scrollToLatest() {
+  scrollToBottom(true)
 }
 
 // 性能优化：节流滚动函数
@@ -2856,6 +3126,90 @@ function copyMessage(msg) {
     console.error('复制失败:', err)
     alert('复制失败，请手动选择文本复制')
   })
+}
+
+function startEditMessage(index) {
+  if (index < 0 || index >= messages.value.length) return
+  const msg = messages.value[index]
+  if (msg.role !== 'user') return
+
+  editingMessageIndex.value = index
+  editingMessageText.value = typeof msg.content === 'string' ? msg.content : ''
+}
+
+function cancelEditMessage() {
+  editingMessageIndex.value = null
+  editingMessageText.value = ''
+}
+
+async function saveEditedMessage() {
+  if (editingMessageIndex.value === null) return
+  const index = editingMessageIndex.value
+  const newContent = editingMessageText.value.trim()
+
+  if (!newContent) {
+    alert('编辑内容不能为空')
+    return
+  }
+
+  if (!currentConv.value) {
+    alert('没有找到当前对话')
+    return
+  }
+
+  const updatedMessages = [...messages.value]
+  updatedMessages[index] = {
+    ...updatedMessages[index],
+    content: newContent,
+    rendered: undefined
+  }
+
+  // 真正的编辑语义：从当前用户消息开始，截断其后的整段历史，再重新生成
+  messages.value = updatedMessages.slice(0, index + 1)
+  editingMessageIndex.value = null
+  editingMessageText.value = ''
+
+  await saveConversation()
+
+  const assistantMsg = { role: 'assistant', content: '', streaming: true }
+  messages.value.push(assistantMsg)
+
+  const requestParams = currentModelType.value === 'image' ? imageParams.value : params.value
+  currentAbortController = new AbortController()
+  isSending.value = true
+
+  try {
+    const response = await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: currentAbortController.signal,
+      body: JSON.stringify({
+        messages: messages.value.slice(0, -1),
+        model: currentModel.value,
+        params: requestParams,
+        polling: pollingEnabled.value,
+        systemPrompt: selectedPrompt.value ? selectedPrompt.value.content : undefined
+      })
+    })
+
+    if (!response.ok) {
+      const errorText = await response.text()
+      throw new Error(errorText || `HTTP ${response.status}: ${response.statusText}`)
+    }
+
+    await processStreamResponse(response, assistantMsg)
+  } catch (e) {
+    assistantMsg.content = `❌ ${e.message || '编辑后重发失败'}`
+    assistantMsg.streaming = false
+    assistantMsg.error = true
+    assistantMsg.errorDetails = createErrorDetails(e, currentModel.value)
+    messages.value = [...messages.value]
+  } finally {
+    currentAbortController = null
+    isSending.value = false
+  }
+
+  await saveConversation()
 }
 
 // 删除消息
