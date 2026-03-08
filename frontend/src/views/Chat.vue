@@ -926,7 +926,7 @@
 .btn-scroll-bottom {
   position: absolute;
   right: 1.25rem;
-  bottom: 7rem;
+  bottom: 9.5rem;
   z-index: 10;
   padding: 0.65rem 1rem;
   background: rgba(15, 23, 42, 0.94);
