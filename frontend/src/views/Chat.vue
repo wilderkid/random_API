@@ -856,6 +856,49 @@
   color: #0f766e;
 }
 
+.code-block-wrapper {
+  position: relative;
+  margin: 0.75rem 0;
+  border: 1px solid rgba(203, 213, 225, 0.95);
+  border-radius: 14px;
+  overflow: hidden;
+  background: #f8fafc;
+}
+
+.code-block-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.55rem 0.8rem;
+  background: rgba(241, 245, 249, 0.95);
+  border-bottom: 1px solid rgba(226, 232, 240, 0.95);
+}
+
+.code-block-lang {
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: #64748b;
+  text-transform: lowercase;
+}
+
+.code-copy-btn {
+  border: none;
+  background: rgba(255, 255, 255, 0.96);
+  color: #155e75;
+  border-radius: 999px;
+  padding: 0.35rem 0.8rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.18s ease;
+}
+
+.code-copy-btn:hover {
+  background: #ffffff;
+  color: #0f172a;
+}
+
 .btn-stop {
   padding: 0.72rem 1.4rem;
   background: rgba(255, 255, 255, 0.96);
@@ -2766,7 +2809,7 @@ async function processStreamResponse(response, assistantMsg) {
     // 最终渲染时使用缓存
     const cacheKey = `${assistantMsg.role}-${assistantMsg.content}`
     if (!renderedCache.has(cacheKey)) {
-      assistantMsg.rendered = marked(assistantMsg.content)
+      assistantMsg.rendered = enhanceCodeBlocks(marked(assistantMsg.content))
       renderedCache.set(cacheKey, assistantMsg.rendered)
     } else {
       assistantMsg.rendered = renderedCache.get(cacheKey)
@@ -2949,7 +2992,7 @@ function getRenderedContent(msg, index) {
   // 为流式消息实时渲染，但不缓存
   if (msg.streaming) {
     // 使用风格管理器处理内容
-    return contentStyleManager.processContent(msg.content, marked, DOMPurify.sanitize, currentStyle.value)
+    return enhanceCodeBlocks(contentStyleManager.processContent(msg.content, marked, DOMPurify.sanitize, currentStyle.value))
   }
 
   // 生成缓存键（包含风格ID）
@@ -2963,7 +3006,7 @@ function getRenderedContent(msg, index) {
   }
 
   // 使用风格管理器处理内容
-  const rendered = contentStyleManager.processContent(msg.content, marked, DOMPurify.sanitize, currentStyle.value)
+  const rendered = enhanceCodeBlocks(contentStyleManager.processContent(msg.content, marked, DOMPurify.sanitize, currentStyle.value))
 
   // 缓存大小控制
   if (renderedCache.size >= maxCacheSize) {
@@ -3413,8 +3456,57 @@ function resetZoom() {
   imageViewerScale.value = 1
 }
 
+function enhanceCodeBlocks(html) {
+  if (!html || !html.includes('<pre><code')) return html
+
+  return html.replace(/<pre><code(?: class="language-([^"]+)")?>([\s\S]*?)<\/code><\/pre>/g, (match, language = '', codeContent = '') => {
+    const decoded = codeContent
+      .replace(/&/g, '&')
+      .replace(/</g, '<')
+      .replace(/>/g, '>')
+      .replace(/"/g, '"')
+      .replace(/'/g, "'")
+
+    if (!decoded.includes('\n')) {
+      return match
+    }
+
+    const langLabel = language ? `<span class="code-block-lang">${language}</span>` : '<span class="code-block-lang">code</span>'
+    const safeCode = encodeURIComponent(decoded)
+
+    return `
+      <div class="code-block-wrapper">
+        <div class="code-block-toolbar">
+          ${langLabel}
+          <button class="code-copy-btn" data-code-copy="${safeCode}">复制代码</button>
+        </div>
+        ${match}
+      </div>
+    `
+  })
+}
+
+function copyCodeBlock(encodedCode) {
+  const code = decodeURIComponent(encodedCode)
+  navigator.clipboard.writeText(code).then(() => {
+    console.log('代码块已复制到剪贴板')
+  }).catch(err => {
+    console.error('代码复制失败:', err)
+    alert('代码复制失败，请手动选择复制')
+  })
+}
+
 // 处理生成图片的点击事件（事件委托）
 function handleGeneratedImageClick(event) {
+  const codeCopyButton = event.target.closest('[data-code-copy]')
+  if (codeCopyButton) {
+    const code = codeCopyButton.getAttribute('data-code-copy')
+    if (code) {
+      copyCodeBlock(code)
+    }
+    return
+  }
+
   // 检查是否点击了图片元素
   const imgElement = event.target.closest('img')
   if (imgElement && imgElement.src) {
