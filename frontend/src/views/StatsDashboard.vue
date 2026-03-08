@@ -98,13 +98,13 @@
               </tr>
             </thead>
             <tbody>
-              <tr v-for="(provider, name) in stats.providerStats" :key="name">
-                <td class="provider-name">{{ name }}</td>
+              <tr v-for="provider in providerRows" :key="provider.name">
+                <td class="provider-name">{{ provider.name }}</td>
                 <td>{{ formatNumber(provider.total) }}</td>
                 <td :class="getRateClass(provider)">{{ calculateRate(provider) }}%</td>
                 <td>{{ formatDuration(provider.avgDuration) }}</td>
                 <td v-if="stats.costStats">
-                  {{ calculateCostShare(provider, name) }}%
+                  {{ calculateCostShare(provider, provider.name) }}%
                 </td>
               </tr>
             </tbody>
@@ -130,18 +130,16 @@
               </tr>
             </thead>
             <tbody>
-              <template v-for="(provider, providerName) in stats.providerStats">
-                <tr v-for="(model, modelName) in provider.models" :key="`${providerName}-${modelName}`">
-                  <td>{{ providerName }}</td>
-                  <td>{{ modelName }}</td>
-                  <td>{{ formatNumber(model.total) }}</td>
-                  <td :class="getRateClass(model)">{{ calculateRate(model) }}%</td>
-                  <td>{{ formatDuration(model.avgDuration) }}</td>
-                  <td>{{ formatNumber(model.totalPromptTokens) }}</td>
-                  <td>{{ formatNumber(model.totalCompletionTokens) }}</td>
-                  <td class="token-total-cell">{{ formatNumber(model.totalTokens) }}</td>
-                </tr>
-              </template>
+              <tr v-for="model in modelRows" :key="`${model.providerName}-${model.modelName}`">
+                <td>{{ model.providerName }}</td>
+                <td>{{ model.modelName }}</td>
+                <td>{{ formatNumber(model.total) }}</td>
+                <td :class="getRateClass(model)">{{ calculateRate(model) }}%</td>
+                <td>{{ formatDuration(model.avgDuration) }}</td>
+                <td>{{ formatNumber(model.totalPromptTokens) }}</td>
+                <td>{{ formatNumber(model.totalCompletionTokens) }}</td>
+                <td class="token-total-cell">{{ formatNumber(model.totalTokens) }}</td>
+              </tr>
             </tbody>
           </table>
         </div>
@@ -161,14 +159,12 @@
               </tr>
             </thead>
             <tbody>
-              <template v-for="(provider, providerName) in stats.providerStats">
-                <tr v-for="(apiKey, keyName) in provider.apiKeys" :key="`${providerName}-${keyName}`">
-                  <td>{{ providerName }}</td>
-                  <td>{{ keyName }}</td>
-                  <td>{{ formatNumber(apiKey.total) }}</td>
-                  <td :class="getRateClass(apiKey)">{{ calculateRate(apiKey) }}%</td>
-                </tr>
-              </template>
+              <tr v-for="apiKey in apiKeyRows" :key="`${apiKey.providerName}-${apiKey.keyName}`">
+                <td>{{ apiKey.providerName }}</td>
+                <td>{{ apiKey.keyName }}</td>
+                <td>{{ formatNumber(apiKey.total) }}</td>
+                <td :class="getRateClass(apiKey)">{{ calculateRate(apiKey) }}%</td>
+              </tr>
             </tbody>
           </table>
         </div>
@@ -229,6 +225,41 @@ const stats = ref({
 const selectedTimeRange = ref('today')
 const customStartDate = ref('')
 const customEndDate = ref('')
+
+const providerRows = computed(() =>
+  Object.entries(stats.value.providerStats || {}).map(([name, provider]) => ({
+    name,
+    ...provider
+  }))
+)
+
+const modelRows = computed(() => {
+  const rows = []
+  Object.entries(stats.value.providerStats || {}).forEach(([providerName, provider]) => {
+    Object.entries(provider.models || {}).forEach(([modelName, model]) => {
+      rows.push({
+        providerName,
+        modelName,
+        ...model
+      })
+    })
+  })
+  return rows
+})
+
+const apiKeyRows = computed(() => {
+  const rows = []
+  Object.entries(stats.value.providerStats || {}).forEach(([providerName, provider]) => {
+    Object.entries(provider.apiKeys || {}).forEach(([keyName, apiKey]) => {
+      rows.push({
+        providerName,
+        keyName,
+        ...apiKey
+      })
+    })
+  })
+  return rows
+})
 
 // 计算属性
 const successRate = computed(() => {
@@ -423,9 +454,9 @@ h2 {
   flex-wrap: wrap;
   padding: 16px 18px;
   border-radius: 22px;
-  background: rgba(255,255,255,0.82);
+  background: rgba(255,255,255,0.96);
   border: 1px solid rgba(226, 232, 240, 0.92);
-  box-shadow: 0 18px 36px rgba(15, 23, 42, 0.06);
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.05);
 }
 
 .time-range-btn {
@@ -492,13 +523,12 @@ h2 {
   cursor: pointer;
   font-size: 14px;
   font-weight: 700;
-  transition: all 0.22s ease;
-  box-shadow: 0 14px 28px rgba(21, 94, 117, 0.22);
+  transition: background-color 0.18s ease, opacity 0.18s ease;
+  box-shadow: 0 6px 14px rgba(21, 94, 117, 0.14);
 }
 
 .refresh-btn:hover:not(:disabled) {
-  transform: translateY(-1px);
-  box-shadow: 0 18px 32px rgba(21, 94, 117, 0.28);
+  opacity: 0.96;
 }
 
 .refresh-btn:disabled {
@@ -536,12 +566,11 @@ h2 {
 
 /* 概览卡片 */
 .overview-section {
-  background: rgba(255, 255, 255, 0.9);
-  backdrop-filter: blur(16px);
+  background: rgba(255, 255, 255, 0.98);
   border-radius: 26px;
   padding: 26px;
   border: 1px solid rgba(226, 232, 240, 0.95);
-  box-shadow: 0 24px 56px rgba(15, 23, 42, 0.08);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.05);
 }
 
 .cards-grid {
@@ -551,17 +580,17 @@ h2 {
 }
 
 .stat-card {
-  background: linear-gradient(180deg, rgba(255,255,255,0.96) 0%, rgba(246,249,252,0.92) 100%);
+  background: linear-gradient(180deg, rgba(255,255,255,0.97) 0%, rgba(246,249,252,0.95) 100%);
   border-radius: 22px;
   padding: 22px;
   border: 1px solid rgba(226, 232, 240, 0.95);
-  transition: transform 0.22s ease, box-shadow 0.22s ease;
-  box-shadow: inset 0 1px 0 rgba(255,255,255,0.7), 0 14px 28px rgba(15, 23, 42, 0.05);
+  transition: border-color 0.18s ease, background-color 0.18s ease;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.7), 0 6px 14px rgba(15, 23, 42, 0.04);
 }
 
 .stat-card:hover {
-  transform: translateY(-3px);
-  box-shadow: 0 18px 34px rgba(15, 23, 42, 0.1);
+  border-color: rgba(203, 213, 225, 1);
+  background: linear-gradient(180deg, rgba(255,255,255,1) 0%, rgba(246,249,252,0.97) 100%);
 }
 
 .stat-card.success {
@@ -631,17 +660,17 @@ h2 {
 .models-section,
 .apikeys-section,
 .performance-section {
-  background: rgba(255, 255, 255, 0.9);
-  backdrop-filter: blur(16px);
+  background: rgba(255, 255, 255, 0.99);
   border-radius: 26px;
   padding: 24px;
   border: 1px solid rgba(226, 232, 240, 0.95);
-  box-shadow: 0 24px 56px rgba(15, 23, 42, 0.08);
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.04);
 }
 
 /* 表格 */
 .table-container {
   overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .stats-table {

@@ -321,6 +321,8 @@ const pageSizeOptions = [10, 20, 50, 100]
 
 // 展开的日志详情
 const expandedLogs = ref(new Set())
+const formattedJsonCache = new Map()
+const MAX_EXPANDED_LOGS = 3
 
 // 实时监控
 const isRealtimeEnabled = ref(false)
@@ -433,6 +435,7 @@ async function loadLogs() {
     const response = await axios.get(`${API_BASE}/api/logs`, { params })
 
     logs.value = response.data.logs
+    formattedJsonCache.clear()
     pagination.value = response.data.pagination
     pagination.value.total = response.data.pagination.total
 
@@ -466,6 +469,12 @@ function toggleLogDetail(log) {
   if (expandedLogs.value.has(log.traceId)) {
     expandedLogs.value.delete(log.traceId)
   } else {
+    if (expandedLogs.value.size >= MAX_EXPANDED_LOGS) {
+      const firstExpanded = expandedLogs.value.values().next().value
+      if (firstExpanded) {
+        expandedLogs.value.delete(firstExpanded)
+      }
+    }
     expandedLogs.value.add(log.traceId)
   }
 }
@@ -482,11 +491,25 @@ function getShortMessage(message) {
 }
 
 function formatJson(value) {
-  try {
-    return JSON.stringify(value, null, 2)
-  } catch {
-    return String(value)
+  const cacheKey = value && typeof value === 'object' ? JSON.stringify(Object.keys(value).sort()) + ':' + (value.traceId || value.timestamp || '') + ':' + (value.id || '') : String(value)
+
+  if (formattedJsonCache.has(cacheKey)) {
+    return formattedJsonCache.get(cacheKey)
   }
+
+  let formatted
+  try {
+    formatted = JSON.stringify(value, null, 2)
+  } catch {
+    formatted = String(value)
+  }
+
+  if (formattedJsonCache.size > 200) {
+    const firstKey = formattedJsonCache.keys().next().value
+    formattedJsonCache.delete(firstKey)
+  }
+  formattedJsonCache.set(cacheKey, formatted)
+  return formatted
 }
 
 function getProviderName(log) {
@@ -619,11 +642,8 @@ function startRealtime() {
         return
       }
       // 添加新日志到列表顶部
-      logs.value.unshift(log)
-      // 保持列表大小合理
-      if (logs.value.length > 100) {
-        logs.value = logs.value.slice(0, 100)
-      }
+      logs.value = [log, ...logs.value].slice(0, 100)
+      formattedJsonCache.clear()
     } catch (err) {
       console.error('Error parsing SSE message:', err)
     }
@@ -758,11 +778,10 @@ h2 {
   align-items: flex-start;
   margin-bottom: 24px;
   padding: 18px;
-  background: rgba(255, 255, 255, 0.88);
-  backdrop-filter: blur(14px);
+  background: rgba(255, 255, 255, 0.96);
   border-radius: 22px;
   border: 1px solid rgba(226, 232, 240, 0.95);
-  box-shadow: 0 20px 44px rgba(15, 23, 42, 0.07);
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.05);
   flex-wrap: wrap;
   gap: 15px;
 }
@@ -871,7 +890,7 @@ h2 {
   cursor: pointer;
   font-size: 14px;
   font-weight: 700;
-  transition: all 0.22s ease;
+  transition: background-color 0.18s ease, color 0.18s ease, opacity 0.18s ease;
   white-space: nowrap;
   background: linear-gradient(135deg, #15803d 0%, #166534 100%);
   color: white;
@@ -880,12 +899,11 @@ h2 {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  box-shadow: 0 12px 24px rgba(22, 101, 52, 0.18);
+  box-shadow: 0 6px 14px rgba(22, 101, 52, 0.12);
 }
 
 .btn-action:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 16px 28px rgba(15, 23, 42, 0.16);
+  opacity: 0.96;
 }
 
 .btn-action.btn-today {
@@ -961,11 +979,11 @@ h2 {
 
 .stat-card {
   padding: 16px 18px;
-  background: linear-gradient(180deg, rgba(255,255,255,0.96) 0%, rgba(247,250,252,0.92) 100%);
+  background: linear-gradient(180deg, rgba(255,255,255,0.98) 0%, rgba(247,250,252,0.95) 100%);
   border-radius: 18px;
   border: 1px solid rgba(226, 232, 240, 0.95);
   border-left: 4px solid #2196F3;
-  box-shadow: 0 14px 28px rgba(15, 23, 42, 0.05);
+  box-shadow: 0 6px 14px rgba(15, 23, 42, 0.04);
 }
 
 .stat-card.success {
@@ -994,12 +1012,11 @@ h2 {
 
 /* 日志列表 */
 .logs-content {
-  background: rgba(255, 255, 255, 0.92);
-  backdrop-filter: blur(16px);
+  background: rgba(255, 255, 255, 0.98);
   border-radius: 24px;
   padding: 22px;
   border: 1px solid rgba(226, 232, 240, 0.95);
-  box-shadow: 0 24px 56px rgba(15, 23, 42, 0.08);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.05);
 }
 
 .no-data {
@@ -1012,8 +1029,6 @@ h2 {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  max-height: 600px;
-  overflow-y: auto;
 }
 
 .log-entry {
@@ -1022,23 +1037,23 @@ h2 {
   overflow: hidden;
   flex-shrink: 0;
   min-height: 50px;
-  background: linear-gradient(180deg, rgba(255,255,255,0.98) 0%, rgba(247,250,252,0.96) 100%);
-  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.04);
+  background: linear-gradient(180deg, rgba(255,255,255,0.99) 0%, rgba(247,250,252,0.97) 100%);
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.03);
 }
 
 .log-header {
   display: flex;
   align-items: center;
   padding: 13px 16px;
-  background: rgba(248, 250, 252, 0.8);
+  background: rgba(248, 250, 252, 0.9);
   cursor: pointer;
-  transition: all 0.22s ease;
+  transition: background-color 0.18s ease;
   gap: 10px;
   flex-wrap: wrap;
 }
 
 .log-header:hover {
-  background: rgba(241, 245, 249, 0.95);
+  background: rgba(241, 245, 249, 1);
 }
 
 .log-badge {
