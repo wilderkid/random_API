@@ -3,60 +3,69 @@
     <!-- 左侧提供商列表 -->
     <div class="providers-sidebar">
       <div class="sidebar-header">
-        <!-- 风格选择器 -->
-        <div class="api-style-selector" ref="apiStyleSelectorRef">
-          <div class="api-style-select-trigger" @click="toggleApiStyleDropdown">
-            <span class="api-style-icon">{{ currentApiStyleConfig?.icon || '✨' }}</span>
-            <span class="selected-api-style">{{ currentApiStyleConfig?.name || '简约风格' }}</span>
-            <span class="dropdown-arrow">{{ showApiStyleDropdown ? '▲' : '▼' }}</span>
-          </div>
-          <div v-if="showApiStyleDropdown" class="api-style-dropdown">
-            <input
-              v-model="apiStyleSearchQuery"
-              placeholder="搜索风格..."
-              class="api-style-search-input"
-              ref="apiStyleSearchInput"
-              @click.stop
-            >
-            <div class="api-style-options" ref="apiStyleOptionsContainer">
-              <div
-                v-for="style in filteredApiStyles"
-                :key="style.id"
-                :class="['api-style-option', { active: currentApiStyle === style.id }]"
-                @click="selectApiStyle(style.id)"
-                :title="style.description"
-                :ref="el => setApiStyleOptionRef(style.id, el)"
+        <button
+          class="sidebar-tools-toggle"
+          type="button"
+          @click="isSidebarToolsCollapsed = !isSidebarToolsCollapsed"
+        >
+          {{ isSidebarToolsCollapsed ? '展开工具' : '收起工具' }}
+        </button>
+        <div :class="['sidebar-tools', { collapsed: isSidebarToolsCollapsed }]">
+          <!-- 风格选择器 -->
+          <div class="api-style-selector" ref="apiStyleSelectorRef">
+            <div class="api-style-select-trigger" @click="toggleApiStyleDropdown">
+              <span class="api-style-icon">{{ currentApiStyleConfig?.icon || '✨' }}</span>
+              <span class="selected-api-style">{{ currentApiStyleConfig?.name || '简约风格' }}</span>
+              <span class="dropdown-arrow">{{ showApiStyleDropdown ? '▲' : '▼' }}</span>
+            </div>
+            <div v-if="showApiStyleDropdown" class="api-style-dropdown">
+              <input
+                v-model="apiStyleSearchQuery"
+                placeholder="搜索风格..."
+                class="api-style-search-input"
+                ref="apiStyleSearchInput"
+                @click.stop
               >
-                <span class="api-style-option-icon">{{ style.icon }}</span>
-                <span class="api-style-option-name">{{ style.name }}</span>
+              <div class="api-style-options" ref="apiStyleOptionsContainer">
+                <div
+                  v-for="style in filteredApiStyles"
+                  :key="style.id"
+                  :class="['api-style-option', { active: currentApiStyle === style.id }]"
+                  @click="selectApiStyle(style.id)"
+                  :title="style.description"
+                  :ref="el => setApiStyleOptionRef(style.id, el)"
+                >
+                  <span class="api-style-option-icon">{{ style.icon }}</span>
+                  <span class="api-style-option-name">{{ style.name }}</span>
+                </div>
+                <div v-if="filteredApiStyles.length === 0" class="api-style-empty">未找到匹配的风格</div>
               </div>
-              <div v-if="filteredApiStyles.length === 0" class="api-style-empty">未找到匹配的风格</div>
             </div>
           </div>
-        </div>
 
-        <input v-model="searchProvider" placeholder="搜索模型平台名..." class="search-input">
-        <div class="button-group">
-          <button @click="showAddProvider = true" class="btn-add-provider">+ 添加</button>
-          <button @click="importProviders" class="btn-import">导入</button>
-          <button @click="exportProviders" class="btn-export">导出</button>
-        </div>
-        <div class="button-group">
-          <button @click="refreshAllModels" class="btn-refresh-all" :disabled="isRefreshingAll">
-            {{ isRefreshingAll ? '刷新中...' : '🔄 刷新所有模型' }}
-          </button>
-        </div>
-        <div class="button-group danger-group">
-          <button @click="toggleBatchSelectMode" :class="['btn-batch-select', { active: batchSelectMode }]">
-            {{ batchSelectMode ? '✓ 取消选择' : '☐ 批量选择' }}
-          </button>
-          <button v-if="batchSelectMode && selectedProviderIds.length > 0" @click="batchDeleteProviders" class="btn-batch-delete">
-            🗑 删除选中 ({{ selectedProviderIds.length }})
-          </button>
-          <button @click="clearAllProviders" class="btn-clear-all">🗑 清除所有</button>
-        </div>
-        <div class="group-management">
-          <button @click="showGroupManager = true" class="btn-manage-groups">📁 管理分组</button>
+          <input v-model="searchProvider" placeholder="搜索模型平台名..." class="search-input">
+          <div class="button-group">
+            <button @click="showAddProvider = true" class="btn-add-provider">+ 添加</button>
+            <button @click="importProviders" class="btn-import">导入</button>
+            <button @click="exportProviders" class="btn-export">导出</button>
+          </div>
+          <div class="button-group">
+            <button @click="refreshAllModels" class="btn-refresh-all" :disabled="isRefreshingAll">
+              {{ isRefreshingAll ? '刷新中...' : '🔄 刷新所有模型' }}
+            </button>
+          </div>
+          <div class="button-group danger-group">
+            <button @click="toggleBatchSelectMode" :class="['btn-batch-select', { active: batchSelectMode }]">
+              {{ batchSelectMode ? '✓ 取消选择' : '☐ 批量选择' }}
+            </button>
+            <button v-if="batchSelectMode && selectedProviderIds.length > 0" @click="batchDeleteProviders" class="btn-batch-delete">
+              🗑 删除选中 ({{ selectedProviderIds.length }})
+            </button>
+            <button @click="clearAllProviders" class="btn-clear-all">🗑 清除所有</button>
+          </div>
+          <div class="group-management">
+            <button @click="showGroupManager = true" class="btn-manage-groups">📁 管理分组</button>
+          </div>
         </div>
       </div>
       
@@ -409,6 +418,7 @@ const availableModelsCache = ref({}) // 缓存每个提供商的模型列表
 const expandedGroupsCache = ref({}) // 缓存每个提供商的展开状态
 const expandedGroups = ref({}) // 分组展开状态
 const showAddProvider = ref(false)
+const isSidebarToolsCollapsed = ref(false)
 const editingProvider = ref(null)
 const providerForm = ref({ name: '', baseUrl: '', apiKey: '', groupId: 'default', apiType: 'openai', customEndpoints: { chat: '', models: '', images: '' } })
 const showAdvanced = ref(false)
@@ -1536,6 +1546,34 @@ onUnmounted(() => {
 .sidebar-header {
   padding: 20px;
   border-bottom: 1px solid #dee2e6;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.sidebar-tools-toggle {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid rgba(203, 213, 225, 0.9);
+  border-radius: 6px;
+  background: #f8fafc;
+  color: #1f2937;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.sidebar-tools-toggle:hover {
+  background: #e2e8f0;
+}
+
+.sidebar-tools {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.sidebar-tools.collapsed {
+  display: none;
 }
 
 .group-management {
