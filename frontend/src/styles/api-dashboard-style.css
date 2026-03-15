@@ -962,8 +962,15 @@
   padding: 32px;
   max-width: 500px;
   width: 90%;
+  max-height: 90vh;
+  overflow-y: auto;
   box-shadow: var(--ab-shadow-xl);
   border: 1px solid var(--ab-border);
+}
+
+.api-settings-container.api-style-dashboard .modal-content.modal-wide {
+  max-width: 1120px;
+  width: min(98vw, 1120px);
 }
 
 .api-settings-container.api-style-dashboard .modal-content.modal-large {

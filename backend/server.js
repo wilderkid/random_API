@@ -323,7 +323,9 @@ async function initDataDir() {
       ],
       pollingConfig: { available: {}, excluded: {}, disabled: {} },
       pollingState: {}, // 存储每个模型的轮询状态
+      keyPollingState: {}, // 存储每个提供商的Key轮询状态
       modelFailCounts: {}, // 存储每个模型在每个提供商的失败计数
+      keyFailCounts: {}, // 存储每个提供商Key的失败计数
       proxyApiKey: '', // 代理接口密钥（向后兼容）
       proxyApiKeys: {}, // 多API密钥管理
       conversationProviderMap: {} // 会话-提供商映射（用于对话连续性）
@@ -414,7 +416,9 @@ async function getUserSettings() {
       globalFrequency: 10,
       pollingConfig: { available: {}, excluded: {}, disabled: {} },
       pollingState: {},
+      keyPollingState: {},
       modelFailCounts: {},
+      keyFailCounts: {},
       proxyApiKey: '',
       proxyApiKeys: {},
       conversationProviderMap: {}
@@ -648,11 +652,11 @@ app.delete('/api/providers/:id', async (req, res) => {
   res.json({ success: true });
 });
 
-async function fetchProviderModelsFromRemote(provider, timeout = 10000) {
+async function fetchProviderModelsFromRemote(provider, timeout = 10000, keyInfo = null) {
   const apiType = provider.apiType || 'openai';
   const url = buildApiUrl(provider.baseUrl, 'models', apiType, provider.customEndpoints);
   const response = await axios.get(url, {
-    headers: { 'Authorization': `Bearer ${provider.apiKey}` },
+    headers: { 'Authorization': `Bearer ${keyInfo?.key?.apiKey || provider.apiKey}` },
     timeout
   });
   return response.data.data || [];
@@ -671,10 +675,10 @@ function mergeProviderModelsWithVisibility(oldModels = [], remoteModels = []) {
 }
 
 async function refreshSingleProviderModels(provider, options = {}) {
-  const { timeout = 10000, clearOnFailure = false } = options;
+  const { timeout = 10000, clearOnFailure = false, keyInfo = null } = options;
 
   try {
-    const remoteModels = await fetchProviderModelsFromRemote(provider, timeout);
+    const remoteModels = await fetchProviderModelsFromRemote(provider, timeout, keyInfo);
     provider.models = mergeProviderModelsWithVisibility(provider.models || [], remoteModels);
 
     return {
@@ -705,7 +709,8 @@ app.get('/api/providers/:id/models', async (req, res) => {
   if (!provider) return res.status(404).json({ error: 'Provider not found' });
 
   try {
-    const models = await fetchProviderModelsFromRemote(provider, 10000);
+    const keyInfo = selectProviderKey(provider, await getUserSettings());
+    const models = await fetchProviderModelsFromRemote(provider, 10000, keyInfo);
     res.json(models);
   } catch (error) {
     console.error('Error fetching models:', error.message);
@@ -722,9 +727,11 @@ app.post('/api/providers/:id/refresh-models', async (req, res) => {
     return res.status(400).json({ error: '该提供商已被禁用，无法刷新模型' });
   }
 
+  const keyInfo = selectProviderKey(provider, await getUserSettings());
   const result = await refreshSingleProviderModels(provider, {
     timeout: 15000,
-    clearOnFailure: false
+    clearOnFailure: false,
+    keyInfo
   });
 
   if (!result.success) {
@@ -759,6 +766,7 @@ app.post('/api/providers/refresh-all-models', async (req, res) => {
   // 过滤掉已禁用的提供商和排除自动刷新的提供商
   const activeProviders = data.providers.filter(p => !p.disabled && !p.excludeAutoRefresh);
   const skippedProviders = data.providers.filter(p => !p.disabled && p.excludeAutoRefresh);
+  const userSettings = await getUserSettings();
 
   results.total = activeProviders.length;
   results.skippedCount = skippedProviders.length;
@@ -775,7 +783,8 @@ app.post('/api/providers/refresh-all-models', async (req, res) => {
   const refreshResults = await Promise.all(
     activeProviders.map(provider => refreshSingleProviderModels(provider, {
       timeout: 10000,
-      clearOnFailure: true
+      clearOnFailure: true,
+      keyInfo: selectProviderKey(provider, userSettings)
     }))
   );
 
@@ -812,8 +821,10 @@ app.get('/api/providers/:id/test', async (req, res) => {
   try {
     const apiType = provider.apiType || 'openai';
     const url = buildApiUrl(provider.baseUrl, 'models', apiType, provider.customEndpoints);
+    const keyInfo = selectProviderKey(provider, await getUserSettings());
+    const apiKey = keyInfo?.key?.apiKey || provider.apiKey;
     await axios.get(url, {
-      headers: { 'Authorization': `Bearer ${provider.apiKey}` },
+      headers: { 'Authorization': `Bearer ${apiKey}` },
       timeout: 8000 // 增加超时时间
     });
     res.json({ success: true });
@@ -1423,9 +1434,10 @@ app.post('/api/chat', async (req, res) => {
     for (const provider of pollingProviders) {
       try {
         console.log(`Trying provider ${provider.name} (ID: ${provider.id}) for model ${modelName}`);
+        const keyInfo = selectProviderKey(provider, userSettings);
 
         // 获取该提供商的具体模型ID
-        const modelId = await getProviderModelId(provider, modelName);
+        const modelId = await getProviderModelId(provider, modelName, keyInfo);
         if (!modelId) {
           console.log(`Model ${modelName} not found in provider ${provider.name}`);
           errors.push({
@@ -1433,6 +1445,7 @@ app.post('/api/chat', async (req, res) => {
             error: `模型 ${modelName} 在提供商中不存在`
           });
           await incrementModelFailCount(provider.id, modelName, userSettings);
+          await incrementKeyFailCount(keyInfo?.key?.id, userSettings);
           continue; // 尝试下一个提供商
         }
 
@@ -1456,14 +1469,15 @@ app.post('/api/chat', async (req, res) => {
           }
 
           console.log(`[ImageGen] Generating image with prompt: ${prompt.substring(0, 50)}...`);
-          await generateImage(provider, prompt, params, res, modelId);
+          await generateImage(provider, prompt, params, res, modelId, keyInfo);
         } else {
           // 文本模型，使用原有的streamChat
-          await streamChat(provider, messages, params, res, modelId, images, processedSystemPrompt);
+          await streamChat(provider, messages, params, res, modelId, images, processedSystemPrompt, keyInfo);
         }
 
         // 如果成功，重置模型失败计数并保存轮询状态
         await resetModelFailCount(provider.id, modelName, userSettings);
+        await resetKeyFailCount(keyInfo?.key?.id, userSettings);
 
         // 标记该提供商在当前轮次已使用
         const pollingState = userSettings.pollingState || {};
@@ -1495,6 +1509,7 @@ app.post('/api/chat', async (req, res) => {
 
         // 增加模型失败计数
         await incrementModelFailCount(provider.id, modelName, userSettings);
+        await incrementKeyFailCount(keyInfo?.key?.id, userSettings);
         await savePollingState(userSettings);
 
         // 继续尝试下一个提供商
@@ -2297,6 +2312,88 @@ function getNextPollingProvider(providers, modelName, config, userSettings) {
   return selectedProvider;
 }
 
+function normalizeProviderKeysForRuntime(provider) {
+  const rawKeys = Array.isArray(provider.apiKeys) ? provider.apiKeys : [];
+  if (rawKeys.length > 0) {
+    return rawKeys.map((key, index) => ({
+      id: key.id || `${provider.id}-key-${index + 1}`,
+      name: key.name || `Key ${index + 1}`,
+      apiKey: key.apiKey || key.api_key || '',
+      enabled: key.enabled !== false
+    }));
+  }
+
+  if (provider.apiKey) {
+    return [{
+      id: `${provider.id}-key-1`,
+      name: '默认 Key',
+      apiKey: provider.apiKey,
+      enabled: true
+    }];
+  }
+
+  return [];
+}
+
+function selectProviderKey(provider, userSettings) {
+  const allKeys = normalizeProviderKeysForRuntime(provider).filter(key => key.apiKey);
+  if (allKeys.length === 0) {
+    return { key: null, keys: [] };
+  }
+
+  const keyFailCounts = userSettings.keyFailCounts || {};
+  userSettings.keyFailCounts = keyFailCounts;
+
+  const enabledKeys = allKeys.filter(key => key.enabled !== false);
+  const validKeys = enabledKeys.filter(key => (keyFailCounts[key.id] || 0) < CONFIG.MODEL_FAIL_THRESHOLD);
+
+  if (validKeys.length === 0) {
+    return { key: null, keys: enabledKeys };
+  }
+
+  const keyPollingState = userSettings.keyPollingState || {};
+  if (!keyPollingState[provider.id]) {
+    keyPollingState[provider.id] = { currentIndex: 0, usedInCurrentRound: [] };
+  }
+  userSettings.keyPollingState = keyPollingState;
+
+  const providerState = keyPollingState[provider.id];
+  if (!Array.isArray(providerState.usedInCurrentRound)) {
+    providerState.usedInCurrentRound = [];
+  }
+
+  if (providerState.usedInCurrentRound.length >= validKeys.length) {
+    providerState.usedInCurrentRound = [];
+  }
+
+  const unusedKeys = validKeys.filter(key => !providerState.usedInCurrentRound.includes(key.id));
+  const candidateKeys = unusedKeys.length > 0 ? unusedKeys : validKeys;
+  const selectedKey = candidateKeys[Math.floor(Math.random() * candidateKeys.length)];
+
+  if (selectedKey && !providerState.usedInCurrentRound.includes(selectedKey.id)) {
+    providerState.usedInCurrentRound.push(selectedKey.id);
+  }
+
+  return { key: selectedKey, keys: validKeys };
+}
+
+function incrementKeyFailCount(keyId, userSettings) {
+  if (!keyId) return;
+  if (!userSettings.keyFailCounts) {
+    userSettings.keyFailCounts = {};
+  }
+  userSettings.keyFailCounts[keyId] = (userSettings.keyFailCounts[keyId] || 0) + 1;
+  console.log(`Key ${keyId} fail count: ${userSettings.keyFailCounts[keyId]}`);
+}
+
+function resetKeyFailCount(keyId, userSettings) {
+  if (!keyId || !userSettings.keyFailCounts) return;
+  if (userSettings.keyFailCounts[keyId]) {
+    userSettings.keyFailCounts[keyId] = 0;
+    console.log(`Reset key fail count for ${keyId}`);
+  }
+}
+
 // 保存轮询状态到文件
 async function savePollingState(userSettings) {
   try {
@@ -2551,7 +2648,7 @@ async function resetFailCount(providerId) {
   }
 }
 
-async function getProviderModelId(provider, modelName) {
+async function getProviderModelId(provider, modelName, keyInfo = null) {
   try {
     // 首先尝试从provider.models中查找（避免额外的API调用）
     if (provider.models && provider.models.length > 0) {
@@ -2569,8 +2666,9 @@ async function getProviderModelId(provider, modelName) {
     // 如果在provider.models中找不到，尝试从API获取
     const apiType = provider.apiType || 'openai';
     const url = buildApiUrl(provider.baseUrl, 'models', apiType, provider.customEndpoints);
+    const apiKey = keyInfo?.key?.apiKey || provider.apiKey;
     const response = await axios.get(url, {
-      headers: { 'Authorization': `Bearer ${provider.apiKey}` },
+      headers: { 'Authorization': `Bearer ${apiKey}` },
       timeout: 10000
     });
 
@@ -2651,13 +2749,23 @@ class BackgroundTaskProcessor {
   }
 
   // Handle success logging and state updates
-  handleSuccess(selectedProvider, pureModelName, userSettings, pollingConfig, sessionIdentifier) {
+  handleSuccess(selectedProvider, pureModelName, userSettings, pollingConfig, sessionIdentifier, keyInfo = null) {
     this.addTask(async () => {
       try {
         // Run these operations in parallel
         await Promise.all([
-          logApiCall(selectedProvider.name, pureModelName, true),
-          resetModelFailCount(selectedProvider.id, pureModelName, userSettings)
+          logApiCall({
+            provider: selectedProvider.name,
+            model: pureModelName,
+            success: true,
+            metadata: {
+              providerId: selectedProvider.id,
+              apiKeyId: keyInfo?.key?.id || null,
+              apiKeyName: keyInfo?.key?.name || null
+            }
+          }),
+          resetModelFailCount(selectedProvider.id, pureModelName, userSettings),
+          resetKeyFailCount(keyInfo?.key?.id, userSettings)
         ]);
 
         // Update polling state (synchronous)
@@ -2677,7 +2785,7 @@ class BackgroundTaskProcessor {
   }
 
   // Handle failure logging
-  handleFailure(selectedProvider, pureModelName, userSettings, errorMessage) {
+  handleFailure(selectedProvider, pureModelName, userSettings, errorMessage, keyInfo = null) {
     this.addTask(async () => {
       try {
         await Promise.all([
@@ -2687,10 +2795,13 @@ class BackgroundTaskProcessor {
             success: false,
             errorMessage,
             metadata: {
-              providerId: selectedProvider.id
+              providerId: selectedProvider.id,
+              apiKeyId: keyInfo?.key?.id || null,
+              apiKeyName: keyInfo?.key?.name || null
             }
           }),
-          incrementModelFailCount(selectedProvider.id, pureModelName, userSettings)
+          incrementModelFailCount(selectedProvider.id, pureModelName, userSettings),
+          incrementKeyFailCount(keyInfo?.key?.id, userSettings)
         ]);
         await savePollingState(userSettings);
       } catch (error) {
@@ -3224,7 +3335,7 @@ function convertAnthropicJsonToOpenAI(anthropicResponse) {
 }
 
 // Performance optimization: Simplified streaming response handler
-async function handleStreamingResponse(response, res, stream, selectedProvider, pureModelName, userSettings, pollingConfig, sessionIdentifier, apiType, requestMessages = [], skipConverter = false) {
+async function handleStreamingResponse(response, res, stream, selectedProvider, pureModelName, userSettings, pollingConfig, sessionIdentifier, apiType, requestMessages = [], skipConverter = false, keyInfo = null) {
   const originalContentType = response.headers['content-type'];
   let tokenUsage = null;
 
@@ -3315,7 +3426,7 @@ async function handleStreamingResponse(response, res, stream, selectedProvider, 
       }
       if (!responseCompleted) {
         responseCompleted = true;
-        backgroundProcessor.handleSuccess(selectedProvider, pureModelName, userSettings, pollingConfig, sessionIdentifier);
+        backgroundProcessor.handleSuccess(selectedProvider, pureModelName, userSettings, pollingConfig, sessionIdentifier, keyInfo);
       }
     });
 
@@ -3368,7 +3479,7 @@ async function handleStreamingResponse(response, res, stream, selectedProvider, 
         }
 
         // Handle success in background (non-blocking)
-        backgroundProcessor.handleSuccess(selectedProvider, pureModelName, userSettings, pollingConfig, sessionIdentifier);
+        backgroundProcessor.handleSuccess(selectedProvider, pureModelName, userSettings, pollingConfig, sessionIdentifier, keyInfo);
 
       } catch (parseError) {
         log.error('Error parsing response:', parseError);
@@ -3388,7 +3499,7 @@ async function handleStreamingResponse(response, res, stream, selectedProvider, 
       log.error('Stream error:', error.message);
 
       // Handle failure in background
-      backgroundProcessor.handleFailure(selectedProvider, pureModelName, userSettings, error.message);
+      backgroundProcessor.handleFailure(selectedProvider, pureModelName, userSettings, error.message, keyInfo);
 
       if (stream) {
         res.write(`data: ${JSON.stringify({ error: { message: error.message } })}\n\n`);
@@ -3524,8 +3635,9 @@ function parseImageResponse(data, apiType) {
  * @param {Object} params - 参数
  * @param {Object} res - 响应对象
  * @param {string} modelId - 模型ID
+ * @param {Object|null} keyInfo - key selection result
  */
-async function generateImage(provider, prompt, params, res, modelId) {
+async function generateImage(provider, prompt, params, res, modelId, keyInfo = null) {
   log.info(`[ImageGen] Starting image generation with provider: ${provider.name}, model: ${modelId}`);
   log.verbose(`[ImageGen] Prompt: ${prompt.substring(0, 100)}...`);
   log.verbose(`[ImageGen] Params:`, params);
@@ -3552,7 +3664,7 @@ async function generateImage(provider, prompt, params, res, modelId) {
     // 调用API（非流式，等待完整响应）
     const response = await axios.post(url, requestBody, {
       headers: {
-        'Authorization': `Bearer ${provider.apiKey}`,
+        'Authorization': `Bearer ${keyInfo?.key?.apiKey || provider.apiKey}`,
         'Content-Type': 'application/json'
       },
       timeout: CONFIG.STREAM_TIMEOUT // 使用配置的超时时间（120秒）
@@ -3565,7 +3677,15 @@ async function generateImage(provider, prompt, params, res, modelId) {
     log.verbose(`[ImageGen] Generated ${imageData.images.length} image(s)`);
 
     // 记录成功的API调用
-    await logApiCall(provider.name, modelId, true);
+    await logApiCall({
+      provider: provider.name,
+      model: modelId,
+      success: true,
+      metadata: {
+        apiKeyName: keyInfo?.key?.name || null,
+        apiKeyId: keyInfo?.key?.id || null
+      }
+    });
 
     // 发送图片数据（模拟SSE流式响应）
     res.write(`data: ${JSON.stringify({
@@ -3611,7 +3731,9 @@ async function generateImage(provider, prompt, params, res, modelId) {
         request: errorDetails.request,
         responseData: errorDetails.responseData,
         providerMessage: errorDetails.providerMessage,
-        errorType: 'image_generation_error'
+        errorType: 'image_generation_error',
+        apiKeyName: keyInfo?.key?.name || null,
+        apiKeyId: keyInfo?.key?.id || null
       }
     })
 
@@ -3638,7 +3760,7 @@ async function generateImage(provider, prompt, params, res, modelId) {
   }
 }
 
-async function streamChat(provider, messages, params, res, modelId, images, systemPrompt) {
+async function streamChat(provider, messages, params, res, modelId, images, systemPrompt, keyInfo = null) {
   log.verbose(`[DEBUG] streamChat: provider=${provider.name}, modelId=${modelId}, messages=${messages.length}, apiType=${provider.apiType}, systemPrompt=${systemPrompt ? 'yes' : 'no'}`);
 
   const apiType = provider.apiType || 'openai';
@@ -3682,7 +3804,7 @@ async function streamChat(provider, messages, params, res, modelId, images, syst
     const requestBody = buildChatRequestBody(modelId || provider.defaultModel, processedMessages, { ...params, stream: true }, apiType, images, systemPrompt, null, null);
 
     const headers = {
-      'Authorization': `Bearer ${provider.apiKey}`,
+      'Authorization': `Bearer ${keyInfo?.key?.apiKey || provider.apiKey}`,
       'Content-Type': 'application/json',
       ...(apiType === 'anthropic' && {
         'anthropic-version': '2023-06-01'
@@ -3700,7 +3822,15 @@ async function streamChat(provider, messages, params, res, modelId, images, syst
     log.verbose(`[DEBUG] streamChat: Request successful, response status: ${response.status}`);
 
     // Record successful API call
-    await logApiCall(provider.name, modelId || provider.defaultModel, true);
+    await logApiCall({
+      provider: provider.name,
+      model: modelId || provider.defaultModel,
+      success: true,
+      metadata: {
+        apiKeyName: keyInfo?.key?.name || null,
+        apiKeyId: keyInfo?.key?.id || null
+      }
+    });
 
     // Performance optimization: Add error handling and timeout control
     let streamClosed = false;
@@ -3773,7 +3903,9 @@ async function streamChat(provider, messages, params, res, modelId, images, syst
         request: errorDetails.request,
         responseData: errorDetails.responseData,
         providerMessage: errorDetails.providerMessage,
-        apiType
+        apiType,
+        apiKeyName: keyInfo?.key?.name || null,
+        apiKeyId: keyInfo?.key?.id || null
       }
     });
     throw error;
@@ -4230,7 +4362,8 @@ app.post('/v1/responses', verifyProxyApiKey, async (req, res) => {
 
       console.log(`[请求] 尝试 ${attempt + 1}/${failoverProviders.length}: 使用提供商 ${currentProvider.name} (ID: ${currentProvider.id})`);
 
-      const providerModelId = await getProviderModelId(currentProvider, pureModelName);
+      const keyInfo = selectProviderKey(currentProvider, userSettings);
+      const providerModelId = await getProviderModelId(currentProvider, pureModelName, keyInfo);
       if (!providerModelId) {
         console.log(`[错误] 模型 ${pureModelName} 在提供商 ${currentProvider.name} 中未找到，尝试下一个...`);
         errors.push({
@@ -4238,6 +4371,7 @@ app.post('/v1/responses', verifyProxyApiKey, async (req, res) => {
           error: `Model not found in provider`
         });
         await incrementModelFailCount(currentProvider.id, pureModelName, userSettings);
+        await incrementKeyFailCount(keyInfo?.key?.id, userSettings);
         continue;
       }
 
@@ -4261,7 +4395,7 @@ app.post('/v1/responses', verifyProxyApiKey, async (req, res) => {
         );
 
         const headers = {
-          'Authorization': `Bearer ${currentProvider.apiKey}`,
+          'Authorization': `Bearer ${keyInfo?.key?.apiKey || currentProvider.apiKey}`,
           'Content-Type': 'application/json',
           ...(apiType === 'anthropic' && {
             'anthropic-version': '2023-06-01'
@@ -4285,7 +4419,7 @@ app.post('/v1/responses', verifyProxyApiKey, async (req, res) => {
 
         const responsePayload = buildResponsesFromChatCompletion(jsonData, providerModelId);
 
-        backgroundProcessor.handleSuccess(currentProvider, pureModelName, userSettings, pollingConfig, sessionIdentifier);
+        backgroundProcessor.handleSuccess(currentProvider, pureModelName, userSettings, pollingConfig, sessionIdentifier, keyInfo);
 
         perfTracker.checkpoint('request_complete');
         setImmediate(() => {
@@ -4336,7 +4470,7 @@ app.post('/v1/responses', verifyProxyApiKey, async (req, res) => {
         const errorDetails = parseErrorResponse(error);
         const errorMessage = formatErrorForLog(errorDetails);
 
-        backgroundProcessor.handleFailure(currentProvider, pureModelName, userSettings, errorMessage);
+        backgroundProcessor.handleFailure(currentProvider, pureModelName, userSettings, errorMessage, keyInfo);
 
         errors.push({
           provider: currentProvider.name,
@@ -4692,8 +4826,10 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
 
       console.log(`[请求] 尝试 ${attempt + 1}/${failoverProviders.length}: 使用提供商 ${selectedProvider.name} (ID: ${selectedProvider.id})`);
 
+      const keyInfo = selectProviderKey(selectedProvider, userSettings);
+
       // 获取该提供商的具体模型ID
-      const providerModelId = await getProviderModelId(selectedProvider, pureModelName);
+      const providerModelId = await getProviderModelId(selectedProvider, pureModelName, keyInfo);
       if (!providerModelId) {
         console.log(`[错误] 模型 ${pureModelName} 在提供商 ${selectedProvider.name} 中未找到，尝试下一个...`);
         errors.push({
@@ -4701,6 +4837,7 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
           error: `Model not found in provider`
         });
         await incrementModelFailCount(selectedProvider.id, pureModelName, userSettings);
+        await incrementKeyFailCount(keyInfo?.key?.id, userSettings);
         continue;
       }
 
@@ -4727,7 +4864,7 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
           };
 
           const headers = {
-            'Authorization': `Bearer ${selectedProvider.apiKey}`,
+            'Authorization': `Bearer ${keyInfo?.key?.apiKey || selectedProvider.apiKey}`,
             'Content-Type': 'application/json',
             ...(apiType === 'anthropic' && {
               'anthropic-version': '2023-06-01'
@@ -4798,7 +4935,7 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
 
           // Use simplified streaming response handler
           // 透传模式：跳过格式转换器，直接透传数据
-          const streamResult = await handleStreamingResponse(response, res, stream, selectedProvider, pureModelName, userSettings, pollingConfig, sessionIdentifier, apiType, messages, true);
+          const streamResult = await handleStreamingResponse(response, res, stream, selectedProvider, pureModelName, userSettings, pollingConfig, sessionIdentifier, apiType, messages, true, keyInfo);
 
           // Stream request successfully initiated, exit loop
           console.log(`[流式] 流式响应处理完成`);
@@ -4847,7 +4984,7 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
           const errorMessage = parseErrorResponse(error);
 
           // Handle failure in background (non-blocking)
-          backgroundProcessor.handleFailure(selectedProvider, pureModelName, userSettings, errorMessage);
+          backgroundProcessor.handleFailure(selectedProvider, pureModelName, userSettings, errorMessage, keyInfo);
 
           errors.push({
             provider: selectedProvider.name,
@@ -4869,7 +5006,7 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
           };
 
           const headers = {
-            'Authorization': `Bearer ${selectedProvider.apiKey}`,
+            'Authorization': `Bearer ${keyInfo?.key?.apiKey || selectedProvider.apiKey}`,
             'Content-Type': 'application/json',
             ...(apiType === 'anthropic' && {
               'anthropic-version': '2023-06-01'
@@ -4911,7 +5048,7 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
           console.log(`[非流式] 请求成功，状态码: ${response.status}`);
 
           // Handle success in background (non-blocking)
-          backgroundProcessor.handleSuccess(selectedProvider, pureModelName, userSettings, pollingConfig, sessionIdentifier);
+          backgroundProcessor.handleSuccess(selectedProvider, pureModelName, userSettings, pollingConfig, sessionIdentifier, keyInfo);
 
           console.log(`[非流式] 使用提供商 ${selectedProvider.name} 完成请求`);
 
@@ -4956,7 +5093,7 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
           const errorMessage = parseErrorResponse(error);
 
           // Handle failure in background (non-blocking)
-          backgroundProcessor.handleFailure(selectedProvider, pureModelName, userSettings, errorMessage);
+          backgroundProcessor.handleFailure(selectedProvider, pureModelName, userSettings, errorMessage, keyInfo);
 
           errors.push({
             provider: selectedProvider.name,

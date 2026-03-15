@@ -857,8 +857,15 @@
   padding: 28px;
   max-width: 480px;
   width: 90%;
+  max-height: 90vh;
+  overflow-y: auto;
   box-shadow: var(--ad-shadow-lg);
   border: 1px solid var(--ad-border);
+}
+
+.api-settings-container.api-style-dark .modal-content.modal-wide {
+  max-width: 1120px;
+  width: min(98vw, 1120px);
 }
 
 .api-settings-container.api-style-dark .modal-content.modal-large {

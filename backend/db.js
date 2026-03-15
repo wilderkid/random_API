@@ -71,6 +71,24 @@ function createSchema(db) {
     CREATE INDEX IF NOT EXISTS idx_providers_group_id ON providers(group_id);
     CREATE INDEX IF NOT EXISTS idx_providers_disabled ON providers(disabled);
 
+    CREATE TABLE IF NOT EXISTS provider_keys (
+      id TEXT PRIMARY KEY,
+      provider_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      api_key TEXT NOT NULL,
+      enabled INTEGER DEFAULT 1,
+      weight INTEGER DEFAULT 1,
+      priority INTEGER DEFAULT 0,
+      fail_count INTEGER DEFAULT 0,
+      last_used_at TEXT,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (provider_id) REFERENCES providers(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_provider_keys_provider_id ON provider_keys(provider_id);
+    CREATE INDEX IF NOT EXISTS idx_provider_keys_enabled ON provider_keys(enabled);
+
     CREATE TABLE IF NOT EXISTS provider_models (
       provider_id TEXT NOT NULL,
       model_id TEXT NOT NULL,

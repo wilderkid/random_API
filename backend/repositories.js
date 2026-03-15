@@ -29,7 +29,9 @@ const DEFAULT_USER_SETTINGS = {
   ],
   pollingConfig: { available: {}, excluded: {}, disabled: {} },
   pollingState: {},
+  keyPollingState: {},
   modelFailCounts: {},
+  keyFailCounts: {},
   proxyApiKey: '',
   proxyApiKeys: {},
   conversationProviderMap: {}
@@ -84,6 +86,41 @@ function deserialize(value, fallback = null) {
   }
 }
 
+function normalizeProviderKeys(provider) {
+  if (!provider) return [];
+
+  const rawKeys = Array.isArray(provider.apiKeys) ? provider.apiKeys : [];
+  if (rawKeys.length > 0) {
+    return rawKeys.map((key, index) => ({
+      id: key.id || `${provider.id}-key-${index + 1}`,
+      name: key.name || `Key ${index + 1}`,
+      apiKey: key.apiKey || key.api_key || '',
+      enabled: key.enabled !== false,
+      weight: Number.isFinite(key.weight) ? key.weight : 1,
+      priority: Number.isFinite(key.priority) ? key.priority : 0,
+      failCount: key.failCount || 0,
+      lastUsedAt: key.lastUsedAt || key.last_used_at || null,
+      createdAt: key.createdAt || key.created_at || provider.createdAt || provider.created_at || nowIso()
+    }));
+  }
+
+  if (provider.apiKey) {
+    return [{
+      id: `${provider.id}-key-1`,
+      name: '默认 Key',
+      apiKey: provider.apiKey,
+      enabled: true,
+      weight: 1,
+      priority: 0,
+      failCount: 0,
+      lastUsedAt: null,
+      createdAt: provider.createdAt || provider.created_at || nowIso()
+    }];
+  }
+
+  return [];
+}
+
 function setMeta(db, key, value) {
   db.prepare(`
     INSERT INTO meta (key, value, updated_at)
@@ -130,7 +167,9 @@ function buildUserSettingsFromDb(db) {
     quickTranslations: getSetting(db, 'quickTranslations', DEFAULT_USER_SETTINGS.quickTranslations),
     pollingConfig: getSetting(db, 'pollingConfig', DEFAULT_USER_SETTINGS.pollingConfig),
     pollingState: getSetting(db, 'pollingState', DEFAULT_USER_SETTINGS.pollingState),
+    keyPollingState: getSetting(db, 'keyPollingState', DEFAULT_USER_SETTINGS.keyPollingState),
     modelFailCounts: getSetting(db, 'modelFailCounts', DEFAULT_USER_SETTINGS.modelFailCounts),
+    keyFailCounts: getSetting(db, 'keyFailCounts', DEFAULT_USER_SETTINGS.keyFailCounts),
     proxyApiKey: getSetting(db, 'proxyApiKey', DEFAULT_USER_SETTINGS.proxyApiKey),
     conversationProviderMap: getSetting(db, 'conversationProviderMap', DEFAULT_USER_SETTINGS.conversationProviderMap)
   };
@@ -203,20 +242,32 @@ function replaceProviders(db, providers) {
       updated_at = CURRENT_TIMESTAMP
   `);
 
+  const insertProviderKey = db.prepare(`
+    INSERT INTO provider_keys (
+      id, provider_id, name, api_key, enabled, weight, priority, fail_count, last_used_at, created_at, updated_at
+    ) VALUES (
+      @id, @provider_id, @name, @api_key, @enabled, @weight, @priority, @fail_count, @last_used_at, @created_at, CURRENT_TIMESTAMP
+    )
+  `);
+
   const deleteModels = db.prepare('DELETE FROM provider_models WHERE provider_id = ?');
   const insertModel = db.prepare(`
     INSERT INTO provider_models (provider_id, model_id, visible, type, sort_order, created_at, updated_at)
     VALUES (@provider_id, @model_id, @visible, @type, @sort_order, @created_at, CURRENT_TIMESTAMP)
   `);
 
+  db.prepare('DELETE FROM provider_keys').run();
   db.prepare('DELETE FROM providers').run();
 
   providers.forEach((provider, providerIndex) => {
+    const normalizedKeys = normalizeProviderKeys(provider);
+    const primaryApiKey = provider.apiKey || normalizedKeys.find(key => key.apiKey)?.apiKey || '';
+
     insertProvider.run({
       id: provider.id,
       name: provider.name,
       base_url: provider.baseUrl,
-      api_key: provider.apiKey,
+      api_key: primaryApiKey,
       group_id: provider.groupId || 'default',
       api_type: provider.apiType || 'openai',
       model_type: provider.modelType || 'text',
@@ -227,6 +278,21 @@ function replaceProviders(db, providers) {
       custom_endpoints_models: provider.customEndpoints?.models || '',
       custom_endpoints_images: provider.customEndpoints?.images || '',
       created_at: provider.createdAt || provider.created_at || nowIso()
+    });
+
+    normalizedKeys.forEach(key => {
+      insertProviderKey.run({
+        id: key.id,
+        provider_id: provider.id,
+        name: key.name,
+        api_key: key.apiKey,
+        enabled: key.enabled ? 1 : 0,
+        weight: Number.isFinite(key.weight) ? key.weight : 1,
+        priority: Number.isFinite(key.priority) ? key.priority : 0,
+        fail_count: key.failCount || 0,
+        last_used_at: key.lastUsedAt || null,
+        created_at: key.createdAt || provider.createdAt || provider.created_at || nowIso()
+      });
     });
 
     deleteModels.run(provider.id);
@@ -272,6 +338,12 @@ function buildApiSettingsFromDb(db) {
     ORDER BY provider_id ASC, sort_order ASC, model_id ASC
   `).all();
 
+  const keyRows = db.prepare(`
+    SELECT id, provider_id, name, api_key, enabled, weight, priority, fail_count, last_used_at, created_at, updated_at
+    FROM provider_keys
+    ORDER BY provider_id ASC, priority DESC, weight DESC, created_at ASC, id ASC
+  `).all();
+
   const modelsByProvider = new Map();
   for (const row of modelRows) {
     if (!modelsByProvider.has(row.provider_id)) {
@@ -286,26 +358,64 @@ function buildApiSettingsFromDb(db) {
     });
   }
 
-  const providers = providerRows.map(row => ({
-    id: row.id,
-    name: row.name,
-    baseUrl: row.base_url,
-    apiKey: row.api_key,
-    groupId: row.group_id || 'default',
-    apiType: row.api_type || 'openai',
-    modelType: row.model_type || 'text',
-    disabled: !!row.disabled,
-    failCount: row.fail_count || 0,
-    excludeAutoRefresh: !!row.exclude_auto_refresh,
-    customEndpoints: {
-      chat: row.custom_endpoints_chat || '',
-      models: row.custom_endpoints_models || '',
-      images: row.custom_endpoints_images || ''
-    },
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-    models: modelsByProvider.get(row.id) || []
-  }));
+  const keysByProvider = new Map();
+  for (const row of keyRows) {
+    if (!keysByProvider.has(row.provider_id)) {
+      keysByProvider.set(row.provider_id, []);
+    }
+    keysByProvider.get(row.provider_id).push({
+      id: row.id,
+      name: row.name,
+      apiKey: row.api_key,
+      enabled: !!row.enabled,
+      weight: row.weight || 1,
+      priority: row.priority || 0,
+      failCount: row.fail_count || 0,
+      lastUsedAt: row.last_used_at || null,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at
+    });
+  }
+
+  const providers = providerRows.map(row => {
+    const apiKeys = keysByProvider.get(row.id) || [];
+    const fallbackKeys = apiKeys.length > 0
+      ? apiKeys
+      : (row.api_key ? [{
+        id: `${row.id}-key-1`,
+        name: '默认 Key',
+        apiKey: row.api_key,
+        enabled: true,
+        weight: 1,
+        priority: 0,
+        failCount: 0,
+        lastUsedAt: null,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at
+      }] : []);
+
+    return {
+      id: row.id,
+      name: row.name,
+      baseUrl: row.base_url,
+      apiKey: row.api_key,
+      apiKeys: fallbackKeys,
+      groupId: row.group_id || 'default',
+      apiType: row.api_type || 'openai',
+      modelType: row.model_type || 'text',
+      disabled: !!row.disabled,
+      failCount: row.fail_count || 0,
+      excludeAutoRefresh: !!row.exclude_auto_refresh,
+      customEndpoints: {
+        chat: row.custom_endpoints_chat || '',
+        models: row.custom_endpoints_models || '',
+        images: row.custom_endpoints_images || ''
+      },
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+      models: modelsByProvider.get(row.id) || []
+    };
+  });
 
   return {
     groups: groups.length > 0 ? groups : [DEFAULT_PROVIDER_GROUP],

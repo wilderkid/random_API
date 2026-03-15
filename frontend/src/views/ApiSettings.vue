@@ -148,6 +148,15 @@
             <button @click="toggleKeyVisibility" class="btn-icon-small">{{ showApiKey ? '🙈' : '👁' }}</button>
             <button @click="testConnection" class="btn-test">检测</button>
           </div>
+          <div v-if="selectedProvider.apiKeys?.length" class="api-keys-preview">
+            <div v-for="(key, idx) in selectedProvider.apiKeys" :key="key.id || idx" class="api-keys-preview-row">
+              <span class="api-key-meta">{{ showApiKey ? key.apiKey : maskApiKey(key.apiKey) }}</span>
+              <span :class="['api-key-status', key.enabled === false ? 'disabled' : 'active']">
+                {{ key.enabled === false ? '停用' : '启用' }}
+              </span>
+            </div>
+          </div>
+          <small class="hint">多 Key 入口在“编辑”弹窗中维护</small>
         </div>
         
         <!-- API 类型 -->
@@ -266,7 +275,7 @@
     
     <!-- 添加/编辑提供商弹窗 -->
     <div v-if="showAddProvider || editingProvider" class="modal" @click.self="closeModal">
-      <div class="modal-content">
+      <div class="modal-content modal-wide">
         <h3>{{ editingProvider ? '编辑提供商' : '添加提供商' }}</h3>
         <label>
           名称
@@ -276,6 +285,39 @@
           API 密钥
           <input v-model="providerForm.apiKey" type="password" class="input-field" placeholder="sk-...">
         </label>
+        <div class="api-keys-editor">
+          <div class="api-keys-header">
+            <span>多 Key 列表</span>
+            <div class="api-keys-actions">
+              <button @click="addApiKeyRow" class="btn-icon-small" type="button">➕ 添加</button>
+              <button @click="syncPrimaryKeyToList" class="btn-icon-small" type="button">↘ 同步主 Key</button>
+            </div>
+          </div>
+          <div class="api-key-row api-key-header-row">
+            <span>API 密钥</span>
+            <span>启用</span>
+            <span class="api-key-label-with-tip">
+              权重
+              <span class="info-tooltip" data-tooltip="权重用于多 Key 轮询时的比例分配，数值越大被选中的概率越高。">ⓘ</span>
+            </span>
+            <span class="api-key-label-with-tip">
+              优先级
+              <span class="info-tooltip" data-tooltip="优先级用于确定优先使用的 Key，数值越小优先级越高。">ⓘ</span>
+            </span>
+            <span></span>
+          </div>
+          <div v-if="providerForm.apiKeys.length === 0" class="empty-hint">未添加多 Key，系统将仅使用主 Key。</div>
+          <div v-for="(key, idx) in providerForm.apiKeys" :key="key.id || idx" class="api-key-row">
+            <input v-model="key.apiKey" type="password" class="input-field" placeholder="sk-...">
+            <label class="checkbox-inline">
+              <input type="checkbox" v-model="key.enabled">
+              启用
+            </label>
+            <input v-model.number="key.weight" type="number" min="0" step="1" class="input-field input-mini">
+            <input v-model.number="key.priority" type="number" min="0" step="1" class="input-field input-mini">
+            <button @click="removeApiKeyRow(idx)" class="btn-icon-tiny" type="button">×</button>
+          </div>
+        </div>
         <label>
           基础 URL
           <input v-model="providerForm.baseUrl" class="input-field" placeholder="https://api.openai.com">
@@ -420,7 +462,7 @@ const expandedGroups = ref({}) // 分组展开状态
 const showAddProvider = ref(false)
 const isSidebarToolsCollapsed = ref(false)
 const editingProvider = ref(null)
-const providerForm = ref({ name: '', baseUrl: '', apiKey: '', groupId: 'default', apiType: 'openai', customEndpoints: { chat: '', models: '', images: '' } })
+const providerForm = ref({ name: '', baseUrl: '', apiKey: '', apiKeys: [], groupId: 'default', apiType: 'openai', customEndpoints: { chat: '', models: '', images: '' } })
 const showAdvanced = ref(false)
 const showApiKey = ref(false)
 const showAddModelModal = ref(false)
@@ -553,12 +595,24 @@ const apiTypeOptions = computed(() => [
 
 async function loadProviders() {
   const res = await axios.get('/api/providers')
-  providers.value = res.data.map(p => ({
-    ...p,
-    models: p.models || [],
-    groupId: p.groupId || 'default',
-    apiType: p.apiType || 'openai' // 默认为OpenAI兼容格式
-  }))
+  providers.value = res.data.map(p => {
+    const apiKeys = Array.isArray(p.apiKeys) && p.apiKeys.length > 0
+      ? p.apiKeys
+      : (p.apiKey ? [{
+        id: `${p.id}-key-1`,
+        apiKey: p.apiKey,
+        enabled: true,
+        weight: 1,
+        priority: 0
+      }] : [])
+    return {
+      ...p,
+      models: p.models || [],
+      groupId: p.groupId || 'default',
+      apiType: p.apiType || 'openai', // 默认为OpenAI兼容格式
+      apiKeys
+    }
+  })
   if (providers.value.length > 0 && !selectedProvider.value) {
     selectedProvider.value = providers.value[0]
   }
@@ -887,6 +941,13 @@ function editProvider() {
     name: selectedProvider.value.name,
     baseUrl: selectedProvider.value.baseUrl,
     apiKey: selectedProvider.value.apiKey,
+    apiKeys: (selectedProvider.value.apiKeys || []).map((key, index) => ({
+      id: key.id || `${selectedProvider.value.id}-key-${index + 1}`,
+      apiKey: key.apiKey || '',
+      enabled: key.enabled !== false,
+      weight: Number.isFinite(key.weight) ? key.weight : 1,
+      priority: Number.isFinite(key.priority) ? key.priority : 0
+    })),
     groupId: selectedProvider.value.groupId || 'default',
     apiType: selectedProvider.value.apiType || 'openai',
     customEndpoints: { chat: ce.chat || '', models: ce.models || '', images: ce.images || '' }
@@ -895,12 +956,22 @@ function editProvider() {
 }
 
 async function saveProvider() {
+  const apiKey = (providerForm.value.apiKey || '').trim()
+  const normalizedKeys = normalizeProviderKeys(providerForm.value.apiKeys)
+  const payload = {
+    ...providerForm.value,
+    apiKey,
+    apiKeys: normalizedKeys.length > 0
+      ? normalizedKeys
+      : (apiKey ? [{ name: '默认 Key', apiKey, enabled: true, weight: 1, priority: 0 }] : [])
+  }
+
   let targetProviderId = null
   if (editingProvider.value) {
-    await axios.put(`/api/providers/${editingProvider.value.id}`, providerForm.value)
+    await axios.put(`/api/providers/${editingProvider.value.id}`, payload)
     targetProviderId = editingProvider.value.id
   } else {
-    const res = await axios.post('/api/providers', providerForm.value)
+    const res = await axios.post('/api/providers', payload)
     targetProviderId = res.data?.id || null
   }
   closeModal()
@@ -1015,6 +1086,48 @@ function toggleKeyVisibility() {
   showApiKey.value = !showApiKey.value
 }
 
+function addApiKeyRow() {
+  providerForm.value.apiKeys.push({
+    apiKey: '',
+    enabled: true,
+    weight: 1,
+    priority: 0
+  })
+}
+
+function removeApiKeyRow(index) {
+  providerForm.value.apiKeys.splice(index, 1)
+}
+
+function syncPrimaryKeyToList() {
+  const apiKey = (providerForm.value.apiKey || '').trim()
+  if (!apiKey) {
+    alert('请先填写主 Key')
+    return
+  }
+  const exists = providerForm.value.apiKeys.some(key => (key.apiKey || '').trim() === apiKey)
+  if (!exists) {
+    providerForm.value.apiKeys.unshift({
+      apiKey,
+      enabled: true,
+      weight: 1,
+      priority: 0
+    })
+  }
+}
+
+function normalizeProviderKeys(keys) {
+  return (keys || [])
+    .map(key => ({
+      id: key.id,
+      apiKey: (key.apiKey || key.api_key || '').trim(),
+      enabled: key.enabled !== false,
+      weight: Number.isFinite(key.weight) ? key.weight : (Number.isFinite(Number(key.weight)) ? Number(key.weight) : 1),
+      priority: Number.isFinite(key.priority) ? key.priority : (Number.isFinite(Number(key.priority)) ? Number(key.priority) : 0)
+    }))
+    .filter(key => key.apiKey)
+}
+
 function copyModelId(modelId) {
   navigator.clipboard.writeText(modelId)
 }
@@ -1041,7 +1154,7 @@ function getModelIcon(modelId) {
 function closeModal() {
   showAddProvider.value = false
   editingProvider.value = null
-  providerForm.value = { name: '', baseUrl: '', apiKey: '', groupId: 'default', apiType: 'openai', customEndpoints: { chat: '', models: '', images: '' } }
+  providerForm.value = { name: '', baseUrl: '', apiKey: '', apiKeys: [], groupId: 'default', apiType: 'openai', customEndpoints: { chat: '', models: '', images: '' } }
   showAdvanced.value = false
 }
 
@@ -1936,6 +2049,196 @@ onUnmounted(() => {
   background: #f8f9fa;
 }
 
+.api-keys-preview {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px dashed #dee2e6;
+  border-radius: 6px;
+  background: #f8f9fa;
+}
+
+.api-keys-preview-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.api-key-meta {
+  color: #6c757d;
+}
+
+.api-key-status {
+  padding: 2px 6px;
+  border-radius: 10px;
+  font-size: 11px;
+  background: #e9ecef;
+  color: #6c757d;
+}
+
+.api-key-status.enabled {
+  background: #d1e7dd;
+  color: #0f5132;
+}
+
+.api-key-status.disabled {
+  background: #f8d7da;
+  color: #842029;
+}
+
+.api-keys-editor {
+  margin: 12px 0 16px;
+  padding: 12px;
+  border: 1px solid #dee2e6;
+  border-radius: 6px;
+  background: #f8f9fa;
+}
+
+.api-keys-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-weight: 600;
+  color: #495057;
+  margin-bottom: 10px;
+}
+
+.api-keys-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.api-key-row {
+  display: grid;
+  grid-template-columns: 1fr auto 80px 80px auto;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.api-key-header-row {
+  margin-bottom: 4px;
+  padding: 0;
+  font-size: 12px;
+  color: #6c757d;
+  font-weight: 500;
+}
+
+.api-key-header-row span {
+  margin-bottom: 0;
+  text-align: center;
+}
+
+.api-key-header-row span:first-child {
+  text-align: left;
+}
+
+.api-key-label-with-tip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.info-tooltip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #e9ecef;
+  color: #495057;
+  font-size: 11px;
+  cursor: help;
+}
+
+.info-tooltip::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  bottom: calc(100% + 8px);
+  right: 0;
+  transform: none;
+  background: #212529;
+  color: #f8f9fa;
+  font-size: 12px;
+  line-height: 1.4;
+  padding: 8px 10px;
+  border-radius: 6px;
+  white-space: normal;
+  max-width: 240px;
+  text-align: left;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s ease;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.2);
+  z-index: 2;
+}
+
+.info-tooltip::before {
+  content: '';
+  position: absolute;
+  bottom: calc(100% + 2px);
+  right: 6px;
+  transform: none;
+  border-width: 6px;
+  border-style: solid;
+  border-color: #212529 transparent transparent transparent;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.info-tooltip:hover::after,
+.info-tooltip:hover::before {
+  opacity: 1;
+}
+
+.api-key-row .input-field {
+  width: 100%;
+  min-width: 0;
+}
+
+.api-key-row:last-child {
+  margin-bottom: 0;
+}
+
+.input-mini {
+  width: 100%;
+  text-align: center;
+  padding-left: 4px;
+  padding-right: 4px;
+}
+
+.checkbox-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #495057;
+  justify-self: center;
+}
+
+.btn-icon-tiny {
+  min-width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  justify-self: end;
+}
+
+.empty-hint {
+  font-size: 12px;
+  color: #6c757d;
+  margin-bottom: 8px;
+  text-align: center;
+  padding: 10px 0;
+}
+
 .btn-icon-small, .btn-test {
   padding: 8px 12px;
   border: 1px solid #dee2e6;
@@ -2253,6 +2556,11 @@ onUnmounted(() => {
   overflow-y: auto;
 }
 
+.modal-wide {
+  max-width: 1120px;
+  width: min(98vw, 1120px);
+}
+
 .modal-large {
   max-width: 700px;
 }
@@ -2319,8 +2627,12 @@ onUnmounted(() => {
   color: #495057;
 }
 
-.modal-content .input-field {
+.modal-content > label > .input-field,
+.modal-content > label > .searchable-select-container {
   width: 100%;
+}
+
+.modal-content .input-field {
   margin-top: 4px;
   background: white;
 }
