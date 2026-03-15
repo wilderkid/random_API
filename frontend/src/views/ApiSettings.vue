@@ -895,15 +895,21 @@ function editProvider() {
 }
 
 async function saveProvider() {
+  let targetProviderId = null
   if (editingProvider.value) {
     await axios.put(`/api/providers/${editingProvider.value.id}`, providerForm.value)
+    targetProviderId = editingProvider.value.id
   } else {
-    await axios.post('/api/providers', providerForm.value)
+    const res = await axios.post('/api/providers', providerForm.value)
+    targetProviderId = res.data?.id || null
   }
   closeModal()
   await loadProviders()
-  if (!editingProvider.value && providers.value.length > 0) {
-    selectedProvider.value = providers.value[providers.value.length - 1]
+  if (targetProviderId) {
+    const matchedProvider = providers.value.find(p => p.id === targetProviderId)
+    if (matchedProvider) {
+      selectedProvider.value = matchedProvider
+    }
   }
 }
 
