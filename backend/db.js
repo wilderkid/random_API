@@ -57,6 +57,7 @@ function createSchema(db) {
       group_id TEXT DEFAULT 'default',
       api_type TEXT DEFAULT 'openai',
       model_type TEXT DEFAULT 'text',
+      sort_order INTEGER DEFAULT 0,
       disabled INTEGER DEFAULT 0,
       fail_count INTEGER DEFAULT 0,
       exclude_auto_refresh INTEGER DEFAULT 0,
@@ -226,6 +227,15 @@ function createSchema(db) {
   `);
 }
 
+function ensureProvidersSortOrderColumn(db) {
+  try {
+    db.prepare('SELECT sort_order FROM providers LIMIT 1').get();
+  } catch (error) {
+    db.prepare('ALTER TABLE providers ADD COLUMN sort_order INTEGER DEFAULT 0').run();
+    db.prepare('CREATE INDEX IF NOT EXISTS idx_providers_sort_order ON providers(sort_order)').run();
+  }
+}
+
 function initializeDatabase() {
   if (dbInstance) {
     return dbInstance;
@@ -233,6 +243,7 @@ function initializeDatabase() {
 
   const db = createConnection();
   createSchema(db);
+  ensureProvidersSortOrderColumn(db);
 
   dbInstance = db;
   return dbInstance;

@@ -568,12 +568,46 @@ app.post('/api/providers', async (req, res) => {
     failCount: 0,
     disabled: false,
     groupId: req.body.groupId || 'default', // 默认分组
-    apiType: req.body.apiType || 'openai' // 默认为OpenAI兼容格式
+    apiType: req.body.apiType || 'openai', // 默认为OpenAI兼容格式
+    sortOrder: data.providers.length
   };
   data.providers.push(newProvider);
   saveApiSettingsToDb(data);
   invalidateApiSettingsCache(); // 缓存失效
   res.json(newProvider);
+});
+
+// 供应商排序（按分组）
+app.put('/api/providers/reorder', async (req, res) => {
+  const { groupId = 'default', orderedIds } = req.body || {};
+  if (!Array.isArray(orderedIds) || orderedIds.length === 0) {
+    return res.status(400).json({ error: 'orderedIds 不能为空' });
+  }
+
+  const data = await getApiSettings();
+  const idsSet = new Set(orderedIds);
+
+  // 只更新指定分组内的顺序
+  const groupProviders = data.providers.filter(p => (p.groupId || 'default') === groupId);
+  const otherProviders = data.providers.filter(p => (p.groupId || 'default') !== groupId);
+
+  const reordered = [];
+  orderedIds.forEach((id, index) => {
+    const found = groupProviders.find(p => p.id === id);
+    if (found) {
+      reordered.push({ ...found, sortOrder: index });
+    }
+  });
+
+  const missing = groupProviders.filter(p => !idsSet.has(p.id)).map((p, index) => ({
+    ...p,
+    sortOrder: reordered.length + index
+  }));
+
+  data.providers = [...otherProviders, ...reordered, ...missing];
+  saveApiSettingsToDb(data);
+  invalidateApiSettingsCache();
+  res.json({ success: true, count: groupProviders.length });
 });
 
 app.put('/api/providers/:id', async (req, res) => {

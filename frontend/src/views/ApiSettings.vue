@@ -107,6 +107,26 @@
                   {{ provider.disabled ? '已禁用' : 'ON' }}
                 </div>
               </div>
+              <div v-if="!batchSelectMode" class="provider-item-actions">
+                <button
+                  class="provider-move-btn"
+                  type="button"
+                  :disabled="!canMoveProviderUp(provider)"
+                  @click.stop="moveProvider(provider, 'up')"
+                  title="上移"
+                >
+                  ▲
+                </button>
+                <button
+                  class="provider-move-btn"
+                  type="button"
+                  :disabled="!canMoveProviderDown(provider)"
+                  @click.stop="moveProvider(provider, 'down')"
+                  title="下移"
+                >
+                  ▼
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -613,6 +633,12 @@ async function loadProviders() {
       apiKeys
     }
   })
+  if (selectedProvider.value) {
+    const matched = providers.value.find(p => p.id === selectedProvider.value.id)
+    if (matched) {
+      selectedProvider.value = matched
+    }
+  }
   if (providers.value.length > 0 && !selectedProvider.value) {
     selectedProvider.value = providers.value[0]
   }
@@ -656,6 +682,45 @@ function selectProvider(provider) {
   showApiKey.value = false
   modelBatchSelectMode.value = false
   selectedModelIds.value = []
+}
+
+function getProviderGroupId(provider) {
+  return provider.groupId || 'default'
+}
+
+function getProvidersInGroup(groupId) {
+  return providers.value.filter(p => (p.groupId || 'default') === groupId)
+}
+
+function canMoveProviderUp(provider) {
+  const groupId = getProviderGroupId(provider)
+  const list = getProvidersInGroup(groupId)
+  const index = list.findIndex(p => p.id === provider.id)
+  return index > 0
+}
+
+function canMoveProviderDown(provider) {
+  const groupId = getProviderGroupId(provider)
+  const list = getProvidersInGroup(groupId)
+  const index = list.findIndex(p => p.id === provider.id)
+  return index !== -1 && index < list.length - 1
+}
+
+async function moveProvider(provider, direction) {
+  const groupId = getProviderGroupId(provider)
+  const list = getProvidersInGroup(groupId)
+  const index = list.findIndex(p => p.id === provider.id)
+  if (index === -1) return
+  const targetIndex = direction === 'up' ? index - 1 : index + 1
+  if (targetIndex < 0 || targetIndex >= list.length) return
+
+  const orderedIds = list.map(p => p.id)
+  const temp = orderedIds[index]
+  orderedIds[index] = orderedIds[targetIndex]
+  orderedIds[targetIndex] = temp
+
+  await axios.put('/api/providers/reorder', { groupId, orderedIds })
+  await loadProviders()
 }
 
 function updateAvailableModelsCache(providerId, models) {
@@ -1845,6 +1910,35 @@ onUnmounted(() => {
   border-radius: 8px;
   cursor: pointer;
   transition: all 0.2s;
+  position: relative;
+}
+
+.provider-item-actions {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-left: 10px;
+  opacity: 0.6;
+}
+
+.provider-item:hover .provider-item-actions {
+  opacity: 1;
+}
+
+.provider-move-btn {
+  border: 1px solid #dee2e6;
+  background: white;
+  color: #495057;
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-size: 10px;
+  cursor: pointer;
+  line-height: 1;
+}
+
+.provider-move-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 .provider-item:hover {

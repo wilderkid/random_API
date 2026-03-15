@@ -217,12 +217,12 @@ function replaceProviders(db, providers) {
   const insertProvider = db.prepare(`
     INSERT INTO providers (
       id, name, base_url, api_key, group_id, api_type, model_type,
-      disabled, fail_count, exclude_auto_refresh,
+      sort_order, disabled, fail_count, exclude_auto_refresh,
       custom_endpoints_chat, custom_endpoints_models, custom_endpoints_images,
       created_at, updated_at
     ) VALUES (
       @id, @name, @base_url, @api_key, @group_id, @api_type, @model_type,
-      @disabled, @fail_count, @exclude_auto_refresh,
+      @sort_order, @disabled, @fail_count, @exclude_auto_refresh,
       @custom_endpoints_chat, @custom_endpoints_models, @custom_endpoints_images,
       @created_at, CURRENT_TIMESTAMP
     )
@@ -233,6 +233,7 @@ function replaceProviders(db, providers) {
       group_id = excluded.group_id,
       api_type = excluded.api_type,
       model_type = excluded.model_type,
+      sort_order = excluded.sort_order,
       disabled = excluded.disabled,
       fail_count = excluded.fail_count,
       exclude_auto_refresh = excluded.exclude_auto_refresh,
@@ -271,6 +272,7 @@ function replaceProviders(db, providers) {
       group_id: provider.groupId || 'default',
       api_type: provider.apiType || 'openai',
       model_type: provider.modelType || 'text',
+      sort_order: Number.isFinite(provider.sortOrder) ? provider.sortOrder : providerIndex,
       disabled: provider.disabled ? 1 : 0,
       fail_count: provider.failCount || 0,
       exclude_auto_refresh: provider.excludeAutoRefresh ? 1 : 0,
@@ -329,7 +331,7 @@ function buildApiSettingsFromDb(db) {
 
   const providerRows = db.prepare(`
     SELECT * FROM providers
-    ORDER BY name ASC, id ASC
+    ORDER BY sort_order ASC, name ASC, id ASC
   `).all();
 
   const modelRows = db.prepare(`
@@ -403,6 +405,7 @@ function buildApiSettingsFromDb(db) {
       groupId: row.group_id || 'default',
       apiType: row.api_type || 'openai',
       modelType: row.model_type || 'text',
+      sortOrder: row.sort_order ?? 0,
       disabled: !!row.disabled,
       failCount: row.fail_count || 0,
       excludeAutoRefresh: !!row.exclude_auto_refresh,
@@ -698,6 +701,15 @@ async function readConversationFiles() {
   }
 }
 
+function ensureProvidersSortOrderColumn(db) {
+  try {
+    db.prepare('SELECT sort_order FROM providers LIMIT 1').get();
+  } catch (error) {
+    db.prepare('ALTER TABLE providers ADD COLUMN sort_order INTEGER DEFAULT 0').run();
+    db.prepare('CREATE INDEX IF NOT EXISTS idx_providers_sort_order ON providers(sort_order)').run();
+  }
+}
+
 function migrateJsonDataToSqlite() {
   const db = getDb();
   const migrated = getMeta(db, 'json_migrated_to_sqlite');
@@ -705,9 +717,17 @@ function migrateJsonDataToSqlite() {
     return { migrated: false, reason: 'already_migrated' };
   }
 
+  ensureProvidersSortOrderColumn(db);
+
   const transaction = db.transaction((payload) => {
+    const providers = (payload.apiSettings.providers || []).map((provider, index) => {
+      if (provider.sortOrder === undefined || provider.sortOrder === null) {
+        return { ...provider, sortOrder: index };
+      }
+      return provider;
+    });
     upsertProviderGroups(db, payload.apiSettings.groups?.length ? payload.apiSettings.groups : [DEFAULT_PROVIDER_GROUP]);
-    replaceProviders(db, payload.apiSettings.providers || []);
+    replaceProviders(db, providers);
 
     Object.entries(payload.userSettings).forEach(([key, value]) => {
       if (key === 'proxyApiKeys') return;
@@ -766,9 +786,16 @@ function getApiSettingsFromDb() {
 
 function saveApiSettingsToDb(data) {
   const db = getDb();
+  ensureProvidersSortOrderColumn(db);
   const tx = db.transaction(() => {
+    const providers = (data.providers || []).map((provider, index) => {
+      if (provider.sortOrder === undefined || provider.sortOrder === null) {
+        return { ...provider, sortOrder: index };
+      }
+      return provider;
+    });
     upsertProviderGroups(db, data.groups?.length ? data.groups : [DEFAULT_PROVIDER_GROUP]);
-    replaceProviders(db, data.providers || []);
+    replaceProviders(db, providers);
   });
   tx();
   return getApiSettingsFromDb();
