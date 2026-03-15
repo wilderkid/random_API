@@ -334,6 +334,11 @@
                 <button @click="copyToClipboard(`${apiBaseUrl}/v1/chat/completions`)" class="btn-copy">复制</button>
               </div>
               <div class="endpoint-item">
+                <span class="endpoint-label">Responses:</span>
+                <code class="endpoint-url">{{ apiBaseUrl }}/v1/responses</code>
+                <button @click="copyToClipboard(`${apiBaseUrl}/v1/responses`)" class="btn-copy">复制</button>
+              </div>
+              <div class="endpoint-item">
                 <span class="endpoint-label">Models:</span>
                 <code class="endpoint-url">{{ apiBaseUrl }}/v1/models</code>
                 <button @click="copyToClipboard(`${apiBaseUrl}/v1/models`)" class="btn-copy">复制</button>

@@ -161,7 +161,7 @@
             search-placeholder="搜索 API 兼容格式..."
             @change="updateProviderApiType"
           />
-          <small class="hint">OpenAI格式: /v1/chat/completions | Anthropic格式: /v1/messages</small>
+          <small class="hint">OpenAI格式: /v1/chat/completions | Responses格式: /v1/responses | Anthropic格式: /v1/messages</small>
         </div>
         
         <!-- API 地址 -->
@@ -289,7 +289,7 @@
             placeholder="请选择 API 兼容格式"
             search-placeholder="搜索 API 兼容格式..."
           />
-          <small class="hint">OpenAI格式使用 /v1/chat/completions，Anthropic格式使用 /v1/messages</small>
+          <small class="hint">OpenAI格式使用 /v1/chat/completions，Responses格式使用 /v1/responses，Anthropic格式使用 /v1/messages</small>
         </label>
         <label>
           所属分组
@@ -547,6 +547,7 @@ const groupSelectOptions = computed(() =>
 
 const apiTypeOptions = computed(() => [
   { label: 'OpenAI 兼容格式', value: 'openai', description: '/v1/chat/completions' },
+  { label: 'Responses 兼容格式', value: 'responses', description: '/v1/responses' },
   { label: 'Anthropic 兼容格式', value: 'anthropic', description: '/v1/messages' }
 ])
 
@@ -1258,14 +1259,19 @@ function getFullApiUrl(provider) {
     if (apiType === 'anthropic') {
       return `${baseUrl}/messages`
     }
+    if (apiType === 'responses') {
+      return `${baseUrl}/responses`
+    }
     return `${baseUrl}/chat/completions`
   }
 
   if (apiType === 'anthropic') {
     return `${baseUrl}/v1/messages`
-  } else {
-    return `${baseUrl}/v1/chat/completions`
   }
+  if (apiType === 'responses') {
+    return `${baseUrl}/v1/responses`
+  }
+  return `${baseUrl}/v1/chat/completions`
 }
 
 onMounted(async () => {

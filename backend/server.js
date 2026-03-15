@@ -1673,6 +1673,8 @@ function extractTextFromMessageContent(content) {
       .map(part => {
         if (typeof part === 'string') return part
         if (part?.type === 'text') return part.text || ''
+        if (part?.type === 'input_text') return part.text || ''
+        if (part?.type === 'output_text') return part.text || ''
         return ''
       })
       .join('\n')
@@ -1837,6 +1839,143 @@ function buildChatRequestBody(modelId, messages, params, apiType = 'openai', ima
   }
 }
 
+function normalizeResponsesContent(content) {
+  if (content === undefined || content === null) return ''
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) return content
+
+  const normalized = content
+    .map(part => {
+      if (typeof part === 'string') {
+        return { type: 'text', text: part }
+      }
+
+      if (part?.type === 'text') {
+        return { type: 'text', text: part.text || '' }
+      }
+
+      if (part?.type === 'input_text' || part?.type === 'output_text') {
+        return { type: 'text', text: part.text || '' }
+      }
+
+      if (part?.type === 'image_url') {
+        return part
+      }
+
+      if (part?.type === 'input_image') {
+        const url = part.image_url?.url || part.image_url || part.url
+        if (!url) return null
+        return {
+          type: 'image_url',
+          image_url: { url }
+        }
+      }
+
+      return null
+    })
+    .filter(Boolean)
+
+  if (normalized.length === 0) return ''
+  return normalized
+}
+
+function responsesInputToMessages(input) {
+  if (input === undefined || input === null) return []
+
+  if (typeof input === 'string') {
+    return [{ role: 'user', content: input }]
+  }
+
+  if (Array.isArray(input)) {
+    if (input.length === 0) return []
+
+    const first = input[0]
+    if (typeof first === 'string' || first?.type) {
+      return [{ role: 'user', content: normalizeResponsesContent(input) }]
+    }
+
+    return input.map(item => {
+      if (typeof item === 'string') {
+        return { role: 'user', content: item }
+      }
+
+      if (item?.role) {
+        const content = item.content ?? item.input ?? item.text ?? ''
+        return { role: item.role, content: normalizeResponsesContent(content) }
+      }
+
+      if (item?.type) {
+        return { role: 'user', content: normalizeResponsesContent([item]) }
+      }
+
+      return { role: 'user', content: '' }
+    })
+  }
+
+  if (typeof input === 'object') {
+    if (input.role) {
+      const content = input.content ?? input.input ?? input.text ?? ''
+      return [{ role: input.role, content: normalizeResponsesContent(content) }]
+    }
+
+    if (input.type) {
+      return [{ role: 'user', content: normalizeResponsesContent([input]) }]
+    }
+  }
+
+  return [{ role: 'user', content: String(input) }]
+}
+
+function buildResponsesFromChatCompletion(completion, modelOverride = null) {
+  const created = completion?.created || Math.floor(Date.now() / 1000)
+  const model = completion?.model || modelOverride || 'unknown'
+  const responseIdBase = completion?.id || `${created}-${Math.floor(Math.random() * 100000)}`
+  const responseId = responseIdBase.startsWith('resp_') ? responseIdBase : `resp_${responseIdBase}`
+
+  const output = []
+  const choice = completion?.choices?.[0] || {}
+  const message = choice.message || {}
+  const textContent = extractTextFromMessageContent(message.content)
+
+  if (textContent) {
+    output.push({
+      id: `msg_${responseId}`,
+      type: 'message',
+      role: message.role || 'assistant',
+      content: [{ type: 'output_text', text: textContent }]
+    })
+  }
+
+  if (Array.isArray(message.tool_calls) && message.tool_calls.length > 0) {
+    message.tool_calls.forEach((toolCall, index) => {
+      output.push({
+        id: toolCall.id || `call_${responseId}_${index}`,
+        type: 'tool_call',
+        name: toolCall.function?.name || toolCall.name || 'tool',
+        arguments: toolCall.function?.arguments || toolCall.arguments || ''
+      })
+    })
+  }
+
+  const usage = completion?.usage
+    ? {
+        input_tokens: completion.usage.prompt_tokens ?? null,
+        output_tokens: completion.usage.completion_tokens ?? null,
+        total_tokens: completion.usage.total_tokens ?? null
+      }
+    : undefined
+
+  return {
+    id: responseId,
+    object: 'response',
+    created,
+    model,
+    status: 'completed',
+    output,
+    usage
+  }
+}
+
 function extractModelName(modelId) {
   console.log(`Extracting model name from: ${modelId}`);
 
@@ -1873,7 +2012,7 @@ function generateMessageFingerprint(messages, modelName) {
       contentParts.push(msg.content);
     } else if (Array.isArray(msg.content)) {
       contentParts.push(msg.content
-        .filter(part => part.type === 'text')
+        .filter(part => part.type === 'text' || part.type === 'input_text' || part.type === 'output_text')
         .map(part => part.text)
         .join('|'));
     }
@@ -1896,7 +2035,7 @@ function generateMessageFingerprint(messages, modelName) {
     } else if (Array.isArray(msg.content)) {
       // 处理多模态消息（只提取文本部分）
       return msg.content
-        .filter(part => part.type === 'text')
+        .filter(part => part.type === 'text' || part.type === 'input_text' || part.type === 'output_text')
         .map(part => part.text)
         .join('|');
     }
@@ -3824,6 +3963,467 @@ app.get('/v1/models', verifyProxyApiKey, async (req, res) => {
         type: 'server_error',
         code: 'internal_error'
       }
+    });
+  }
+});
+
+// OpenAI 兼容 - Responses（支持自动故障转移）
+app.post('/v1/responses', verifyProxyApiKey, async (req, res) => {
+  // ==================== 日志追踪初始化 ====================
+  const traceId = generateTraceId();
+  const perfTracker = new PerformanceTracker(traceId);
+  perfTracker.checkpoint('request_start');
+
+  // 提取客户端信息
+  const clientIp = req.ip || req.connection.remoteAddress ||
+                   req.headers['x-forwarded-for']?.split(',')[0].trim() ||
+                   'unknown';
+  const userAgent = req.headers['user-agent'] || 'unknown';
+  const apiKeyName = req.apiKeyInfo?.name || 'unknown';
+
+  try {
+    const {
+      input,
+      messages,
+      model,
+      stream = false,
+      temperature,
+      max_output_tokens,
+      top_p,
+      tools,
+      tool_choice,
+      instructions,
+      system,
+      ...otherParams
+    } = req.body;
+
+    // ==================== 打印客户端请求参数（便于调试） ====================
+    console.log(`\n========== 新的 Responses 请求 ==========`);
+    console.log(`[请求] 模型: ${model}`);
+    console.log(`[请求] 流式: ${stream}`);
+    console.log(`[请求] 输入类型: ${messages ? 'messages' : 'input'}`);
+    console.log(`[请求] temperature: ${temperature !== undefined ? temperature : '未设置'}`);
+    console.log(`[请求] max_output_tokens: ${max_output_tokens !== undefined ? max_output_tokens : '未设置'}`);
+    console.log(`[请求] top_p: ${top_p !== undefined ? top_p : '未设置'}`);
+    console.log(`[请求] tool_choice: ${tool_choice !== undefined ? JSON.stringify(tool_choice) : '未设置'}`);
+
+    const otherParamKeys = Object.keys(otherParams);
+    if (otherParamKeys.length > 0) {
+      console.log(`[请求] 其他参数:`);
+      otherParamKeys.forEach(key => {
+        const value = otherParams[key];
+        console.log(`  - ${key}: ${typeof value === 'object' ? JSON.stringify(value) : value}`);
+      });
+    }
+
+    if (tools && tools.length > 0) {
+      console.log(`[请求] 工具列表:`);
+      tools.forEach((tool, index) => {
+        console.log(`  - 工具 ${index + 1}: ${tool.function?.name || tool.name || '未知'}`);
+      });
+    }
+    console.log(`======================================\n`);
+
+    const requestMessages = Array.isArray(messages)
+      ? messages
+      : responsesInputToMessages(input);
+
+    if (!requestMessages || !Array.isArray(requestMessages) || requestMessages.length === 0) {
+      console.log(`[错误] input/messages 参数无效`);
+      return sendErrorResponse(res, stream, {
+        message: 'input or messages is required and must be a valid array',
+        type: 'invalid_request_error',
+        code: 'invalid_input'
+      }, 400);
+    }
+
+    const settings = await getApiSettings();
+    const userSettings = await getUserSettings();
+    console.log(`[配置] 已加载 ${settings.providers.length} 个提供商`);
+    const pollingConfig = userSettings.pollingConfig || { available: {}, excluded: {} };
+
+    // ==================== 会话识别机制（混合模式） ====================
+    const sessionId = extractSessionId(req);
+    const messageFingerprint = generateMessageFingerprint(requestMessages, model);
+    const sessionIdentifier = sessionId || messageFingerprint;
+
+    console.log(`[会话] 会话ID: ${sessionId || '无'}`);
+    console.log(`[会话] 消息指纹: ${messageFingerprint ? messageFingerprint.substring(0, 8) + '...' : '无'}`);
+    console.log(`[会话] 使用的标识符: ${sessionIdentifier ? sessionIdentifier.substring(0, 16) + '...' : '无'}`);
+
+    cleanupExpiredConversations(userSettings);
+
+    let modelName = model;
+    if (!modelName) {
+      console.log(`[错误] 未指定模型`);
+      return sendErrorResponse(res, stream, {
+        message: 'model is required. Please specify a model in the request.',
+        type: 'invalid_request_error',
+        code: 'model_required'
+      }, 400);
+    }
+
+    const pureModelName = normalizeModelName(modelName);
+    console.log(`[模型] 标准化模型名称: ${pureModelName}`);
+
+    const allowedModels = req.apiKeyInfo?.allowedModels || [];
+    if (allowedModels.length > 0 && !allowedModels.includes(pureModelName)) {
+      console.log(`[错误] 模型 ${pureModelName} 不在此 API Key 允许的列表中`);
+      return sendErrorResponse(res, stream, {
+        message: `Model '${pureModelName}' is not allowed for this API key. Allowed models: ${allowedModels.join(', ')}`,
+        type: 'permission_error',
+        code: 'model_not_allowed'
+      }, 403);
+    }
+
+    const usePolling = req.apiKeyInfo?.usePolling !== false; // 默认为true
+    console.log(`[轮询] 轮询模式: ${usePolling ? '启用' : '禁用'}`);
+
+    if (usePolling) {
+      const availableProviderIds = pollingConfig.available?.[pureModelName] || [];
+      console.log(`[轮询] 模型 ${pureModelName} 可用提供商数量: ${availableProviderIds.length}`);
+      if (availableProviderIds.length < 2) {
+        console.log(`[错误] 模型 ${pureModelName} 提供商不足: ${availableProviderIds.length}`);
+        return sendErrorResponse(res, stream, {
+          message: `Model '${pureModelName}' requires at least 2 providers for polling. Current providers: ${availableProviderIds.length}. Please configure more providers in polling settings.`,
+          type: 'invalid_request_error',
+          code: 'insufficient_providers'
+        }, 400);
+      }
+
+      const excludedSet = new Set();
+      if (Array.isArray(pollingConfig.excluded)) {
+        pollingConfig.excluded.forEach(item => {
+          if (item.modelName === pureModelName) {
+            excludedSet.add(item.providerId);
+          }
+        });
+      }
+
+      const actualAvailableProviders = availableProviderIds.filter(id => !excludedSet.has(id));
+      console.log(`[轮询] 排除后实际可用提供商数量: ${actualAvailableProviders.length}`);
+
+      if (actualAvailableProviders.length === 0) {
+        return sendErrorResponse(res, stream, {
+          message: `Model '${pureModelName}' has no available providers (all providers are excluded).`,
+          type: 'invalid_request_error',
+          code: 'all_providers_excluded'
+        }, 400);
+      }
+    } else {
+      const allowedGroups = req.apiKeyInfo?.allowedGroups || [];
+      const modelExists = settings.providers.some(provider => {
+        if (provider.disabled) return false;
+        if (allowedGroups.length > 0 && !allowedGroups.includes(provider.groupId || 'default')) return false;
+        return provider.models?.some(m => normalizeModelName(m.id) === pureModelName && m.visible !== false);
+      });
+
+      if (!modelExists) {
+        return sendErrorResponse(res, stream, {
+          message: `Model '${pureModelName}' is not available in the allowed provider groups.`,
+          type: 'invalid_request_error',
+          code: 'model_not_available'
+        }, 400);
+      }
+    }
+
+    console.log(`[透传] Responses 请求将转换为 chat/completions 请求体`);
+
+    let selectedProvider = null;
+    const isNewConversation = requestMessages.length === 1 && requestMessages[0].role === 'user';
+
+    if (isNewConversation && sessionIdentifier) {
+      const key = `${pureModelName}:${sessionIdentifier}`;
+      if (userSettings.conversationProviderMap && userSettings.conversationProviderMap[key]) {
+        console.log(`[会话] 检测到新对话，删除旧的提供商绑定`);
+        delete userSettings.conversationProviderMap[key];
+      }
+    }
+
+    if (sessionIdentifier && !isNewConversation) {
+      selectedProvider = getConversationProvider(
+        sessionIdentifier,
+        pureModelName,
+        userSettings,
+        settings.providers,
+        pollingConfig
+      );
+
+      if (selectedProvider) {
+        console.log(`[会话] 找到已绑定的提供商: ${selectedProvider.name} (ID: ${selectedProvider.id})`);
+        setImmediate(() => {
+          logSessionBind({
+            traceId,
+            sessionId: sessionIdentifier,
+            model: pureModelName,
+            providerId: selectedProvider.id,
+            providerName: selectedProvider.name
+          });
+        });
+      } else {
+        console.log(`[会话] 未找到已绑定的提供商，将选择新的提供商`);
+      }
+    }
+
+    const errors = [];
+    const triedProviderIds = [];
+
+    let failoverProviders = [];
+    if (selectedProvider) {
+      failoverProviders = [selectedProvider];
+      const otherProviders = getFailoverProviders(
+        settings.providers,
+        pureModelName,
+        pollingConfig,
+        userSettings,
+        [selectedProvider.id],
+        req.apiKeyInfo
+      );
+      failoverProviders = failoverProviders.concat(otherProviders);
+    } else {
+      failoverProviders = getFailoverProviders(settings.providers, pureModelName, pollingConfig, userSettings, [], req.apiKeyInfo);
+    }
+
+    if (failoverProviders.length === 0) {
+      console.log(`[错误] 模型 ${pureModelName} 没有可用的提供商`);
+      return sendErrorResponse(res, stream, {
+        message: `No available providers for model '${pureModelName}'`,
+        type: 'server_error',
+        code: 'no_providers_available'
+      }, 503);
+    }
+
+    console.log(`[故障转移] 找到 ${failoverProviders.length} 个可用提供商`);
+
+    const systemPrompt = typeof system === 'string' ? system : (typeof instructions === 'string' ? instructions : null);
+
+    const requestParams = {
+      ...otherParams
+    };
+
+    if (max_output_tokens !== undefined) {
+      requestParams.max_tokens = max_output_tokens;
+    }
+    if (temperature !== undefined) {
+      requestParams.temperature = temperature;
+    }
+    if (top_p !== undefined) {
+      requestParams.top_p = top_p;
+    }
+
+    for (let attempt = 0; attempt < failoverProviders.length; attempt++) {
+      const currentProvider = failoverProviders[attempt];
+      triedProviderIds.push(currentProvider.id);
+
+      if (attempt > 0) {
+        const prevProvider = failoverProviders[attempt - 1];
+        console.log(`[故障转移] 切换提供商: ${prevProvider.name} -> ${currentProvider.name}`);
+        setImmediate(() => {
+          logProviderSwitch({
+            traceId,
+            fromProvider: prevProvider.name,
+            toProvider: currentProvider.name,
+            reason: `Previous provider failed: ${errors[errors.length - 1]?.error || 'Unknown error'}`
+          });
+        });
+      }
+
+      console.log(`[请求] 尝试 ${attempt + 1}/${failoverProviders.length}: 使用提供商 ${currentProvider.name} (ID: ${currentProvider.id})`);
+
+      const providerModelId = await getProviderModelId(currentProvider, pureModelName);
+      if (!providerModelId) {
+        console.log(`[错误] 模型 ${pureModelName} 在提供商 ${currentProvider.name} 中未找到，尝试下一个...`);
+        errors.push({
+          provider: currentProvider.name,
+          error: `Model not found in provider`
+        });
+        await incrementModelFailCount(currentProvider.id, pureModelName, userSettings);
+        continue;
+      }
+
+      console.log(`[请求] 使用模型ID: ${providerModelId}`);
+
+      const apiType = currentProvider.apiType || 'openai';
+      console.log(`[请求] API 类型: ${apiType}`);
+      const url = buildApiUrl(currentProvider.baseUrl, 'chat/completions', apiType, currentProvider.customEndpoints);
+      console.log(`[请求] 目标URL: ${url}`);
+
+      try {
+        const requestBody = buildChatRequestBody(
+          providerModelId,
+          requestMessages,
+          { ...requestParams, stream: false },
+          apiType,
+          null,
+          systemPrompt,
+          tools || null,
+          tool_choice || null
+        );
+
+        const headers = {
+          'Authorization': `Bearer ${currentProvider.apiKey}`,
+          'Content-Type': 'application/json',
+          ...(apiType === 'anthropic' && {
+            'anthropic-version': '2023-06-01'
+          })
+        };
+
+        console.log(`[非流式] 发送 Responses 转换请求...`);
+
+        const response = await axios.post(url, requestBody, {
+          headers,
+          timeout: 120000
+        });
+
+        console.log(`[非流式] 请求成功，状态码: ${response.status}`);
+
+        let jsonData = response.data;
+        if (apiType === 'anthropic') {
+          console.log('[DEBUG] Converting Anthropic response to OpenAI format for Responses');
+          jsonData = convertAnthropicJsonToOpenAI(jsonData);
+        }
+
+        const responsePayload = buildResponsesFromChatCompletion(jsonData, providerModelId);
+
+        backgroundProcessor.handleSuccess(currentProvider, pureModelName, userSettings, pollingConfig, sessionIdentifier);
+
+        perfTracker.checkpoint('request_complete');
+        setImmediate(() => {
+          logApiRequest({
+            traceId,
+            clientIp,
+            userAgent,
+            apiKeyName,
+            sessionId: sessionIdentifier,
+            isPolling: usePolling,
+            isNewConversation,
+            request: { model: pureModelName, stream, messages: requestMessages },
+            providers: [{
+              attempt: attempt + 1,
+              providerId: currentProvider.id,
+              providerName: currentProvider.name,
+              status: 'success',
+              statusCode: response.status,
+              duration: perfTracker.getDuration('request_complete')
+            }],
+            result: {
+              status: 'success',
+              successfulProvider: currentProvider.id,
+              totalAttempts: 1,
+              totalDuration: perfTracker.getTotalDuration(),
+              tokenUsage: jsonData?.usage || null,
+              estimatedCost: null
+            },
+            metadata: { failoverOccurred: attempt > 0, isStreaming: stream }
+          });
+        });
+
+        if (stream) {
+          res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+          res.setHeader('Cache-Control', 'no-cache');
+          res.setHeader('Connection', 'keep-alive');
+
+          res.write(`data: ${JSON.stringify({ type: 'response.completed', response: responsePayload })}\n\n`);
+          res.write('data: [DONE]\n\n');
+          return res.end();
+        }
+
+        return res.status(200).json(responsePayload);
+
+      } catch (error) {
+        console.log(`[错误] 提供商 ${currentProvider.name} 请求失败: ${error.message}`);
+
+        const errorDetails = parseErrorResponse(error);
+        const errorMessage = formatErrorForLog(errorDetails);
+
+        backgroundProcessor.handleFailure(currentProvider, pureModelName, userSettings, errorMessage);
+
+        errors.push({
+          provider: currentProvider.name,
+          error: errorMessage,
+          status: error.response?.status
+        });
+      }
+    }
+
+    backgroundProcessor.addTask(async () => {
+      await savePollingState(userSettings);
+    });
+
+    console.log(`[错误] 所有 ${triedProviderIds.length} 个提供商都失败了，模型: ${pureModelName}`);
+
+    const errorDetails = errors.map(e => `${e.provider}: ${e.error}`).join('; ');
+    console.log(`[错误] 详细错误: ${errorDetails}`);
+
+    perfTracker.checkpoint('all_providers_failed');
+    setImmediate(() => {
+      logApiRequest({
+        traceId,
+        clientIp,
+        userAgent,
+        apiKeyName,
+        sessionId: sessionIdentifier,
+        isPolling: usePolling,
+        isNewConversation,
+        request: { model: pureModelName, stream, messages: requestMessages },
+        providers: errors.map((e, idx) => ({
+          attempt: idx + 1,
+          providerId: `provider_${idx}`,
+          providerName: e.provider,
+          status: 'failed',
+          statusCode: e.status,
+          error: e.error
+        })),
+        result: {
+          status: 'failed',
+          successfulProvider: null,
+          totalAttempts: triedProviderIds.length,
+          totalDuration: perfTracker.getTotalDuration(),
+          tokenUsage: null,
+          estimatedCost: null
+        },
+        metadata: { failoverOccurred: triedProviderIds.length > 1 }
+      });
+    });
+
+    sendErrorResponse(res, stream, {
+      message: `All providers failed for model '${pureModelName}'. Tried ${triedProviderIds.length} providers.${stream ? ` Details: ${errorDetails}` : ''}`,
+      type: 'server_error',
+      code: 'all_providers_failed',
+      ...(stream ? {} : { details: errors })
+    }, 503);
+
+  } catch (error) {
+    console.log(`[错误] 发生意外错误: ${error.message}`);
+
+    perfTracker.checkpoint('error');
+    setImmediate(() => {
+      logApiRequest({
+        traceId,
+        clientIp,
+        userAgent,
+        apiKeyName,
+        sessionId: null,
+        isPolling: false,
+        isNewConversation: false,
+        request: { model: req.body?.model || 'unknown', stream, messages: [] },
+        providers: [],
+        result: {
+          status: 'failed',
+          successfulProvider: null,
+          totalAttempts: 0,
+          totalDuration: perfTracker.getTotalDuration(),
+          tokenUsage: null,
+          estimatedCost: null
+        },
+        metadata: { errorType: 'internal_error', errorMessage: error.message }
+      });
+    });
+
+    sendErrorResponse(res, stream, {
+      message: error.message,
+      type: 'server_error',
+      code: 'internal_error'
     });
   }
 });
