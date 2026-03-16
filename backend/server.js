@@ -1449,7 +1449,7 @@ app.post('/api/chat', async (req, res) => {
     console.log(`User settings polling config:`, JSON.stringify(userSettings.pollingConfig, null, 2));
 
     // 获取所有可用的轮询提供商
-    const pollingProviders = getPollingProviders(settings.providers, modelName, userSettings.pollingConfig);
+    const pollingProviders = getPollingProviders(settings.providers, modelName, userSettings.pollingConfig, req.apiKeyInfo);
 
     if (pollingProviders.length === 0) {
       console.log(`No polling providers available for model ${modelName}`);
@@ -2306,14 +2306,14 @@ function cleanupExpiredConversations(userSettings) {
   return cleanedCount;
 }
 
-function getPollingProviders(providers, modelName, config) {
+function getPollingProviders(providers, modelName, config, apiKeyInfo = null) {
   console.log(`Getting polling providers for model: ${modelName}`);
   console.log(`Available config:`, config.available);
   console.log(`Excluded config:`, config.excluded);
-  
+
   const available = config.available[modelName] || [];
   console.log(`Available provider IDs for ${modelName}:`, available);
-  
+
   // 构建排除集合（新格式：数组）
   const excludedSet = new Set();
   if (Array.isArray(config.excluded)) {
@@ -2323,9 +2323,14 @@ function getPollingProviders(providers, modelName, config) {
       }
     });
   }
-  
+
   console.log(`Excluded provider IDs for ${modelName}:`, Array.from(excludedSet));
-  
+
+  const allowedPollingGroups = apiKeyInfo?.allowedPollingGroups || [];
+  const allowedPollingProviders = apiKeyInfo?.allowedPollingProviders || [];
+  const hasPollingGroupLimit = allowedPollingGroups.length > 0;
+  const hasPollingProviderLimit = allowedPollingProviders.length > 0;
+
   const pollingProviders = available
     .map(id => {
       const provider = providers.find(p => p.id === id);
@@ -2338,11 +2343,18 @@ function getPollingProviders(providers, modelName, config) {
       }
       return provider;
     })
-    .filter(p => p && !p.disabled && !excludedSet.has(p.id));
-    
+    .filter(p => p && !p.disabled && !excludedSet.has(p.id))
+    .filter(p => {
+      if (!hasPollingGroupLimit && !hasPollingProviderLimit) return true;
+      const providerGroupId = p.groupId || 'default';
+      const groupMatch = hasPollingGroupLimit && allowedPollingGroups.includes(providerGroupId);
+      const providerMatch = hasPollingProviderLimit && allowedPollingProviders.includes(p.id);
+      return groupMatch || providerMatch;
+    });
+
   console.log(`Final polling providers count: ${pollingProviders.length}`);
   pollingProviders.forEach(p => console.log(`- ${p.name} (ID: ${p.id})`));
-  
+
   return pollingProviders;
 }
 
@@ -2626,6 +2638,11 @@ function getFailoverProviders(providers, modelName, config, userSettings, exclud
     const modelState = pollingState[modelName];
     const startIndex = modelState.currentIndex || 0;
 
+    const allowedPollingGroups = apiKeyInfo?.allowedPollingGroups || [];
+    const allowedPollingProviders = apiKeyInfo?.allowedPollingProviders || [];
+    const hasPollingGroupLimit = allowedPollingGroups.length > 0;
+    const hasPollingProviderLimit = allowedPollingProviders.length > 0;
+
     // 收集所有可用的提供商，按轮询顺序排列
     for (let i = 0; i < available.length; i++) {
       const index = (startIndex + i) % available.length;
@@ -2661,6 +2678,16 @@ function getFailoverProviders(providers, modelName, config, userSettings, exclud
       if (provider.disabled) {
         console.log(`[Failover] Provider ${provider.name} is disabled globally`);
         continue;
+      }
+
+      if (hasPollingGroupLimit || hasPollingProviderLimit) {
+        const providerGroupId = provider.groupId || 'default';
+        const groupMatch = hasPollingGroupLimit && allowedPollingGroups.includes(providerGroupId);
+        const providerMatch = hasPollingProviderLimit && allowedPollingProviders.includes(provider.id);
+        if (!groupMatch && !providerMatch) {
+          console.log(`[Failover] Provider ${provider.name} (group: ${providerGroupId}) not allowed by polling scope, skipping`);
+          continue;
+        }
       }
 
       candidateProviders.push(provider);
@@ -4330,12 +4357,30 @@ app.get('/v1/models', verifyProxyApiKey, async (req, res) => {
         });
       }
 
+      const allowedPollingGroups = apiKeyInfo?.allowedPollingGroups || [];
+      const allowedPollingProviders = apiKeyInfo?.allowedPollingProviders || [];
+      const hasPollingGroupLimit = allowedPollingGroups.length > 0;
+      const hasPollingProviderLimit = allowedPollingProviders.length > 0;
+
+      const providerById = new Map(settings.providers.map(p => [p.id, p]));
+
       for (const modelName of Object.keys(availableModels)) {
         const allProviders = availableModels[modelName] || [];
 
         // 过滤掉被排除的提供商
         const excludedSet = excludedModels.get(modelName) || new Set();
-        const availableProviders = allProviders.filter(id => !excludedSet.has(id));
+        let availableProviders = allProviders.filter(id => !excludedSet.has(id));
+
+        if (hasPollingGroupLimit || hasPollingProviderLimit) {
+          availableProviders = availableProviders.filter(id => {
+            const provider = providerById.get(id);
+            if (!provider) return false;
+            const providerGroupId = provider.groupId || 'default';
+            const groupMatch = hasPollingGroupLimit && allowedPollingGroups.includes(providerGroupId);
+            const providerMatch = hasPollingProviderLimit && allowedPollingProviders.includes(provider.id);
+            return groupMatch || providerMatch;
+          });
+        }
 
         // 只有拥有至少2个可用提供商的模型才能被外部使用
         if (availableProviders.length >= 2) {
@@ -4583,12 +4628,29 @@ app.post('/v1/responses', verifyProxyApiKey, async (req, res) => {
         });
       }
 
-      const actualAvailableProviders = availableProviderIds.filter(id => !excludedSet.has(id));
-      console.log(`[轮询] 排除后实际可用提供商数量: ${actualAvailableProviders.length}`);
+      const allowedPollingGroups = req.apiKeyInfo?.allowedPollingGroups || [];
+      const allowedPollingProviders = req.apiKeyInfo?.allowedPollingProviders || [];
+      const hasPollingGroupLimit = allowedPollingGroups.length > 0;
+      const hasPollingProviderLimit = allowedPollingProviders.length > 0;
 
-      if (actualAvailableProviders.length === 0) {
+      const providerById = new Map(settings.providers.map(p => [p.id, p]));
+      const actualAvailableProviders = availableProviderIds.filter(id => !excludedSet.has(id));
+      const scopedAvailableProviders = actualAvailableProviders.filter(id => {
+        if (!hasPollingGroupLimit && !hasPollingProviderLimit) return true;
+        const provider = providerById.get(id);
+        if (!provider) return false;
+        const providerGroupId = provider.groupId || 'default';
+        const groupMatch = hasPollingGroupLimit && allowedPollingGroups.includes(providerGroupId);
+        const providerMatch = hasPollingProviderLimit && allowedPollingProviders.includes(provider.id);
+        return groupMatch || providerMatch;
+      });
+
+      console.log(`[轮询] 排除后实际可用提供商数量: ${actualAvailableProviders.length}`);
+      console.log(`[轮询] 按密钥范围筛选后可用提供商数量: ${scopedAvailableProviders.length}`);
+
+      if (scopedAvailableProviders.length === 0) {
         return sendErrorResponse(res, stream, {
-          message: `Model '${pureModelName}' has no available providers (all providers are excluded).`,
+          message: `Model '${pureModelName}' has no available providers within API key polling scope.`,
           type: 'invalid_request_error',
           code: 'all_providers_excluded'
         }, 400);
@@ -5065,13 +5127,30 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
         });
       }
 
-      // Calculate actual available provider count (excluding excluded ones)
-      const actualAvailableProviders = availableProviderIds.filter(id => !excludedSet.has(id));
-      console.log(`[轮询] 排除后实际可用提供商数量: ${actualAvailableProviders.length}`);
+      const allowedPollingGroups = req.apiKeyInfo?.allowedPollingGroups || [];
+      const allowedPollingProviders = req.apiKeyInfo?.allowedPollingProviders || [];
+      const hasPollingGroupLimit = allowedPollingGroups.length > 0;
+      const hasPollingProviderLimit = allowedPollingProviders.length > 0;
 
-      if (actualAvailableProviders.length === 0) {
+      // Calculate actual available provider count (excluding excluded ones)
+      const providerById = new Map(settings.providers.map(p => [p.id, p]));
+      const actualAvailableProviders = availableProviderIds.filter(id => !excludedSet.has(id));
+      const scopedAvailableProviders = actualAvailableProviders.filter(id => {
+        if (!hasPollingGroupLimit && !hasPollingProviderLimit) return true;
+        const provider = providerById.get(id);
+        if (!provider) return false;
+        const providerGroupId = provider.groupId || 'default';
+        const groupMatch = hasPollingGroupLimit && allowedPollingGroups.includes(providerGroupId);
+        const providerMatch = hasPollingProviderLimit && allowedPollingProviders.includes(provider.id);
+        return groupMatch || providerMatch;
+      });
+
+      console.log(`[轮询] 排除后实际可用提供商数量: ${actualAvailableProviders.length}`);
+      console.log(`[轮询] 按密钥范围筛选后可用提供商数量: ${scopedAvailableProviders.length}`);
+
+      if (scopedAvailableProviders.length === 0) {
         return sendErrorResponse(res, stream, {
-          message: `Model '${pureModelName}' has no available providers (all providers are excluded).`,
+          message: `Model '${pureModelName}' has no available providers within API key polling scope.`,
           type: 'invalid_request_error',
           code: 'all_providers_excluded'
         }, 400);
@@ -5629,6 +5708,8 @@ app.post('/api/proxy-keys', async (req, res) => {
       // 透传模式下不再需要默认参数，所有参数由客户端提供
       allowedModels: [],
       allowedGroups: [], // 新增：允许的分组
+      allowedPollingGroups: [],
+      allowedPollingProviders: [],
       usePolling: true,
       rateLimit: {
         requestsPerMinute: 60,
