@@ -1486,10 +1486,30 @@ app.post('/api/chat', async (req, res) => {
         console.log(`Using model ID: ${modelId} from provider ${provider.name}`);
 
         // 识别模型类型并调用对应的处理函数
-        const modelType = getModelType(provider, modelId);
+        const modelType = getModelType(provider, modelId, userSettings);
         console.log(`[ModelType] Detected model type: ${modelType} for ${modelId}`);
 
-        if (modelType === 'image') {
+        if (isImageModel(modelType)) {
+          // 图像模型
+          const hasInputImage = images && images.length > 0;
+
+          // 验证模型能力
+          if (hasInputImage && !supportsImageToImage(modelType)) {
+            errors.push({
+              provider: provider.name,
+              error: `模型 ${modelId} 不支持图生图功能（类型：${modelType}）`
+            });
+            continue;
+          }
+
+          if (!hasInputImage && !supportsTextToImage(modelType)) {
+            errors.push({
+              provider: provider.name,
+              error: `模型 ${modelId} 不支持文生图功能（类型：${modelType}），请上传图片进行编辑`
+            });
+            continue;
+          }
+
           // 提取提示词（最后一条用户消息的内容）
           const lastUserMessage = messages[messages.length - 1];
           const prompt = lastUserMessage?.content || '';
@@ -1503,7 +1523,10 @@ app.post('/api/chat', async (req, res) => {
           }
 
           console.log(`[ImageGen] Generating image with prompt: ${prompt.substring(0, 50)}...`);
-          await generateImage(provider, prompt, params, res, modelId, keyInfo);
+          if (hasInputImage) {
+            console.log(`[ImageGen] Image-to-image mode: ${images.length} input image(s)`);
+          }
+          await generateImage(provider, prompt, params, res, modelId, keyInfo, images, userSettings);
         } else {
           // 文本模型，使用原有的streamChat
           await streamChat(provider, messages, params, res, modelId, images, processedSystemPrompt, keyInfo);
@@ -1567,6 +1590,9 @@ app.post('/api/chat', async (req, res) => {
     return;
   } else {
     const [providerId, modelId] = model.split('::');
+    console.log(`[NonPolling] Received model parameter: ${model}`);
+    console.log(`[NonPolling] Extracted providerId: ${providerId}, modelId: ${modelId}`);
+
     const provider = settings.providers.find(p => p.id === providerId);
     if (!provider) {
       res.write(`data: ${JSON.stringify({ error: 'Provider not found' })}\n\n`);
@@ -1575,10 +1601,24 @@ app.post('/api/chat', async (req, res) => {
 
     try {
       // 识别模型类型并调用对应的处理函数
-      const modelType = getModelType(provider, modelId);
+      const modelType = getModelType(provider, modelId, userSettings);
       console.log(`[ModelType] Detected model type: ${modelType} for ${modelId}`);
 
-      if (modelType === 'image') {
+      if (isImageModel(modelType)) {
+        // 图像模型
+        const hasInputImage = images && images.length > 0;
+
+        // 验证模型能力
+        if (hasInputImage && !supportsImageToImage(modelType)) {
+          res.write(`data: ${JSON.stringify({ error: `模型 ${modelId} 不支持图生图功能（类型：${modelType}）` })}\n\n`);
+          return res.end();
+        }
+
+        if (!hasInputImage && !supportsTextToImage(modelType)) {
+          res.write(`data: ${JSON.stringify({ error: `模型 ${modelId} 不支持文生图功能（类型：${modelType}），请上传图片进行编辑` })}\n\n`);
+          return res.end();
+        }
+
         // 提取提示词（最后一条用户消息的内容）
         const lastUserMessage = messages[messages.length - 1];
         const prompt = lastUserMessage?.content || '';
@@ -1589,15 +1629,22 @@ app.post('/api/chat', async (req, res) => {
         }
 
         console.log(`[ImageGen] Generating image with prompt: ${prompt.substring(0, 50)}...`);
-        await generateImage(provider, prompt, params, res, modelId);
+        if (hasInputImage) {
+          console.log(`[ImageGen] Image-to-image mode: ${images.length} input image(s)`);
+        }
+        const keyInfo = selectProviderKey(provider, await getUserSettings());
+        await generateImage(provider, prompt, params, res, modelId, keyInfo, images, userSettings);
       } else {
         // 文本模型，使用原有的streamChat
         await streamChat(provider, messages, params, res, modelId, images, processedSystemPrompt);
       }
     } catch (error) {
       console.error(`Chat error:`, error.message);
-      res.write(`data: ${JSON.stringify({ error: error.message })}\n\n`);
-      res.end();
+      // generateImage已经处理了响应，不需要再次写入
+      if (!res.writableEnded) {
+        res.write(`data: ${JSON.stringify({ error: error.message })}\n\n`);
+        res.end();
+      }
     }
   }
 });
@@ -1624,6 +1671,10 @@ app.put('/api/settings', async (req, res) => {
     proxyApiKeys: {
       ...(currentSettings.proxyApiKeys || {}),
       ...(req.body.proxyApiKeys || {})
+    },
+    modelTypes: {
+      ...(currentSettings.modelTypes || {}),
+      ...(req.body.modelTypes || {})
     }
   };
 
@@ -2686,13 +2737,23 @@ async function getProviderModelId(provider, modelName, keyInfo = null) {
   try {
     // 首先尝试从provider.models中查找（避免额外的API调用）
     if (provider.models && provider.models.length > 0) {
-      const matchedModel = provider.models.find(model => {
+      // 先尝试精确匹配（不使用normalizeModelName）
+      let matchedModel = provider.models.find(model => {
         const normalized = normalizeModelName(model.id);
         return normalized === modelName;
       });
 
+      // 如果精确匹配失败，再尝试规范化匹配
+      if (!matchedModel) {
+        const normalizedModelName = normalizeModelName(modelName);
+        matchedModel = provider.models.find(model => {
+          const normalized = normalizeModelName(model.id);
+          return normalized === normalizedModelName;
+        });
+      }
+
       if (matchedModel) {
-        console.log(`Found model ${matchedModel.id} in provider's model list (normalized: ${modelName})`);
+        console.log(`Found model ${matchedModel.id} in provider's model list (requested: ${modelName})`);
         return matchedModel.id;
       }
     }
@@ -2707,10 +2768,21 @@ async function getProviderModelId(provider, modelName, keyInfo = null) {
     });
 
     const models = response.data.data || [];
-    const matchedModel = models.find(model => {
+
+    // 先尝试精确匹配
+    let matchedModel = models.find(model => {
       const normalized = normalizeModelName(model.id);
       return normalized === modelName;
     });
+
+    // 如果精确匹配失败，再尝试规范化匹配
+    if (!matchedModel) {
+      const normalizedModelName = normalizeModelName(modelName);
+      matchedModel = models.find(model => {
+        const normalized = normalizeModelName(model.id);
+        return normalized === normalizedModelName;
+      });
+    }
 
     return matchedModel ? matchedModel.id : null;
   } catch (error) {
@@ -3553,22 +3625,46 @@ async function handleStreamingResponse(response, res, stream, selectedProvider, 
  * 识别模型类型（文本或图像生成）
  * @param {Object} provider - 提供商对象
  * @param {string} modelId - 模型ID
- * @returns {string} - 'text' 或 'image'
+ * @param {Object} userSettings - 用户设置（包含modelTypes配置）
+ * @returns {string} - 'text', 'image', 'image-generation', 'image-edit'
  */
-function getModelType(provider, modelId) {
-  // 1. 从provider配置读取
+function getModelType(provider, modelId, userSettings = null) {
+  // 1. 优先从用户设置的modelTypes读取（最高优先级）
+  if (userSettings?.modelTypes) {
+    const fullModelId = `${provider.id}::${modelId}`;
+    const userConfiguredType = userSettings.modelTypes[fullModelId];
+    if (userConfiguredType) {
+      log.debug(`[ModelType] Found type from user settings: ${userConfiguredType} for ${fullModelId}`);
+      return userConfiguredType;
+    }
+  }
+
+  // 2. 从provider配置读取
   const model = provider.models?.find(m => m.id === modelId);
   if (model?.type) {
     log.debug(`[ModelType] Found type from config: ${model.type} for model ${modelId}`);
     return model.type;
   }
 
-  // 2. 从模型ID推断
-  const imageKeywords = ['dall-e', 'dalle', 'stable-diffusion', 'midjourney', 'imagen', 'sd-', 'sdxl'];
-  const isImageModel = imageKeywords.some(kw => modelId.toLowerCase().includes(kw));
+  // 3. 从模型ID推断（作为备选）
+  const modelIdLower = modelId.toLowerCase();
+
+  // 精确匹配图像生成/编辑模型的关键词
+  const imageKeywords = [
+    'dall-e', 'dalle',
+    'stable-diffusion', 'midjourney', 'imagen',
+    'sd-', 'sdxl',
+    'nano', 'banana',
+    'imagine', 'image-edit', 'img-edit',
+    'flux', 'playground',
+    'gpt-image' // OpenAI 的新图像模型
+  ];
+
+  const isImageModel = imageKeywords.some(kw => modelIdLower.includes(kw));
 
   if (isImageModel) {
     log.debug(`[ModelType] Inferred as image model from ID: ${modelId}`);
+    // 默认推断为通用图像模型（支持文生图和图生图）
     return 'image';
   }
 
@@ -3577,29 +3673,61 @@ function getModelType(provider, modelId) {
 }
 
 /**
+ * 判断模型是否支持图像生成
+ * @param {string} modelType - 模型类型
+ * @returns {boolean}
+ */
+function isImageModel(modelType) {
+  return ['image', 'image-generation', 'image-edit'].includes(modelType);
+}
+
+/**
+ * 判断模型是否支持文生图
+ * @param {string} modelType - 模型类型
+ * @returns {boolean}
+ */
+function supportsTextToImage(modelType) {
+  return ['image', 'image-generation'].includes(modelType);
+}
+
+/**
+ * 判断模型是否支持图生图
+ * @param {string} modelType - 模型类型
+ * @returns {boolean}
+ */
+function supportsImageToImage(modelType) {
+  return ['image', 'image-edit'].includes(modelType);
+}
+
+/**
  * 构建图像生成API的URL
  * @param {string} baseUrl - 基础URL
  * @param {string} apiType - API类型
+ * @param {Object} customEndpoints - 自定义端点配置
+ * @param {string} modelType - 模型类型
+ * @param {boolean} hasInputImage - 是否有输入图片
+ * @param {string} modelId - 模型ID（用于判断是否需要使用chat端点）
  * @returns {string} - 完整的API URL
  */
-function buildImageApiUrl(baseUrl, apiType, customEndpoints = null) {
+function buildImageApiUrl(baseUrl, apiType, customEndpoints = null, modelType = 'image', hasInputImage = false, modelId = '') {
   baseUrl = baseUrl.replace(/\/$/, '');
 
+  // 优先使用自定义端点
   if (customEndpoints && customEndpoints.images) {
     return `${baseUrl}${customEndpoints.images}`;
   }
 
-  if (apiType === 'openai') {
-    return `${baseUrl}/v1/images/generations`;
+  // 如果有输入图片（图生图），使用edits端点
+  if (hasInputImage) {
+    return `${baseUrl}/v1/images/edits`;
   }
 
-  // 其他API类型可以在这里扩展
-  // 默认使用OpenAI格式
-  return `${baseUrl}/v1/images/generations`;
+  // 文生图：统一使用chat completions端点
+  return `${baseUrl}/v1/chat/completions`;
 }
 
 /**
- * 构建图像生成请求体
+ * 构建图像生成请求体（JSON格式，用于文生图）
  * @param {string} modelId - 模型ID
  * @param {string} prompt - 提示词
  * @param {Object} params - 参数
@@ -3611,18 +3739,23 @@ function buildImageRequestBody(modelId, prompt, params, apiType) {
     const requestBody = {
       model: modelId,
       prompt: prompt,
-      n: params.n || 1,
-      size: params.size || '1024x1024'
+      n: params.n || 1
     };
 
-    // 只有DALL-E 3支持quality和style参数
-    if (modelId.toLowerCase().includes('dall-e-3')) {
-      if (params.quality) {
-        requestBody.quality = params.quality;
-      }
-      if (params.style) {
-        requestBody.style = params.style;
-      }
+    // 只在明确提供时才添加size参数
+    if (params.size) {
+      requestBody.size = params.size;
+    }
+
+    // 添加可选参数
+    if (params.quality) {
+      requestBody.quality = params.quality;
+    }
+    if (params.style) {
+      requestBody.style = params.style;
+    }
+    if (params.response_format) {
+      requestBody.response_format = params.response_format;
     }
 
     return requestBody;
@@ -3640,10 +3773,44 @@ function buildImageRequestBody(modelId, prompt, params, apiType) {
  * 解析图像生成响应
  * @param {Object} data - API响应数据
  * @param {string} apiType - API类型
+ * @param {boolean} isChatFormat - 是否是chat completions格式
  * @returns {Object} - 标准化的图像数据
  */
-function parseImageResponse(data, apiType) {
-  if (apiType === 'openai') {
+function parseImageResponse(data, apiType, isChatFormat = false) {
+  // 处理chat completions格式（grok-imagine）
+  if (isChatFormat && data.choices && data.choices.length > 0) {
+    const content = data.choices[0].delta?.content || data.choices[0].message?.content || '';
+
+    // 尝试从markdown格式中提取图片URL: ![image](url)
+    const imageUrlMatch = content.match(/!\[.*?\]\((https?:\/\/[^\)]+)\)/);
+
+    if (imageUrlMatch) {
+      return {
+        images: [{
+          url: imageUrlMatch[1],
+          revisedPrompt: null
+        }],
+        metadata: {
+          created: data.created
+        }
+      };
+    }
+
+    // 如果content直接是URL
+    if (content.startsWith('http://') || content.startsWith('https://')) {
+      return {
+        images: [{
+          url: content,
+          revisedPrompt: null
+        }],
+        metadata: {
+          created: data.created
+        }
+      };
+    }
+  }
+
+  if (apiType === 'openai' && data.data) {
     return {
       images: data.data.map(img => ({
         url: img.url || (img.b64_json ? `data:image/png;base64,${img.b64_json}` : null),
@@ -3670,20 +3837,30 @@ function parseImageResponse(data, apiType) {
  * @param {Object} res - 响应对象
  * @param {string} modelId - 模型ID
  * @param {Object|null} keyInfo - key selection result
+ * @param {Array|null} images - 输入图片数组（用于图生图）
+ * @param {Object|null} userSettings - 用户设置
  */
-async function generateImage(provider, prompt, params, res, modelId, keyInfo = null) {
+async function generateImage(provider, prompt, params, res, modelId, keyInfo = null, images = null, userSettings = null) {
   log.info(`[ImageGen] Starting image generation with provider: ${provider.name}, model: ${modelId}`);
   log.verbose(`[ImageGen] Prompt: ${prompt.substring(0, 100)}...`);
   log.verbose(`[ImageGen] Params:`, params);
 
+  const hasInputImage = images && images.length > 0;
+  if (hasInputImage) {
+    log.info(`[ImageGen] Image-to-image mode: ${images.length} input image(s) provided`);
+  } else {
+    log.info(`[ImageGen] Text-to-image mode`);
+  }
+
+  // 获取模型类型
+  const modelType = getModelType(provider, modelId, userSettings);
+  log.info(`[ImageGen] Model type: ${modelType}`);
+
   const apiType = provider.apiType || 'openai';
-  const url = buildImageApiUrl(provider.baseUrl, apiType, provider.customEndpoints);
+  const url = buildImageApiUrl(provider.baseUrl, apiType, provider.customEndpoints, modelType, hasInputImage, modelId);
+  log.info(`[ImageGen] Using endpoint: ${url}`);
 
   try {
-    // 构建请求体
-    const requestBody = buildImageRequestBody(modelId, prompt, params, apiType);
-    log.verbose(`[ImageGen] Request body:`, requestBody);
-
     // 设置响应头（SSE格式）
     res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
     res.setHeader('Cache-Control', 'no-cache');
@@ -3692,23 +3869,90 @@ async function generateImage(provider, prompt, params, res, modelId, keyInfo = n
     // 发送开始生成的消息
     res.write(`data: ${JSON.stringify({
       type: 'status',
-      message: '正在生成图片，请稍候...'
+      message: hasInputImage ? '正在编辑图片，请稍候...' : '正在生成图片，请稍候...'
     })}\n\n`);
 
-    // 调用API（非流式，等待完整响应）
-    const response = await axios.post(url, requestBody, {
-      headers: {
-        'Authorization': `Bearer ${keyInfo?.key?.apiKey || provider.apiKey}`,
-        'Content-Type': 'application/json'
-      },
-      timeout: CONFIG.STREAM_TIMEOUT // 使用配置的超时时间（120秒）
-    });
+    let response;
+
+    // 文生图使用chat completions格式，图生图使用FormData
+    const useChatEndpoint = !hasInputImage;
+
+    // 根据是否有输入图片选择请求格式
+    if (hasInputImage) {
+      // 图生图：使用 FormData (multipart/form-data)
+      const FormData = require('form-data');
+      const formData = new FormData();
+
+      // 添加模型
+      formData.append('model', modelId);
+
+      // 添加提示词
+      formData.append('prompt', prompt);
+
+      // 添加图片（将 base64 转换为 Buffer）
+      const imageDataUrl = images[0].dataUrl;
+      const base64Data = imageDataUrl.split(',')[1];
+      if (!base64Data) {
+        throw new Error('Invalid image data format');
+      }
+      const imageBuffer = Buffer.from(base64Data, 'base64');
+
+      // 根据 dataUrl 判断图片格式
+      const mimeType = imageDataUrl.split(';')[0].split(':')[1] || 'image/png';
+      const extension = mimeType.split('/')[1] || 'png';
+
+      formData.append('image', imageBuffer, {
+        filename: images[0].name || `image.${extension}`,
+        contentType: mimeType
+      });
+
+      // 添加其他参数
+      if (params.n) formData.append('n', params.n.toString());
+      if (params.size) formData.append('size', params.size);
+      if (params.quality) formData.append('quality', params.quality);
+      if (params.response_format) formData.append('response_format', params.response_format);
+
+      log.info(`[ImageGen] Using FormData for image-to-image (edits endpoint)`);
+
+      // 调用API
+      response = await axios.post(url, formData, {
+        headers: {
+          'Authorization': `Bearer ${keyInfo?.key?.apiKey || provider.apiKey}`,
+          ...formData.getHeaders()
+        },
+        timeout: CONFIG.STREAM_TIMEOUT
+      });
+    } else {
+      // 文生图：使用chat completions格式
+      const requestBody = {
+        model: modelId,
+        messages: [
+          {
+            role: 'user',
+            content: prompt
+          }
+        ],
+        stream: false
+      };
+
+      log.info(`[ImageGen] Using chat completions format for text-to-image`);
+      log.info(`[ImageGen] Request body stringified: ${JSON.stringify(requestBody)}`);
+
+      response = await axios.post(url, requestBody, {
+        headers: {
+          'Authorization': `Bearer ${keyInfo?.key?.apiKey || provider.apiKey}`,
+          'Content-Type': 'application/json'
+        },
+        timeout: CONFIG.STREAM_TIMEOUT
+      });
+    }
 
     log.info(`[ImageGen] Image generation successful, status: ${response.status}`);
+    log.info(`[ImageGen] Response data:`, JSON.stringify(response.data));
 
     // 解析响应
-    const imageData = parseImageResponse(response.data, apiType);
-    log.verbose(`[ImageGen] Generated ${imageData.images.length} image(s)`);
+    const imageData = parseImageResponse(response.data, apiType, useChatEndpoint);
+    log.info(`[ImageGen] Generated ${imageData.images.length} image(s)`);
 
     // 记录成功的API调用
     await logApiCall({
