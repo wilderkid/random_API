@@ -189,6 +189,7 @@ function createSchema(db) {
       usage_count INTEGER DEFAULT 0,
       allowed_models_json TEXT DEFAULT '[]',
       allowed_groups_json TEXT DEFAULT '[]',
+      use_polling INTEGER DEFAULT 1,
       rate_limit_json TEXT DEFAULT '{"requestsPerMinute":60,"requestsPerHour":1000}',
       updated_at TEXT DEFAULT CURRENT_TIMESTAMP
     );
@@ -236,6 +237,14 @@ function ensureProvidersSortOrderColumn(db) {
   }
 }
 
+function ensureProxyKeysUsePollingColumn(db) {
+  try {
+    db.prepare('SELECT use_polling FROM proxy_keys LIMIT 1').get();
+  } catch (error) {
+    db.prepare('ALTER TABLE proxy_keys ADD COLUMN use_polling INTEGER DEFAULT 1').run();
+  }
+}
+
 function initializeDatabase() {
   if (dbInstance) {
     return dbInstance;
@@ -244,6 +253,7 @@ function initializeDatabase() {
   const db = createConnection();
   createSchema(db);
   ensureProvidersSortOrderColumn(db);
+  ensureProxyKeysUsePollingColumn(db);
 
   dbInstance = db;
   return dbInstance;

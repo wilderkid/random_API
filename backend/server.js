@@ -2079,11 +2079,11 @@ function buildResponsesFromChatCompletion(completion, modelOverride = null) {
 function extractModelName(modelId) {
   console.log(`Extracting model name from: ${modelId}`);
 
-  // 如果是轮询模式的格式 (providerId::modelId)，提取modelId部分
+  // 如果是带提供商前缀的格式 (providerId::modelId)，提取modelId部分
   if (modelId.includes('::')) {
     const [, actualModelId] = modelId.split('::');
     const normalized = normalizeModelName(actualModelId);
-    console.log(`Extracted and normalized model name from polling format: ${normalized}`);
+    console.log(`Extracted and normalized model name from provider-prefixed format: ${normalized}`);
     return normalized;
   }
 
@@ -2169,18 +2169,47 @@ function extractSessionId(req) {
 }
 
 // 获取或创建会话的提供商绑定
-function getConversationProvider(sessionIdentifier, modelName, userSettings, providers, pollingConfig) {
+function getConversationProvider(sessionIdentifier, modelName, userSettings, providers, pollingConfig, apiKeyInfo = null) {
   if (!userSettings.conversationProviderMap) {
     userSettings.conversationProviderMap = {};
   }
   
-  const key = `${modelName}:${sessionIdentifier}`;
+  const usePolling = apiKeyInfo?.usePolling !== false;
+  const keyMode = usePolling ? 'polling' : 'single';
+  const key = `${keyMode}:${modelName}:${sessionIdentifier}`;
   const mapping = userSettings.conversationProviderMap[key];
   
   if (mapping) {
     // 检查映射的提供商是否仍然可用
     const provider = providers.find(p => p.id === mapping.providerId);
     if (provider && !provider.disabled) {
+      // 非轮询模式下，校验分组权限是否仍然允许当前绑定提供商
+      if (!usePolling && apiKeyInfo?.allowedGroups?.length > 0) {
+        const providerGroupId = provider.groupId || 'default';
+        if (!apiKeyInfo.allowedGroups.includes(providerGroupId)) {
+          console.log(`[Session] Provider ${provider.name} is no longer allowed by API key groups, will select new provider`);
+          return null;
+        }
+      }
+
+      // 轮询模式下，校验提供商是否仍在轮询池且未被排除
+      if (usePolling) {
+        const available = pollingConfig?.available?.[modelName] || [];
+        const excludedSet = new Set();
+        if (Array.isArray(pollingConfig?.excluded)) {
+          pollingConfig.excluded.forEach(item => {
+            if (item.modelName === modelName) {
+              excludedSet.add(item.providerId);
+            }
+          });
+        }
+
+        if (!available.includes(mapping.providerId) || excludedSet.has(mapping.providerId)) {
+          console.log(`[Session] Provider ${mapping.providerId} is no longer available in polling pool for ${modelName}, will select new provider`);
+          return null;
+        }
+      }
+
       // 检查该模型在该提供商是否被禁用
       const isModelDisabled = isModelDisabledForProvider(modelName, mapping.providerId, userSettings);
       if (!isModelDisabled) {
@@ -2201,15 +2230,18 @@ function getConversationProvider(sessionIdentifier, modelName, userSettings, pro
 }
 
 // 保存会话-提供商映射
-function saveConversationProvider(sessionIdentifier, modelName, providerId, userSettings) {
+function saveConversationProvider(sessionIdentifier, modelName, providerId, userSettings, apiKeyInfo = null) {
   if (!userSettings.conversationProviderMap) {
     userSettings.conversationProviderMap = {};
   }
   
-  const key = `${modelName}:${sessionIdentifier}`;
+  const usePolling = apiKeyInfo?.usePolling !== false;
+  const keyMode = usePolling ? 'polling' : 'single';
+  const key = `${keyMode}:${modelName}:${sessionIdentifier}`;
   userSettings.conversationProviderMap[key] = {
     providerId: providerId,
     modelName: modelName,
+    mode: keyMode,
     lastUsed: new Date().toISOString(),
     messageCount: 1,
     createdAt: userSettings.conversationProviderMap[key]?.createdAt || new Date().toISOString()
@@ -2879,7 +2911,7 @@ class BackgroundTaskProcessor {
 
         // Save conversation provider if needed
         if (sessionIdentifier) {
-          saveConversationProvider(sessionIdentifier, pureModelName, selectedProvider.id, userSettings);
+          saveConversationProvider(sessionIdentifier, pureModelName, selectedProvider.id, userSettings, keyInfo);
         }
 
         // Save polling state (async)
@@ -4278,6 +4310,7 @@ app.get('/v1/models', verifyProxyApiKey, async (req, res) => {
     const apiKeyInfo = req.apiKeyInfo;
 
     let availableModelNames = [];
+    let availableModelsWithProvider = [];
 
     // 判断是否使用轮询模式
     const usePolling = apiKeyInfo?.usePolling !== false; // 默认为true
@@ -4310,9 +4343,8 @@ app.get('/v1/models', verifyProxyApiKey, async (req, res) => {
         }
       }
     } else {
-      // 非轮询模式：返回指定分组的所有模型
+      // 非轮询模式：返回指定分组的所有模型（providerId::modelId）
       const allowedGroups = apiKeyInfo?.allowedGroups || [];
-      const allModelsSet = new Set();
 
       // 如果没有指定分组，返回所有分组的模型
       const providersToInclude = settings.providers.filter(p => {
@@ -4321,17 +4353,24 @@ app.get('/v1/models', verifyProxyApiKey, async (req, res) => {
         return allowedGroups.includes(p.groupId || 'default');
       });
 
+      const modelsWithProvider = [];
       providersToInclude.forEach(provider => {
         if (provider.models) {
           provider.models.forEach(model => {
             if (model.visible !== false) {
-              allModelsSet.add(model.id);
+              modelsWithProvider.push({
+                id: `${provider.id}::${model.id}`,
+                providerId: provider.id,
+                modelId: model.id,
+                normalizedName: normalizeModelName(model.id)
+              });
             }
           });
         }
       });
 
-      availableModelNames = Array.from(allModelsSet);
+      availableModelsWithProvider = modelsWithProvider;
+      availableModelNames = modelsWithProvider.map(item => item.id);
     }
 
     // 根据API密钥权限过滤模型
@@ -4341,9 +4380,24 @@ app.get('/v1/models', verifyProxyApiKey, async (req, res) => {
     // 如果没有配置（空数组），则返回所有可用的模型
     let filteredModels = availableModelNames;
     if (allowedModels.length > 0) {
-      filteredModels = availableModelNames.filter(modelName =>
-        allowedModels.includes(modelName)
-      );
+      if (usePolling) {
+        filteredModels = availableModelNames.filter(modelName =>
+          allowedModels.includes(modelName)
+        );
+      } else {
+        const allowedSet = new Set(allowedModels);
+        const normalizedAllowed = allowedModels
+          .filter(modelName => !modelName.includes('::'))
+          .map(modelName => normalizeModelName(modelName));
+
+        filteredModels = availableModelsWithProvider
+          .filter(modelInfo => {
+            if (allowedSet.has(modelInfo.id)) return true;
+            if (normalizedAllowed.length > 0 && normalizedAllowed.includes(modelInfo.normalizedName)) return true;
+            return false;
+          })
+          .map(modelInfo => modelInfo.id);
+      }
     }
 
     const models = filteredModels.map(modelName => ({
@@ -4477,16 +4531,35 @@ app.post('/v1/responses', verifyProxyApiKey, async (req, res) => {
     console.log(`[模型] 标准化模型名称: ${pureModelName}`);
 
     const allowedModels = req.apiKeyInfo?.allowedModels || [];
-    if (allowedModels.length > 0 && !allowedModels.includes(pureModelName)) {
-      console.log(`[错误] 模型 ${pureModelName} 不在此 API Key 允许的列表中`);
-      return sendErrorResponse(res, stream, {
-        message: `Model '${pureModelName}' is not allowed for this API key. Allowed models: ${allowedModels.join(', ')}`,
-        type: 'permission_error',
-        code: 'model_not_allowed'
-      }, 403);
-    }
-
     const usePolling = req.apiKeyInfo?.usePolling !== false; // 默认为true
+
+    if (allowedModels.length > 0) {
+      if (usePolling) {
+        if (!allowedModels.includes(pureModelName)) {
+          console.log(`[错误] 模型 ${pureModelName} 不在此 API Key 允许的列表中`);
+          return sendErrorResponse(res, stream, {
+            message: `Model '${pureModelName}' is not allowed for this API key. Allowed models: ${allowedModels.join(', ')}`,
+            type: 'permission_error',
+            code: 'model_not_allowed'
+          }, 403);
+        }
+      } else {
+        const normalizedAllowed = allowedModels
+          .filter(modelName => !modelName.includes('::'))
+          .map(modelName => normalizeModelName(modelName));
+
+        const allowedById = allowedModels.includes(modelName);
+        const allowedByNormalized = normalizedAllowed.includes(pureModelName);
+        if (!allowedById && !allowedByNormalized) {
+          console.log(`[错误] 模型 ${modelName} 不在此 API Key 允许的列表中`);
+          return sendErrorResponse(res, stream, {
+            message: `Model '${modelName}' is not allowed for this API key. Allowed models: ${allowedModels.join(', ')}`,
+            type: 'permission_error',
+            code: 'model_not_allowed'
+          }, 403);
+        }
+      }
+    }
     console.log(`[轮询] 轮询模式: ${usePolling ? '启用' : '禁用'}`);
 
     if (usePolling) {
@@ -4556,7 +4629,8 @@ app.post('/v1/responses', verifyProxyApiKey, async (req, res) => {
         pureModelName,
         userSettings,
         settings.providers,
-        pollingConfig
+        pollingConfig,
+        req.apiKeyInfo
       );
 
       if (selectedProvider) {
@@ -4934,19 +5008,38 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
     const pureModelName = normalizeModelName(modelName);
     console.log(`[模型] 标准化模型名称: ${pureModelName}`);
 
-    // Check model permissions - if key configured allowed model list, perform permission check
-    const allowedModels = req.apiKeyInfo?.allowedModels || [];
-    if (allowedModels.length > 0 && !allowedModels.includes(pureModelName)) {
-      console.log(`[错误] 模型 ${pureModelName} 不在此 API Key 允许的列表中`);
-      return sendErrorResponse(res, stream, {
-        message: `Model '${pureModelName}' is not allowed for this API key. Allowed models: ${allowedModels.join(', ')}`,
-        type: 'permission_error',
-        code: 'model_not_allowed'
-      }, 403);
-    }
-
     // 判断是否使用轮询模式
     const usePolling = req.apiKeyInfo?.usePolling !== false; // 默认为true
+
+    // Check model permissions - if key configured allowed model list, perform permission check
+    const allowedModels = req.apiKeyInfo?.allowedModels || [];
+    if (allowedModels.length > 0) {
+      if (usePolling) {
+        if (!allowedModels.includes(pureModelName)) {
+          console.log(`[错误] 模型 ${pureModelName} 不在此 API Key 允许的列表中`);
+          return sendErrorResponse(res, stream, {
+            message: `Model '${pureModelName}' is not allowed for this API key. Allowed models: ${allowedModels.join(', ')}`,
+            type: 'permission_error',
+            code: 'model_not_allowed'
+          }, 403);
+        }
+      } else {
+        const normalizedAllowed = allowedModels
+          .filter(modelName => !modelName.includes('::'))
+          .map(modelName => normalizeModelName(modelName));
+
+        const allowedById = allowedModels.includes(modelName);
+        const allowedByNormalized = normalizedAllowed.includes(pureModelName);
+        if (!allowedById && !allowedByNormalized) {
+          console.log(`[错误] 模型 ${modelName} 不在此 API Key 允许的列表中`);
+          return sendErrorResponse(res, stream, {
+            message: `Model '${modelName}' is not allowed for this API key. Allowed models: ${allowedModels.join(', ')}`,
+            type: 'permission_error',
+            code: 'model_not_allowed'
+          }, 403);
+        }
+      }
+    }
     console.log(`[轮询] 轮询模式: ${usePolling ? '启用' : '禁用'}`);
 
     if (usePolling) {
@@ -5028,7 +5121,8 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
         pureModelName,
         userSettings,
         settings.providers,
-        pollingConfig
+        pollingConfig,
+        req.apiKeyInfo
       );
 
       if (selectedProvider) {
@@ -5535,6 +5629,7 @@ app.post('/api/proxy-keys', async (req, res) => {
       // 透传模式下不再需要默认参数，所有参数由客户端提供
       allowedModels: [],
       allowedGroups: [], // 新增：允许的分组
+      usePolling: true,
       rateLimit: {
         requestsPerMinute: 60,
         requestsPerHour: 1000

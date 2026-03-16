@@ -152,11 +152,11 @@
                 <button @click="clearAllModels" class="btn-clear-all">✗ 清空</button>
               </div>
               <div class="models-grid">
-                <label v-for="model in searchedAvailableModels" :key="model" class="model-checkbox">
+                <label v-for="model in searchedAvailableModels" :key="model.value" class="model-checkbox">
                   <input type="checkbox"
-                         :value="model"
+                         :value="model.value"
                          v-model="selectedKey.allowedModels">
-                  <span>{{ model }}</span>
+                  <span>{{ model.label }}</span>
                 </label>
               </div>
               <div v-if="filteredAvailableModels.length === 0" class="empty-hint">
@@ -246,6 +246,7 @@ const availableGroups = ref([])
 const allProviders = ref([])
 const originalKey = ref(null)
 const modelSearchQuery = ref('') // 模型搜索关键词
+const isModelListReady = ref(false)
 
 const newKey = ref({
   name: '',
@@ -264,24 +265,26 @@ const filteredAvailableModels = computed(() => {
     return []
   }
 
-  // 如果没有选择分组，返回所有模型
-  if (!selectedKey.value.allowedGroups || selectedKey.value.allowedGroups.length === 0) {
-    return availableModels.value
-  }
+  const allowedGroups = selectedKey.value.allowedGroups || []
+  const providersToInclude = allProviders.value.filter(p => {
+    if (p.disabled) return false
+    if (allowedGroups.length === 0) return true
+    return allowedGroups.includes(p.groupId || 'default')
+  })
 
-  const allowedGroupIds = new Set(selectedKey.value.allowedGroups)
-  const providersInAllowedGroups = allProviders.value.filter(p => allowedGroupIds.has(p.groupId || 'default'))
-
-  const modelsInAllowedGroups = new Set()
-  providersInAllowedGroups.forEach(p => {
-    (p.models || []).forEach(modelObj => {
+  const models = []
+  providersToInclude.forEach(provider => {
+    (provider.models || []).forEach(modelObj => {
       if (modelObj.visible !== false) {
-        modelsInAllowedGroups.add(modelObj.id)
+        models.push({
+          value: `${provider.id}::${modelObj.id}`,
+          label: `${provider.name} :: ${modelObj.id}`
+        })
       }
     })
   })
 
-  return Array.from(modelsInAllowedGroups).sort()
+  return models.sort((a, b) => a.label.localeCompare(b.label))
 })
 
 // 搜索过滤后的轮询模型
@@ -302,7 +305,8 @@ const searchedAvailableModels = computed(() => {
   }
   const query = modelSearchQuery.value.toLowerCase()
   return filteredAvailableModels.value.filter(model =>
-    model.toLowerCase().includes(query)
+    model.label.toLowerCase().includes(query) ||
+    model.value.toLowerCase().includes(query)
   )
 })
 
@@ -313,8 +317,9 @@ function getGroupProviderCount(groupId) {
 
 // 当可见模型列表变化时，清理掉不再可见的已选模型
 watch(filteredAvailableModels, (newVisibleModels) => {
+  if (!isModelListReady.value) return
   if (selectedKey.value?.allowedModels && !selectedKey.value.usePolling) {
-    const visibleModelSet = new Set(newVisibleModels)
+    const visibleModelSet = new Set(newVisibleModels.map(m => m.value))
     selectedKey.value.allowedModels = selectedKey.value.allowedModels.filter(m => visibleModelSet.has(m))
   }
 })
@@ -369,6 +374,7 @@ async function loadAvailableModels() {
       }
     })
     availableModels.value = Array.from(allModelsSet).sort()
+    isModelListReady.value = true
   } catch (error) {
     console.error('加载可用模型失败:', error)
   }
@@ -547,7 +553,9 @@ function clearAllGroups() {
 function selectAllModels() {
   if (!selectedKey.value) return
   // 全选搜索结果中的模型
-  const modelsToAdd = searchedAvailableModels.value.filter(m => !selectedKey.value.allowedModels.includes(m))
+  const modelsToAdd = searchedAvailableModels.value
+    .map(m => m.value)
+    .filter(value => !selectedKey.value.allowedModels.includes(value))
   selectedKey.value.allowedModels = [...selectedKey.value.allowedModels, ...modelsToAdd]
 }
 
@@ -555,7 +563,7 @@ function selectAllModels() {
 function clearAllModels() {
   if (!selectedKey.value) return
   // 清空搜索结果中的模型
-  const searchedSet = new Set(searchedAvailableModels.value)
+  const searchedSet = new Set(searchedAvailableModels.value.map(m => m.value))
   selectedKey.value.allowedModels = selectedKey.value.allowedModels.filter(m => !searchedSet.has(m))
 }
 
@@ -582,11 +590,11 @@ async function deleteKey(key) {
   }
 }
 
-onMounted(() => {
+onMounted(async () => {
+  await loadAllProviders()
+  await loadAvailableModels()
   loadApiKeys()
-  loadAvailableModels()
   loadAvailableGroups()
-  loadAllProviders()
 })
 </script>
 
