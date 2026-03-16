@@ -34,7 +34,8 @@ const DEFAULT_USER_SETTINGS = {
   keyFailCounts: {},
   proxyApiKey: '',
   proxyApiKeys: {},
-  conversationProviderMap: {}
+  conversationProviderMap: {},
+  modelTypes: {}
 };
 
 const DEFAULT_LANGUAGES = {
@@ -171,7 +172,8 @@ function buildUserSettingsFromDb(db) {
     modelFailCounts: getSetting(db, 'modelFailCounts', DEFAULT_USER_SETTINGS.modelFailCounts),
     keyFailCounts: getSetting(db, 'keyFailCounts', DEFAULT_USER_SETTINGS.keyFailCounts),
     proxyApiKey: getSetting(db, 'proxyApiKey', DEFAULT_USER_SETTINGS.proxyApiKey),
-    conversationProviderMap: getSetting(db, 'conversationProviderMap', DEFAULT_USER_SETTINGS.conversationProviderMap)
+    conversationProviderMap: getSetting(db, 'conversationProviderMap', DEFAULT_USER_SETTINGS.conversationProviderMap),
+    modelTypes: getSetting(db, 'modelTypes', DEFAULT_USER_SETTINGS.modelTypes || {})
   };
 
   const proxyKeyRows = db.prepare('SELECT * FROM proxy_keys ORDER BY created_at ASC, id ASC').all();

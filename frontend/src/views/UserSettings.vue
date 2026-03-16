@@ -363,7 +363,127 @@
           <div v-if="saveMessage" class="save-message">{{ saveMessage }}</div>
         </div>
       </div>
-      
+
+      <div v-else-if="selectedSetting === 'modelTypes'" class="details-content full-width">
+        <div class="details-header">
+          <h2>模型类型管理</h2>
+          <p class="hint-text">为图像生成模型配置类型，系统将根据类型自动选择正确的API端点</p>
+        </div>
+
+        <div class="settings-form">
+          <section class="settings-section">
+            <h3>模型分类</h3>
+
+            <div class="type-categories-panel-solo">
+              <div class="type-category">
+                <div class="category-header">
+                  <h4>🖼️ 文生图模型</h4>
+                  <span class="category-count">{{ imageGenerationModels.length }}</span>
+                </div>
+                <p class="category-desc">仅支持文本生成图片（/v1/images/generations）</p>
+                <div class="category-models">
+                  <div
+                    v-for="model in imageGenerationModels"
+                    :key="model.value"
+                    class="category-model-item"
+                  >
+                    <span class="model-name">{{ model.label }}</span>
+                    <button @click="removeModelType(model.value)" class="btn-remove-tiny">×</button>
+                  </div>
+                  <div class="add-model-section">
+                    <SearchableSelect
+                      v-model="selectedModelToAdd.imageGeneration"
+                      :options="availableModelsForType"
+                      placeholder="选择模型..."
+                      search-placeholder="搜索模型..."
+                      class="model-select-searchable"
+                    />
+                    <button
+                      @click="addModelType('image-generation')"
+                      :disabled="!selectedModelToAdd.imageGeneration"
+                      class="btn-add-tiny"
+                    >
+                      添加
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="type-category">
+                <div class="category-header">
+                  <h4>✏️ 图生图模型</h4>
+                  <span class="category-count">{{ imageEditModels.length }}</span>
+                </div>
+                <p class="category-desc">仅支持图片编辑（/v1/images/edits）</p>
+                <div class="category-models">
+                  <div
+                    v-for="model in imageEditModels"
+                    :key="model.value"
+                    class="category-model-item"
+                  >
+                    <span class="model-name">{{ model.label }}</span>
+                    <button @click="removeModelType(model.value)" class="btn-remove-tiny">×</button>
+                  </div>
+                  <div class="add-model-section">
+                    <SearchableSelect
+                      v-model="selectedModelToAdd.imageEdit"
+                      :options="availableModelsForType"
+                      placeholder="选择模型..."
+                      search-placeholder="搜索模型..."
+                      class="model-select-searchable"
+                    />
+                    <button
+                      @click="addModelType('image-edit')"
+                      :disabled="!selectedModelToAdd.imageEdit"
+                      class="btn-add-tiny"
+                    >
+                      添加
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="type-category">
+                <div class="category-header">
+                  <h4>🎨 通用图像模型</h4>
+                  <span class="category-count">{{ imageUniversalModels.length }}</span>
+                </div>
+                <p class="category-desc">同时支持文生图和图生图</p>
+                <div class="category-models">
+                  <div
+                    v-for="model in imageUniversalModels"
+                    :key="model.value"
+                    class="category-model-item"
+                  >
+                    <span class="model-name">{{ model.label }}</span>
+                    <button @click="removeModelType(model.value)" class="btn-remove-tiny">×</button>
+                  </div>
+                  <div class="add-model-section">
+                    <SearchableSelect
+                      v-model="selectedModelToAdd.imageUniversal"
+                      :options="availableModelsForType"
+                      placeholder="选择模型..."
+                      search-placeholder="搜索模型..."
+                      class="model-select-searchable"
+                    />
+                    <button
+                      @click="addModelType('image')"
+                      :disabled="!selectedModelToAdd.imageUniversal"
+                      class="btn-add-tiny"
+                    >
+                      添加
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <button @click="saveModelTypes" class="btn-save">保存设置</button>
+          <div v-if="saveMessage" class="save-message">{{ saveMessage }}</div>
+        </div>
+      </div>
+
       <div v-else class="empty-state">
         <p>请从左侧选择一个配置项</p>
       </div>
@@ -387,7 +507,8 @@ const settings = ref({
   translateDefaultPromptId: '',
   translatePollingEnabled: false,
   quickTranslations: [],
-  pollingConfig: { available: {}, excluded: {}, disabled: {} }
+  pollingConfig: { available: {}, excluded: {}, disabled: {} },
+  modelTypes: {} // 格式: { 'providerId::modelId': 'image-generation' | 'image-edit' | 'image' }
 })
 const saveMessage = ref('')
 const selectedSetting = ref('user')
@@ -398,6 +519,11 @@ const sourceLanguages = ref([])
 const targetLanguages = ref([])
 const editingLanguage = ref(null)
 const languageForm = ref({ name: '', code: '' })
+const selectedModelToAdd = ref({
+  imageGeneration: '',
+  imageEdit: '',
+  imageUniversal: ''
+})
 
 // 动态获取API基础URL
 const apiBaseUrl = computed(() => {
@@ -477,6 +603,64 @@ const isTranslateModelPollingSupported = computed(() => {
   return Array.isArray(availableProviders) && availableProviders.length > 0
 })
 
+// 模型类型管理相关计算属性
+const imageGenerationModels = computed(() => {
+  return allModels.value.filter(m => settings.value.modelTypes?.[m.value] === 'image-generation')
+})
+
+const imageEditModels = computed(() => {
+  return allModels.value.filter(m => settings.value.modelTypes?.[m.value] === 'image-edit')
+})
+
+const imageUniversalModels = computed(() => {
+  return allModels.value.filter(m => settings.value.modelTypes?.[m.value] === 'image')
+})
+
+const availableModelsForType = computed(() => {
+  return allModels.value.filter(m => !settings.value.modelTypes?.[m.value])
+})
+
+function addModelType(type) {
+  if (!settings.value.modelTypes) {
+    settings.value.modelTypes = {}
+  }
+
+  let modelValue = ''
+  if (type === 'image-generation') {
+    modelValue = selectedModelToAdd.value.imageGeneration
+    selectedModelToAdd.value.imageGeneration = ''
+  } else if (type === 'image-edit') {
+    modelValue = selectedModelToAdd.value.imageEdit
+    selectedModelToAdd.value.imageEdit = ''
+  } else if (type === 'image') {
+    modelValue = selectedModelToAdd.value.imageUniversal
+    selectedModelToAdd.value.imageUniversal = ''
+  }
+
+  if (modelValue) {
+    settings.value.modelTypes[modelValue] = type
+  }
+}
+
+function removeModelType(modelValue) {
+  if (settings.value.modelTypes) {
+    delete settings.value.modelTypes[modelValue]
+  }
+}
+
+async function saveModelTypes() {
+  try {
+    const response = await axios.put('/api/settings', { modelTypes: settings.value.modelTypes })
+    // 更新本地settings，确保与服务器同步
+    settings.value = { ...settings.value, ...response.data }
+    saveMessage.value = '模型类型配置已保存'
+    setTimeout(() => saveMessage.value = '', 3000)
+  } catch (error) {
+    console.error('Error saving model types:', error)
+    saveMessage.value = '保存失败: ' + error.message
+  }
+}
+
 const settingsItems = ref([
   {
     id: 'user',
@@ -531,6 +715,12 @@ const settingsItems = ref([
     name: '代理接口',
     description: 'OpenAI兼容接口设置',
     icon: '🔌'
+  },
+  {
+    id: 'modelTypes',
+    name: '模型类型管理',
+    description: '配置图像生成模型',
+    icon: '🖼️'
   }
 ])
 
@@ -540,7 +730,11 @@ function selectSetting(settingId) {
 
 async function loadSettings() {
   const res = await axios.get('/api/settings')
-  settings.value = { ...settings.value, ...res.data }
+  settings.value = {
+    ...settings.value,
+    ...res.data,
+    modelTypes: res.data.modelTypes || {}
+  }
 }
 
 async function loadModels() {
@@ -784,6 +978,17 @@ onMounted(() => {
 .details-content {
   max-width: 800px;
   margin: 0 auto;
+}
+
+.details-content.full-width {
+  max-width: none !important;
+  margin: 0 !important;
+  width: 100%;
+}
+
+.details-content.full-width .settings-form {
+  max-width: none;
+  width: 100%;
 }
 
 .details-header h2 {
@@ -1137,5 +1342,144 @@ onMounted(() => {
 .checkbox-label input[type="checkbox"]:disabled {
   cursor: not-allowed;
   opacity: 0.5;
+}
+
+/* 模型类型管理样式 */
+.type-categories-panel-solo {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  margin-top: 16px;
+  width: 100%;
+}
+
+.type-category {
+  background: white;
+  border: 1px solid #dee2e6;
+  border-radius: 8px;
+  padding: 16px;
+  transition: all 0.2s;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.type-category:hover {
+  box-shadow: 0 4px 8px rgba(0,0,0,0.08);
+}
+
+.category-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.category-header h4 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: #333;
+}
+
+.category-count {
+  background: #6c757d;
+  color: white;
+  padding: 3px 10px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.category-desc {
+  font-size: 13px;
+  color: #6c757d;
+  margin-bottom: 14px;
+  line-height: 1.5;
+}
+
+.category-models {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.category-model-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 12px;
+  background: #f8f9fa;
+  border: 1px solid #e9ecef;
+  border-radius: 6px;
+  transition: all 0.2s;
+}
+
+.category-model-item:hover {
+  background: #e9ecef;
+}
+
+.model-name {
+  font-size: 13px;
+  font-family: 'Consolas', 'Monaco', monospace;
+  color: #495057;
+  font-weight: 500;
+}
+
+.btn-remove-tiny {
+  padding: 4px 10px;
+  background: #dc3545;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  transition: all 0.2s;
+}
+
+.btn-remove-tiny:hover {
+  background: #c82333;
+  transform: scale(1.05);
+}
+
+.add-model-section {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 10px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 2px dashed #dee2e6;
+  align-items: start;
+}
+
+.model-select-searchable {
+  width: 100%;
+  min-width: 0;
+}
+
+.btn-add-tiny {
+  padding: 8px 16px;
+  background: #28a745;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+
+.btn-add-tiny:hover:not(:disabled) {
+  background: #218838;
+  transform: translateY(-1px);
+  box-shadow: 0 2px 4px rgba(40, 167, 69, 0.3);
+}
+
+.btn-add-tiny:disabled {
+  background: #6c757d;
+  cursor: not-allowed;
+  opacity: 0.6;
 }
 </style>
