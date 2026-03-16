@@ -188,6 +188,8 @@ function buildUserSettingsFromDb(db) {
       usageCount: row.usage_count || 0,
       allowedModels: deserialize(row.allowed_models_json, []),
       allowedGroups: deserialize(row.allowed_groups_json, []),
+      allowedPollingGroups: deserialize(row.allowed_polling_groups_json, []),
+      allowedPollingProviders: deserialize(row.allowed_polling_providers_json, []),
       usePolling: row.use_polling === 0 ? false : true,
       rateLimit: deserialize(row.rate_limit_json, { requestsPerMinute: 60, requestsPerHour: 1000 })
     }])
@@ -741,10 +743,10 @@ function migrateJsonDataToSqlite() {
     const insertProxyKey = db.prepare(`
       INSERT INTO proxy_keys (
         id, name, description, api_key, enabled, created_at, last_used,
-        usage_count, allowed_models_json, allowed_groups_json, use_polling, rate_limit_json, updated_at
+        usage_count, allowed_models_json, allowed_groups_json, allowed_polling_groups_json, allowed_polling_providers_json, use_polling, rate_limit_json, updated_at
       ) VALUES (
         @id, @name, @description, @api_key, @enabled, @created_at, @last_used,
-        @usage_count, @allowed_models_json, @allowed_groups_json, @use_polling, @rate_limit_json, CURRENT_TIMESTAMP
+        @usage_count, @allowed_models_json, @allowed_groups_json, @allowed_polling_groups_json, @allowed_polling_providers_json, @use_polling, @rate_limit_json, CURRENT_TIMESTAMP
       )
     `);
 
@@ -760,6 +762,8 @@ function migrateJsonDataToSqlite() {
         usage_count: key.usageCount || 0,
         allowed_models_json: serialize(key.allowedModels || []),
         allowed_groups_json: serialize(key.allowedGroups || []),
+        allowed_polling_groups_json: serialize(key.allowedPollingGroups || []),
+        allowed_polling_providers_json: serialize(key.allowedPollingProviders || []),
         use_polling: key.usePolling === false ? 0 : 1,
         rate_limit_json: serialize(key.rateLimit || { requestsPerMinute: 60, requestsPerHour: 1000 })
       });
@@ -821,10 +825,10 @@ function saveUserSettingsToDb(settings) {
     const insertProxyKey = db.prepare(`
       INSERT INTO proxy_keys (
         id, name, description, api_key, enabled, created_at, last_used,
-        usage_count, allowed_models_json, allowed_groups_json, use_polling, rate_limit_json, updated_at
+        usage_count, allowed_models_json, allowed_groups_json, allowed_polling_groups_json, allowed_polling_providers_json, use_polling, rate_limit_json, updated_at
       ) VALUES (
         @id, @name, @description, @api_key, @enabled, @created_at, @last_used,
-        @usage_count, @allowed_models_json, @allowed_groups_json, @use_polling, @rate_limit_json, CURRENT_TIMESTAMP
+        @usage_count, @allowed_models_json, @allowed_groups_json, @allowed_polling_groups_json, @allowed_polling_providers_json, @use_polling, @rate_limit_json, CURRENT_TIMESTAMP
       )
     `);
 
@@ -840,6 +844,8 @@ function saveUserSettingsToDb(settings) {
         usage_count: key.usageCount || 0,
         allowed_models_json: serialize(key.allowedModels || []),
         allowed_groups_json: serialize(key.allowedGroups || []),
+        allowed_polling_groups_json: serialize(key.allowedPollingGroups || []),
+        allowed_polling_providers_json: serialize(key.allowedPollingProviders || []),
         use_polling: key.usePolling === false ? 0 : 1,
         rate_limit_json: serialize(key.rateLimit || { requestsPerMinute: 60, requestsPerHour: 1000 })
       });

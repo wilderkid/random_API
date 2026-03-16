@@ -87,6 +87,43 @@
               </div>
             </div>
 
+            <!-- 轮询范围 - 分组与提供商 -->
+            <div v-if="selectedKey.usePolling" class="config-section">
+              <h4>轮询范围限制</h4>
+              <p class="section-desc">可选：限制轮询范围为指定分组或指定提供商（并集规则，留空表示不限制）</p>
+              <div class="models-header">
+                <button @click="selectAllPollingGroups" class="btn-select-all">✓ 全选分组</button>
+                <button @click="clearAllPollingGroups" class="btn-clear-all">✗ 清空分组</button>
+              </div>
+              <div class="models-grid">
+                <label v-for="group in availableGroups" :key="group.id" class="model-checkbox">
+                  <input type="checkbox"
+                         :value="group.id"
+                         v-model="selectedKey.allowedPollingGroups">
+                  <span>{{ group.name }} ({{ getGroupProviderCount(group.id) }}个提供商)</span>
+                </label>
+              </div>
+              <div class="models-header" style="margin-top: 12px;">
+                <button @click="selectAllPollingProviders" class="btn-select-all">✓ 全选提供商</button>
+                <button @click="clearAllPollingProviders" class="btn-clear-all">✗ 清空提供商</button>
+              </div>
+              <div class="models-search">
+                <input v-model="pollingProviderSearchQuery"
+                       type="text"
+                       placeholder="🔍 搜索提供商..."
+                       class="search-input-small">
+                <span class="search-count">{{ searchedPollingScopeProviders.length }} / {{ pollingScopeProviders.length }}</span>
+              </div>
+              <div class="models-grid">
+                <label v-for="provider in searchedPollingScopeProviders" :key="provider.id" class="model-checkbox">
+                  <input type="checkbox"
+                         :value="provider.id"
+                         v-model="selectedKey.allowedPollingProviders">
+                  <span>{{ provider.name }}</span>
+                </label>
+              </div>
+            </div>
+
             <!-- 模型权限 - 轮询模式 -->
             <div v-if="selectedKey.usePolling" class="config-section">
               <h4>轮询模型权限</h4>
@@ -96,7 +133,7 @@
                        type="text"
                        placeholder="🔍 搜索模型..."
                        class="search-input-small">
-                <span class="search-count">{{ searchedPollingModels.length }} / {{ availablePollingModels.length }}</span>
+                <span class="search-count">{{ searchedPollingModels.length }} / {{ filteredPollingModels.length }}</span>
               </div>
               <div class="models-header">
                 <button @click="selectAllPollingModels" class="btn-select-all">✓ 全选</button>
@@ -110,8 +147,8 @@
                   <span>{{ model }}</span>
                 </label>
               </div>
-              <div v-if="availablePollingModels.length === 0" class="empty-hint">
-                暂无可用的轮询模型，请先在轮询配置中添加模型
+              <div v-if="filteredPollingModels.length === 0" class="empty-hint">
+                当前轮询范围内暂无可用模型
               </div>
               <div v-else-if="searchedPollingModels.length === 0" class="empty-hint">
                 没有匹配的模型
@@ -244,9 +281,65 @@ const availableModels = ref([])
 const availablePollingModels = ref([]) // 轮询模型列表
 const availableGroups = ref([])
 const allProviders = ref([])
+const pollingConfigRef = ref({ available: {}, excluded: [] })
 const originalKey = ref(null)
 const modelSearchQuery = ref('') // 模型搜索关键词
+const pollingProviderSearchQuery = ref('')
 const isModelListReady = ref(false)
+
+const pollingScopeProviders = computed(() => {
+  if (!selectedKey.value) return []
+  const providers = allProviders.value.filter(p => !p.disabled)
+  const allowedGroups = selectedKey.value.allowedPollingGroups || []
+  if (allowedGroups.length === 0) return providers
+  return providers.filter(p => allowedGroups.includes(p.groupId || 'default'))
+})
+
+const searchedPollingScopeProviders = computed(() => {
+  if (!pollingProviderSearchQuery.value.trim()) return pollingScopeProviders.value
+  const query = pollingProviderSearchQuery.value.toLowerCase()
+  return pollingScopeProviders.value.filter(provider =>
+    provider.name.toLowerCase().includes(query) || provider.id.toLowerCase().includes(query)
+  )
+})
+
+const filteredPollingModels = computed(() => {
+  if (!selectedKey.value || !selectedKey.value.usePolling) return []
+
+  const allowedGroups = selectedKey.value.allowedPollingGroups || []
+  const allowedProviders = selectedKey.value.allowedPollingProviders || []
+  const hasGroupLimit = allowedGroups.length > 0
+  const hasProviderLimit = allowedProviders.length > 0
+
+  const providerPool = allProviders.value.filter(p => !p.disabled)
+  const allowedProviderIds = new Set()
+  providerPool.forEach(provider => {
+    const groupId = provider.groupId || 'default'
+    if (!hasGroupLimit && !hasProviderLimit) {
+      allowedProviderIds.add(provider.id)
+      return
+    }
+    if ((hasGroupLimit && allowedGroups.includes(groupId)) || (hasProviderLimit && allowedProviders.includes(provider.id))) {
+      allowedProviderIds.add(provider.id)
+    }
+  })
+
+  const pollingAvailable = pollingConfigRef.value.available || {}
+  const pollingExcluded = Array.isArray(pollingConfigRef.value.excluded) ? pollingConfigRef.value.excluded : []
+
+  return Object.keys(pollingAvailable)
+    .filter(modelName => {
+      const providerIds = pollingAvailable[modelName] || []
+      const excludedSet = new Set(
+        pollingExcluded
+          .filter(item => item.modelName === modelName)
+          .map(item => item.providerId)
+      )
+      const scopedIds = providerIds.filter(id => allowedProviderIds.has(id) && !excludedSet.has(id))
+      return scopedIds.length >= 2
+    })
+    .sort()
+})
 
 const newKey = ref({
   name: '',
@@ -289,11 +382,12 @@ const filteredAvailableModels = computed(() => {
 
 // 搜索过滤后的轮询模型
 const searchedPollingModels = computed(() => {
+  const baseList = filteredPollingModels.value
   if (!modelSearchQuery.value.trim()) {
-    return availablePollingModels.value
+    return baseList
   }
   const query = modelSearchQuery.value.toLowerCase()
-  return availablePollingModels.value.filter(model =>
+  return baseList.filter(model =>
     model.toLowerCase().includes(query)
   )
 })
@@ -330,14 +424,33 @@ watch(() => selectedKey.value?.usePolling, (newValue) => {
     // 切换模式时清空已选模型和搜索
     selectedKey.value.allowedModels = []
     selectedKey.value.allowedGroups = []
+    selectedKey.value.allowedPollingGroups = []
+    selectedKey.value.allowedPollingProviders = []
     modelSearchQuery.value = ''
   }
 })
+
+// 监听轮询分组变更：同步筛选提供商与模型选择
+watch(() => selectedKey.value?.allowedPollingGroups, () => {
+  if (!selectedKey.value || !selectedKey.value.usePolling) return
+  const providerIds = new Set(pollingScopeProviders.value.map(p => p.id))
+  selectedKey.value.allowedPollingProviders = (selectedKey.value.allowedPollingProviders || []).filter(id => providerIds.has(id))
+  const allowedModelSet = new Set(filteredPollingModels.value)
+  selectedKey.value.allowedModels = (selectedKey.value.allowedModels || []).filter(m => allowedModelSet.has(m))
+}, { deep: true })
+
+// 监听轮询提供商变更：同步筛选模型选择
+watch(() => selectedKey.value?.allowedPollingProviders, () => {
+  if (!selectedKey.value || !selectedKey.value.usePolling) return
+  const allowedModelSet = new Set(filteredPollingModels.value)
+  selectedKey.value.allowedModels = (selectedKey.value.allowedModels || []).filter(m => allowedModelSet.has(m))
+}, { deep: true })
 
 // 监听密钥切换
 watch(selectedKey, () => {
   // 切换密钥时清空搜索
   modelSearchQuery.value = ''
+  pollingProviderSearchQuery.value = ''
 })
 
 // 加载API密钥列表
@@ -357,7 +470,8 @@ async function loadApiKeys() {
 async function loadAvailableModels() {
   try {
     const userSettings = await axios.get('/api/settings')
-    const pollingConfig = userSettings.data.pollingConfig || { available: {} }
+    const pollingConfig = userSettings.data.pollingConfig || { available: {}, excluded: [] }
+    pollingConfigRef.value = pollingConfig
 
     // 轮询模型列表（规范化后的模型名）
     availablePollingModels.value = Object.keys(pollingConfig.available || {}).sort()
@@ -409,6 +523,8 @@ function selectKey(key) {
   const keyWithDefaults = {
     ...key,
     allowedGroups: key.allowedGroups || [],
+    allowedPollingGroups: key.allowedPollingGroups || [],
+    allowedPollingProviders: key.allowedPollingProviders || [],
     usePolling: key.usePolling !== undefined ? key.usePolling : true // 默认启用轮询
   }
   selectedKey.value = JSON.parse(JSON.stringify(keyWithDefaults))
@@ -547,6 +663,34 @@ function selectAllGroups() {
 function clearAllGroups() {
   if (!selectedKey.value) return
   selectedKey.value.allowedGroups = []
+}
+
+// 轮询分组全选
+function selectAllPollingGroups() {
+  if (!selectedKey.value) return
+  selectedKey.value.allowedPollingGroups = availableGroups.value.map(g => g.id)
+}
+
+// 轮询分组清空
+function clearAllPollingGroups() {
+  if (!selectedKey.value) return
+  selectedKey.value.allowedPollingGroups = []
+}
+
+// 轮询提供商全选
+function selectAllPollingProviders() {
+  if (!selectedKey.value) return
+  const idsToAdd = searchedPollingScopeProviders.value
+    .map(p => p.id)
+    .filter(id => !selectedKey.value.allowedPollingProviders.includes(id))
+  selectedKey.value.allowedPollingProviders = [...selectedKey.value.allowedPollingProviders, ...idsToAdd]
+}
+
+// 轮询提供商清空
+function clearAllPollingProviders() {
+  if (!selectedKey.value) return
+  const searchedSet = new Set(searchedPollingScopeProviders.value.map(p => p.id))
+  selectedKey.value.allowedPollingProviders = selectedKey.value.allowedPollingProviders.filter(id => !searchedSet.has(id))
 }
 
 // 全选模型（非轮询模式）
