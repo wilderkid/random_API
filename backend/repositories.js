@@ -188,6 +188,7 @@ function buildUserSettingsFromDb(db) {
       usageCount: row.usage_count || 0,
       allowedModels: deserialize(row.allowed_models_json, []),
       allowedGroups: deserialize(row.allowed_groups_json, []),
+      allowedProviders: deserialize(row.allowed_providers_json, []),
       allowedPollingGroups: deserialize(row.allowed_polling_groups_json, []),
       allowedPollingProviders: deserialize(row.allowed_polling_providers_json, []),
       usePolling: row.use_polling === 0 ? false : true,
@@ -722,6 +723,15 @@ function migrateJsonDataToSqlite() {
     return { migrated: false, reason: 'already_migrated' };
   }
 
+  const hasExistingSettings = db.prepare('SELECT 1 FROM settings LIMIT 1').get();
+  const hasExistingProviders = db.prepare('SELECT 1 FROM providers LIMIT 1').get();
+  const hasExistingProxyKeys = db.prepare('SELECT 1 FROM proxy_keys LIMIT 1').get();
+  const hasExistingData = !!(hasExistingSettings || hasExistingProviders || hasExistingProxyKeys);
+  if (hasExistingData) {
+    setMeta(db, 'json_migrated_to_sqlite', '1');
+    return { migrated: false, reason: 'db_has_data' };
+  }
+
   ensureProvidersSortOrderColumn(db);
 
   const transaction = db.transaction((payload) => {
@@ -743,10 +753,10 @@ function migrateJsonDataToSqlite() {
     const insertProxyKey = db.prepare(`
       INSERT INTO proxy_keys (
         id, name, description, api_key, enabled, created_at, last_used,
-        usage_count, allowed_models_json, allowed_groups_json, allowed_polling_groups_json, allowed_polling_providers_json, use_polling, rate_limit_json, updated_at
+        usage_count, allowed_models_json, allowed_groups_json, allowed_providers_json, allowed_polling_groups_json, allowed_polling_providers_json, use_polling, rate_limit_json, updated_at
       ) VALUES (
         @id, @name, @description, @api_key, @enabled, @created_at, @last_used,
-        @usage_count, @allowed_models_json, @allowed_groups_json, @allowed_polling_groups_json, @allowed_polling_providers_json, @use_polling, @rate_limit_json, CURRENT_TIMESTAMP
+        @usage_count, @allowed_models_json, @allowed_groups_json, @allowed_providers_json, @allowed_polling_groups_json, @allowed_polling_providers_json, @use_polling, @rate_limit_json, CURRENT_TIMESTAMP
       )
     `);
 
@@ -762,6 +772,7 @@ function migrateJsonDataToSqlite() {
         usage_count: key.usageCount || 0,
         allowed_models_json: serialize(key.allowedModels || []),
         allowed_groups_json: serialize(key.allowedGroups || []),
+        allowed_providers_json: serialize(key.allowedProviders || []),
         allowed_polling_groups_json: serialize(key.allowedPollingGroups || []),
         allowed_polling_providers_json: serialize(key.allowedPollingProviders || []),
         use_polling: key.usePolling === false ? 0 : 1,
@@ -825,10 +836,10 @@ function saveUserSettingsToDb(settings) {
     const insertProxyKey = db.prepare(`
       INSERT INTO proxy_keys (
         id, name, description, api_key, enabled, created_at, last_used,
-        usage_count, allowed_models_json, allowed_groups_json, allowed_polling_groups_json, allowed_polling_providers_json, use_polling, rate_limit_json, updated_at
+        usage_count, allowed_models_json, allowed_groups_json, allowed_providers_json, allowed_polling_groups_json, allowed_polling_providers_json, use_polling, rate_limit_json, updated_at
       ) VALUES (
         @id, @name, @description, @api_key, @enabled, @created_at, @last_used,
-        @usage_count, @allowed_models_json, @allowed_groups_json, @allowed_polling_groups_json, @allowed_polling_providers_json, @use_polling, @rate_limit_json, CURRENT_TIMESTAMP
+        @usage_count, @allowed_models_json, @allowed_groups_json, @allowed_providers_json, @allowed_polling_groups_json, @allowed_polling_providers_json, @use_polling, @rate_limit_json, CURRENT_TIMESTAMP
       )
     `);
 
@@ -844,6 +855,7 @@ function saveUserSettingsToDb(settings) {
         usage_count: key.usageCount || 0,
         allowed_models_json: serialize(key.allowedModels || []),
         allowed_groups_json: serialize(key.allowedGroups || []),
+        allowed_providers_json: serialize(key.allowedProviders || []),
         allowed_polling_groups_json: serialize(key.allowedPollingGroups || []),
         allowed_polling_providers_json: serialize(key.allowedPollingProviders || []),
         use_polling: key.usePolling === false ? 0 : 1,

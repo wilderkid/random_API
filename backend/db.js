@@ -189,6 +189,7 @@ function createSchema(db) {
       usage_count INTEGER DEFAULT 0,
       allowed_models_json TEXT DEFAULT '[]',
       allowed_groups_json TEXT DEFAULT '[]',
+      allowed_providers_json TEXT DEFAULT '[]',
       allowed_polling_groups_json TEXT DEFAULT '[]',
       allowed_polling_providers_json TEXT DEFAULT '[]',
       use_polling INTEGER DEFAULT 1,
@@ -261,6 +262,14 @@ function ensureProxyKeysAllowedPollingColumns(db) {
   }
 }
 
+function ensureProxyKeysAllowedProvidersColumn(db) {
+  try {
+    db.prepare('SELECT allowed_providers_json FROM proxy_keys LIMIT 1').get();
+  } catch (error) {
+    db.prepare('ALTER TABLE proxy_keys ADD COLUMN allowed_providers_json TEXT DEFAULT "[]"').run();
+  }
+}
+
 function initializeDatabase() {
   if (dbInstance) {
     return dbInstance;
@@ -271,6 +280,7 @@ function initializeDatabase() {
   ensureProvidersSortOrderColumn(db);
   ensureProxyKeysUsePollingColumn(db);
   ensureProxyKeysAllowedPollingColumns(db);
+  ensureProxyKeysAllowedProvidersColumn(db);
 
   dbInstance = db;
   return dbInstance;

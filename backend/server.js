@@ -2183,12 +2183,20 @@ function getConversationProvider(sessionIdentifier, modelName, userSettings, pro
     // 检查映射的提供商是否仍然可用
     const provider = providers.find(p => p.id === mapping.providerId);
     if (provider && !provider.disabled) {
-      // 非轮询模式下，校验分组权限是否仍然允许当前绑定提供商
-      if (!usePolling && apiKeyInfo?.allowedGroups?.length > 0) {
-        const providerGroupId = provider.groupId || 'default';
-        if (!apiKeyInfo.allowedGroups.includes(providerGroupId)) {
-          console.log(`[Session] Provider ${provider.name} is no longer allowed by API key groups, will select new provider`);
-          return null;
+      // 非轮询模式下，校验分组/提供商权限是否仍然允许当前绑定提供商
+      if (!usePolling) {
+        const allowedGroups = apiKeyInfo?.allowedGroups || [];
+        const allowedProviders = apiKeyInfo?.allowedProviders || [];
+        const hasGroupLimit = allowedGroups.length > 0;
+        const hasProviderLimit = allowedProviders.length > 0;
+        if (hasGroupLimit || hasProviderLimit) {
+          const providerGroupId = provider.groupId || 'default';
+          const groupMatch = hasGroupLimit && allowedGroups.includes(providerGroupId);
+          const providerMatch = hasProviderLimit && allowedProviders.includes(provider.id);
+          if (!groupMatch && !providerMatch) {
+            console.log(`[Session] Provider ${provider.name} is no longer allowed by API key scope, will select new provider`);
+            return null;
+          }
         }
       }
 
@@ -2345,6 +2353,11 @@ function getPollingProviders(providers, modelName, config, apiKeyInfo = null) {
     })
     .filter(p => p && !p.disabled && !excludedSet.has(p.id))
     .filter(p => {
+      const hasVisibleModel = p.models?.some(m => normalizeModelName(m.id) === modelName && m.visible !== false);
+      if (!hasVisibleModel) return false;
+      return true;
+    })
+    .filter(p => {
       if (!hasPollingGroupLimit && !hasPollingProviderLimit) return true;
       const providerGroupId = p.groupId || 'default';
       const groupMatch = hasPollingGroupLimit && allowedPollingGroups.includes(providerGroupId);
@@ -2405,7 +2418,8 @@ function getNextPollingProvider(providers, modelName, config, userSettings) {
     const provider = providers.find(p => p.id === id);
     const isModelDisabled = isModelDisabledForProvider(modelName, id, userSettings);
     const isExcluded = excludedSet.has(id);
-    return provider && !provider.disabled && !isModelDisabled && !isExcluded;
+    const hasVisibleModel = provider?.models?.some(m => normalizeModelName(m.id) === modelName && m.visible !== false);
+    return provider && !provider.disabled && !isModelDisabled && !isExcluded && hasVisibleModel;
   });
 
   console.log(`Valid provider IDs for ${modelName}:`, validProviderIds);
@@ -2697,6 +2711,9 @@ function getFailoverProviders(providers, modelName, config, userSettings, exclud
     console.log(`[Failover] Non-polling mode - Searching all providers for model ${modelName}`);
 
     const allowedGroups = apiKeyInfo?.allowedGroups || [];
+    const allowedProviders = apiKeyInfo?.allowedProviders || [];
+    const hasGroupLimit = allowedGroups.length > 0;
+    const hasProviderLimit = allowedProviders.length > 0;
 
     for (const provider of providers) {
       // 跳过已排除的提供商
@@ -2710,11 +2727,13 @@ function getFailoverProviders(providers, modelName, config, userSettings, exclud
         continue;
       }
 
-      // 根据API密钥的分组权限进行过滤
-      if (allowedGroups.length > 0) {
+      // 根据API密钥的分组/提供商权限进行过滤
+      if (hasGroupLimit || hasProviderLimit) {
         const providerGroupId = provider.groupId || 'default';
-        if (!allowedGroups.includes(providerGroupId)) {
-          console.log(`[Failover] Provider ${provider.name} (group: ${providerGroupId}) is not in allowed groups, skipping`);
+        const groupMatch = hasGroupLimit && allowedGroups.includes(providerGroupId);
+        const providerMatch = hasProviderLimit && allowedProviders.includes(provider.id);
+        if (!groupMatch && !providerMatch) {
+          console.log(`[Failover] Provider ${provider.name} (group: ${providerGroupId}) is not in allowed scope, skipping`);
           continue;
         }
       }
@@ -4565,20 +4584,33 @@ app.get('/v1/models', verifyProxyApiKey, async (req, res) => {
           });
         }
 
+        // 过滤掉隐藏模型对应的提供商
+        availableProviders = availableProviders.filter(id => {
+          const provider = providerById.get(id);
+          if (!provider) return false;
+          return provider.models?.some(m => normalizeModelName(m.id) === modelName && m.visible !== false);
+        });
+
         // 只有拥有至少2个可用提供商的模型才能被外部使用
         if (availableProviders.length >= 2) {
           availableModelNames.push(modelName);
         }
       }
     } else {
-      // 非轮询模式：返回指定分组的所有模型（providerId::modelId）
+      // 非轮询模式：返回指定分组/提供商的所有模型（providerId::modelId）
       const allowedGroups = apiKeyInfo?.allowedGroups || [];
+      const allowedProviders = apiKeyInfo?.allowedProviders || [];
+      const hasGroupLimit = allowedGroups.length > 0;
+      const hasProviderLimit = allowedProviders.length > 0;
 
-      // 如果没有指定分组，返回所有分组的模型
+      // 如果没有指定分组/提供商，返回所有分组的模型
       const providersToInclude = settings.providers.filter(p => {
         if (p.disabled) return false;
-        if (allowedGroups.length === 0) return true; // 没有限制，包含所有
-        return allowedGroups.includes(p.groupId || 'default');
+        if (!hasGroupLimit && !hasProviderLimit) return true; // 没有限制，包含所有
+        const providerGroupId = p.groupId || 'default';
+        const groupMatch = hasGroupLimit && allowedGroups.includes(providerGroupId);
+        const providerMatch = hasProviderLimit && allowedProviders.includes(p.id);
+        return groupMatch || providerMatch;
       });
 
       const modelsWithProvider = [];
@@ -4755,7 +4787,7 @@ app.post('/v1/responses', verifyProxyApiKey, async (req, res) => {
       }, 400);
     }
 
-    const pureModelName = normalizeModelName(modelName);
+    const pureModelName = extractModelName(modelName);
     console.log(`[模型] 标准化模型名称: ${pureModelName}`);
 
     const allowedModels = req.apiKeyInfo?.allowedModels || [];
@@ -4840,15 +4872,26 @@ app.post('/v1/responses', verifyProxyApiKey, async (req, res) => {
       }
     } else {
       const allowedGroups = req.apiKeyInfo?.allowedGroups || [];
+      const allowedProviders = req.apiKeyInfo?.allowedProviders || [];
+      const hasGroupLimit = allowedGroups.length > 0;
+      const hasProviderLimit = allowedProviders.length > 0;
+      const requestedProviderId = modelName.includes('::') ? modelName.split('::')[0] : null;
+
       const modelExists = settings.providers.some(provider => {
         if (provider.disabled) return false;
-        if (allowedGroups.length > 0 && !allowedGroups.includes(provider.groupId || 'default')) return false;
+        if (requestedProviderId && provider.id !== requestedProviderId) return false;
+        const providerGroupId = provider.groupId || 'default';
+        if (hasGroupLimit || hasProviderLimit) {
+          const groupMatch = hasGroupLimit && allowedGroups.includes(providerGroupId);
+          const providerMatch = hasProviderLimit && allowedProviders.includes(provider.id);
+          if (!groupMatch && !providerMatch) return false;
+        }
         return provider.models?.some(m => normalizeModelName(m.id) === pureModelName && m.visible !== false);
       });
 
       if (!modelExists) {
         return sendErrorResponse(res, stream, {
-          message: `Model '${pureModelName}' is not available in the allowed provider groups.`,
+          message: `Model '${pureModelName}' is not available in the allowed provider scope.`,
           type: 'invalid_request_error',
           code: 'model_not_available'
         }, 400);
@@ -5250,7 +5293,7 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
     }
 
     // Extract pure model name (remove possible prefix)
-    const pureModelName = normalizeModelName(modelName);
+    const pureModelName = extractModelName(modelName);
     console.log(`[模型] 标准化模型名称: ${pureModelName}`);
 
     // 判断是否使用轮询模式
@@ -5339,17 +5382,28 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
         }, 400);
       }
     } else {
-      // 非轮询模式：检查模型是否在允许的分组中
+      // 非轮询模式：检查模型是否在允许的分组/提供商范围中
       const allowedGroups = req.apiKeyInfo?.allowedGroups || [];
+      const allowedProviders = req.apiKeyInfo?.allowedProviders || [];
+      const hasGroupLimit = allowedGroups.length > 0;
+      const hasProviderLimit = allowedProviders.length > 0;
+      const requestedProviderId = modelName.includes('::') ? modelName.split('::')[0] : null;
+
       const modelExists = settings.providers.some(provider => {
         if (provider.disabled) return false;
-        if (allowedGroups.length > 0 && !allowedGroups.includes(provider.groupId || 'default')) return false;
+        if (requestedProviderId && provider.id !== requestedProviderId) return false;
+        const providerGroupId = provider.groupId || 'default';
+        if (hasGroupLimit || hasProviderLimit) {
+          const groupMatch = hasGroupLimit && allowedGroups.includes(providerGroupId);
+          const providerMatch = hasProviderLimit && allowedProviders.includes(provider.id);
+          if (!groupMatch && !providerMatch) return false;
+        }
         return provider.models?.some(m => normalizeModelName(m.id) === pureModelName && m.visible !== false);
       });
 
       if (!modelExists) {
         return sendErrorResponse(res, stream, {
-          message: `Model '${pureModelName}' is not available in the allowed provider groups.`,
+          message: `Model '${pureModelName}' is not available in the allowed provider scope.`,
           type: 'invalid_request_error',
           code: 'model_not_available'
         }, 400);
@@ -5853,7 +5907,8 @@ app.get('/api/proxy-keys', async (req, res) => {
     // 转换为数组格式
     const keys = Object.keys(proxyKeys).map(id => ({
       id,
-      ...proxyKeys[id]
+      ...proxyKeys[id],
+      allowedProviders: proxyKeys[id].allowedProviders || []
     }));
     
     res.json(keys);
@@ -5891,6 +5946,7 @@ app.post('/api/proxy-keys', async (req, res) => {
       // 透传模式下不再需要默认参数，所有参数由客户端提供
       allowedModels: [],
       allowedGroups: [], // 新增：允许的分组
+      allowedProviders: [],
       allowedPollingGroups: [],
       allowedPollingProviders: [],
       usePolling: true,
