@@ -3836,9 +3836,59 @@ function buildImageRequestBody(modelId, prompt, params, apiType) {
  * @returns {Object} - 标准化的图像数据
  */
 function parseImageResponse(data, apiType, isChatFormat = false) {
-  // 处理chat completions格式（grok-imagine）
-  if (isChatFormat && data.choices && data.choices.length > 0) {
-    const content = data.choices[0].delta?.content || data.choices[0].message?.content || '';
+  // 兼容部分供应商返回的SSE字符串响应（data: {...}\n\n）
+  if (typeof data === 'string') {
+    const lines = data.split('\n').filter(line => line.trim().startsWith('data:'))
+    let combinedContent = ''
+    let inlinePayload = null
+
+    for (const line of lines) {
+      const raw = line.replace(/^data:\s*/i, '').trim()
+      if (!raw || raw === '[DONE]') continue
+
+      // 尝试直接从raw里提取base64 data:image
+      const rawDataUrlMatch = raw.match(/data:image\/(?:png|jpe?g|gif|webp);base64,[A-Za-z0-9+/=]+/)
+      if (rawDataUrlMatch) {
+        return {
+          images: [{
+            url: rawDataUrlMatch[0],
+            revisedPrompt: null
+          }],
+          metadata: {}
+        }
+      }
+
+      try {
+        const payload = JSON.parse(raw)
+        const deltaContent = payload?.choices?.[0]?.delta?.content || payload?.choices?.[0]?.message?.content || ''
+        if (deltaContent) combinedContent += deltaContent
+
+        const parts = payload?.candidates?.[0]?.content?.parts || []
+        const inlinePart = parts.find(part => part?.inline_data || part?.inlineData)
+        if (inlinePart) inlinePayload = payload
+      } catch (e) {
+        // 忽略非JSON片段
+      }
+    }
+
+    if (inlinePayload) {
+      data = inlinePayload
+    } else if (combinedContent) {
+      data = {
+        choices: [
+          {
+            message: {
+              content: combinedContent
+            }
+          }
+        ]
+      }
+    }
+  }
+
+  // 处理chat completions格式（grok-imagine、gemini 等）
+  if (isChatFormat) {
+    const content = data?.choices?.[0]?.delta?.content || data?.choices?.[0]?.message?.content || '';
 
     // 尝试从markdown格式中提取图片URL: ![image](url)
     const imageUrlMatch = content.match(/!\[.*?\]\((https?:\/\/[^\)]+)\)/);
@@ -3855,6 +3905,20 @@ function parseImageResponse(data, apiType, isChatFormat = false) {
       };
     }
 
+    // 尝试从内容中提取 base64 data:image
+    const dataUrlMatch = content.match(/data:image\/(?:png|jpe?g|gif|webp);base64,[A-Za-z0-9+/=]+/);
+    if (dataUrlMatch) {
+      return {
+        images: [{
+          url: dataUrlMatch[0],
+          revisedPrompt: null
+        }],
+        metadata: {
+          created: data.created
+        }
+      };
+    }
+
     // 如果content直接是URL
     if (content.startsWith('http://') || content.startsWith('https://')) {
       return {
@@ -3862,6 +3926,72 @@ function parseImageResponse(data, apiType, isChatFormat = false) {
           url: content,
           revisedPrompt: null
         }],
+        metadata: {
+          created: data.created
+        }
+      };
+    }
+
+    // 兜底：如果content包含疑似base64图片数据但缺少data:image前缀
+    const base64CandidateMatch = content.match(/[A-Za-z0-9+/=]{800,}/)
+    if (base64CandidateMatch) {
+      const base64Candidate = base64CandidateMatch[0]
+      let mimeType = 'image/jpeg'
+      if (base64Candidate.startsWith('iVBORw0')) {
+        mimeType = 'image/png'
+      } else if (base64Candidate.startsWith('R0lGOD')) {
+        mimeType = 'image/gif'
+      } else if (base64Candidate.startsWith('UklGR')) {
+        mimeType = 'image/webp'
+      }
+
+      return {
+        images: [{
+          url: `data:${mimeType};base64,${base64Candidate}`,
+          revisedPrompt: null
+        }],
+        metadata: {
+          created: data.created
+        }
+      };
+    }
+
+    // Gemini 风格：candidates[0].content.parts[].inline_data / inlineData
+    const parts = data?.candidates?.[0]?.content?.parts || [];
+    const inlinePart = parts.find(part => part?.inline_data || part?.inlineData);
+    if (inlinePart) {
+      const inlineData = inlinePart.inline_data || inlinePart.inlineData;
+      const mimeType = inlineData.mime_type || inlineData.mimeType || 'image/png';
+      const base64Data = inlineData.data || inlineData.bytes || inlineData.b64 || '';
+      const url = base64Data.startsWith('data:')
+        ? base64Data
+        : (base64Data ? `data:${mimeType};base64,${base64Data}` : null);
+
+      if (url) {
+        return {
+          images: [{
+            url,
+            revisedPrompt: null
+          }],
+          metadata: {
+            created: data.created
+          }
+        };
+      }
+    }
+
+    // 其他可能的字段：images[]/image/base64
+    if (Array.isArray(data?.images) && data.images.length > 0) {
+      return {
+        images: data.images.map(img => {
+          if (typeof img === 'string') {
+            return { url: img, revisedPrompt: null };
+          }
+          const base64 = img.b64_json || img.base64 || img.data;
+          const mimeType = img.mime_type || img.mimeType || 'image/png';
+          const url = img.url || (base64 ? `data:${mimeType};base64,${base64}` : null);
+          return { url, revisedPrompt: img.revised_prompt || img.revisedPrompt || null };
+        }).filter(img => !!img.url),
         metadata: {
           created: data.created
         }
@@ -3973,16 +4103,24 @@ async function generateImage(provider, prompt, params, res, modelId, keyInfo = n
 
       log.info(`[ImageGen] Using FormData for image-to-image (edits endpoint)`);
 
+      // 增加详细的请求日志
+      const formDataHeaders = {
+        'Authorization': `Bearer ${keyInfo?.key?.apiKey || provider.apiKey}`,
+        ...formData.getHeaders()
+      };
+      log.info('[ImageGen-Debug] Preparing to send FormData request.');
+      log.verbose('[ImageGen-Debug] Request URL:', url);
+      log.verbose('[ImageGen-Debug] Request Headers:', formDataHeaders);
+      log.verbose('[ImageGen-Debug] Axios Proxy Config:', axios.defaults.proxy);
+      log.verbose('[ImageGen-Debug] Note: Request body is multipart/form-data, not logging full content.');
+
       // 调用API
       response = await axios.post(url, formData, {
-        headers: {
-          'Authorization': `Bearer ${keyInfo?.key?.apiKey || provider.apiKey}`,
-          ...formData.getHeaders()
-        },
+        headers: formDataHeaders,
         timeout: CONFIG.STREAM_TIMEOUT
       });
     } else {
-      // 文生图：使用chat completions格式
+      // 文生图：使用chat completions格式，并且强制开启流式响应
       const requestBody = {
         model: modelId,
         messages: [
@@ -3991,26 +4129,71 @@ async function generateImage(provider, prompt, params, res, modelId, keyInfo = n
             content: prompt
           }
         ],
-        stream: false
+        stream: true,
+        stream_options: { include_usage: true },
+        ...params
       };
 
-      log.info(`[ImageGen] Using chat completions format for text-to-image`);
-      log.info(`[ImageGen] Request body stringified: ${JSON.stringify(requestBody)}`);
+      log.info(`[ImageGen] Using chat completions format for text-to-image (streaming).`);
+      
+      const jsonHeaders = {
+        'Authorization': `Bearer ${keyInfo?.key?.apiKey || provider.apiKey}`,
+        'Content-Type': 'application/json',
+        'Accept': 'text/event-stream'
+      };
+      log.info('[ImageGen-Debug] Preparing to send JSON stream request.');
+      log.verbose('[ImageGen-Debug] Request URL:', url);
+      log.verbose('[ImageGen-Debug] Request Headers:', jsonHeaders);
+      log.verbose('[ImageGen-Debug] Request Body:', JSON.stringify(requestBody, null, 2));
+      log.verbose('[ImageGen-Debug] Axios Proxy Config:', axios.defaults.proxy);
 
-      response = await axios.post(url, requestBody, {
-        headers: {
-          'Authorization': `Bearer ${keyInfo?.key?.apiKey || provider.apiKey}`,
-          'Content-Type': 'application/json'
-        },
+      const upstreamResponse = await axios.post(url, requestBody, {
+        headers: jsonHeaders,
+        responseType: 'stream',
         timeout: CONFIG.STREAM_TIMEOUT
       });
+
+      // 直接将上游的流转发给客户端
+      log.info('[ImageGen] Piping upstream stream to client.');
+      let sawDone = false;
+      upstreamResponse.data.on('data', (chunk) => {
+        try {
+          if (chunk && chunk.toString('utf8').includes('[DONE]')) {
+            sawDone = true;
+          }
+        } catch (err) {
+          log.debug('[ImageGen] Failed to scan chunk for [DONE]:', err.message);
+        }
+      });
+      upstreamResponse.data.pipe(res);
+
+      // 监听流的结束和错误，确保连接正确关闭
+      upstreamResponse.data.on('end', () => {
+        log.info('[ImageGen] Upstream stream ended.');
+        if (!sawDone) {
+          res.write('data: [DONE]\n\n');
+        }
+        res.end();
+      });
+
+      upstreamResponse.data.on('error', (error) => {
+        log.error('[ImageGen] Error in upstream stream:', error.message);
+        if (!res.headersSent) {
+          res.status(500).send('Stream error');
+        }
+        res.end();
+      });
+
+      // 因为我们正在手动处理流，所以在这里返回，防止后续代码执行
+      return;
     }
 
+    // 这部分代码现在只对非 useChatEndpoint 的情况执行
     log.info(`[ImageGen] Image generation successful, status: ${response.status}`);
     log.info(`[ImageGen] Response data:`, JSON.stringify(response.data));
 
     // 解析响应
-    const imageData = parseImageResponse(response.data, apiType, useChatEndpoint);
+    const imageData = parseImageResponse(response.data, apiType, false); // useChatEndpoint is false here
     log.info(`[ImageGen] Generated ${imageData.images.length} image(s)`);
 
     // 记录成功的API调用
