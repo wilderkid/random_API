@@ -2263,6 +2263,11 @@ import axios from 'axios'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import contentStyleManager from '../utils/contentStyleManager.js'
+
+// 允许 Markdown 与图片消息中使用 base64 data:image/* 资源
+DOMPurify.setConfig({
+  ALLOWED_URI_REGEXP: /^(?:(?:https?|mailto|tel):|data:image\/(?:png|jpe?g|gif|webp);base64,)/i
+})
 import SearchableSelect from '../components/SearchableSelect.vue'
 import '../styles/notion-style.css'
 import '../styles/konayuki-style.css'
@@ -3175,21 +3180,33 @@ async function executeDelayedRequest(assistantMsg) {
 async function processStreamResponse(response, assistantMsg) {
   const reader = response.body.getReader()
   const decoder = new TextDecoder()
-  
+  let buffer = ''
+
   try {
     while (true) {
       const { done, value } = await reader.read()
       if (done) break
-      
-      const chunk = decoder.decode(value)
-      const lines = chunk.split('\n').filter(l => l.trim().startsWith('data:'))
-      
-      for (const line of lines) {
-        const data = line.replace(/^data: /, '').trim()
-        if (data === '[DONE]' || data === '') continue
-        
+
+      buffer += decoder.decode(value, { stream: true })
+
+      let eolIndex
+      while ((eolIndex = buffer.indexOf('\n')) >= 0) {
+        const line = buffer.slice(0, eolIndex).trim()
+        buffer = buffer.slice(eolIndex + 1)
+
+        if (line.length === 0 || !line.startsWith('data:')) continue
+
+        const data = line.substring(5).trim()
+        if (data === '[DONE]') {
+          assistantMsg.streaming = false
+          break
+        }
+
+        if (!data) continue
+
         try {
           const json = JSON.parse(data)
+
           if (json.error) {
             throw new Error(json.error.message || json.error)
           }
@@ -3201,45 +3218,83 @@ async function processStreamResponse(response, assistantMsg) {
             assistantMsg.metadata = json.metadata
             assistantMsg.content = '已为您生成图片'
             assistantMsg.streaming = false
-            // 强制触发响应式更新
             messages.value = [...messages.value]
             nextTick(() => {
               throttledScrollToBottom()
             })
+            return
           }
+
           // 处理状态消息（生图进度提示）
-          else if (json.type === 'status') {
+          if (json.type === 'status') {
             assistantMsg.content = json.message
             messages.value = [...messages.value]
+            continue
           }
+
           // 处理文本响应
-          else if (json.choices?.[0]?.delta?.content) {
+          if (json.choices?.[0]?.delta?.content) {
+            const deltaContent = json.choices[0].delta.content
+
+            // 检测是否包含 base64 图片数据（用于处理生图模型的流式响应）
+            const dataUrlMatch = deltaContent.match(/data:image\/(?:png|jpe?g|gif|webp);base64,[A-Za-z0-9+/=]+/)
+            if (dataUrlMatch) {
+              assistantMsg.messageType = 'image-response'
+              assistantMsg.generatedImages = [{ url: dataUrlMatch[0], alt: 'Generated Image' }]
+              assistantMsg.content = '已为您生成图片'
+              assistantMsg.streaming = false
+              messages.value = [...messages.value]
+              nextTick(() => {
+                throttledScrollToBottom()
+              })
+              return
+            }
+
+            // 检测是否包含疑似裸 base64 图片数据（800+ 字符的 base64 字符串）
+            const bareBase64Match = deltaContent.match(/[A-Za-z0-9+/=]{800,}/)
+            if (bareBase64Match) {
+              const base64Data = bareBase64Match[0]
+              let mimeType = 'image/jpeg'
+              if (base64Data.startsWith('iVBORw0')) mimeType = 'image/png'
+              else if (base64Data.startsWith('R0lGOD')) mimeType = 'image/gif'
+              else if (base64Data.startsWith('UklGR')) mimeType = 'image/webp'
+
+              assistantMsg.messageType = 'image-response'
+              assistantMsg.generatedImages = [{ url: `data:${mimeType};base64,${base64Data}`, alt: 'Generated Image' }]
+              assistantMsg.content = '已为您生成图片'
+              assistantMsg.streaming = false
+              messages.value = [...messages.value]
+              nextTick(() => {
+                throttledScrollToBottom()
+              })
+              return
+            }
+
             // 直接更新消息内容，确保实时显示
-            assistantMsg.content += json.choices[0].delta.content
-            // 强制触发响应式更新
+            assistantMsg.content += deltaContent
             messages.value = [...messages.value]
-            // 滚动到底部
             nextTick(() => {
               throttledScrollToBottom()
             })
           }
         } catch (e) {
-          // 更详细的JSON解析错误处理
-          if (e.name === 'SyntaxError' && e.message.includes('JSON')) {
-            console.warn('JSON解析错误，跳过此数据块:', data.substring(0, 100) + '...')
-            console.warn('完整错误:', e.message)
-            // 不抛出错误，继续处理下一个数据块
-            continue
-          } else if (e.message !== 'Unexpected end of JSON input') {
-            console.error('Parse error:', e)
-            throw e // 重新抛出非JSON解析的其他错误
-          }
+          console.warn('Could not parse JSON from stream data:', data, e)
         }
       }
+
+      if (!assistantMsg.streaming) break
     }
-    
+
     assistantMsg.streaming = false
     assistantMsg.error = false
+
+    // 规范化内容中的 data:image base64（去除换行/空白，避免 DOMPurify 拦截）
+    assistantMsg.content = normalizeDataImageUrls(assistantMsg.content)
+
+    // 如果没有拿到内容且仍在等待生成提示，尝试清理状态提示，避免界面卡在生成中
+    if (!assistantMsg.content || assistantMsg.content.trim().length === 0) {
+      assistantMsg.content = ''
+    }
 
     // 检测消息内容是否包含 Markdown 图片格式（用于处理上游 API 返回的图片）
     const markdownImageRegex = /!\[([^\]]*)\]\(([^)]+)\)/g
@@ -3281,16 +3336,15 @@ async function processStreamResponse(response, assistantMsg) {
 
     // 强制触发响应式更新，确保消息操作按钮显示
     messages.value = [...messages.value]
-    
   } catch (e) {
     console.error('Stream processing error:', e)
-    
+
     // 创建详细错误信息
     const errorDetails = createErrorDetails(e, currentModel.value)
-    
+
     // 如果流式处理出错，显示错误信息
     let errorMessage = '接收响应时出错'
-    
+
     if (e.name === 'SyntaxError' && e.message.includes('JSON')) {
       errorMessage = 'JSON数据格式错误，可能是服务器响应异常'
     } else if (e.message.includes('network')) {
@@ -3302,12 +3356,12 @@ async function processStreamResponse(response, assistantMsg) {
     } else if (e.message) {
       errorMessage = e.message
     }
-    
+
     assistantMsg.content += `\n\n❌ ${errorMessage}`
     assistantMsg.streaming = false
     assistantMsg.error = true
     assistantMsg.errorDetails = errorDetails
-    
+
     // 强制触发响应式更新，确保错误消息显示
     messages.value = [...messages.value]
     nextTick(() => {
@@ -3950,6 +4004,14 @@ function enhanceCodeBlocks(html) {
   })
 }
 
+function normalizeDataImageUrls(content) {
+  if (!content || !content.includes('data:image')) return content
+  return content.replace(
+    /data:image\/(?:png|jpe?g|gif|webp);base64,[A-Za-z0-9+/=\s]+/gi,
+    (match) => match.replace(/\s+/g, '')
+  )
+}
+
 function copyCodeBlock(encodedCode) {
   const code = decodeURIComponent(encodedCode)
   navigator.clipboard.writeText(code).then(() => {
@@ -4048,6 +4110,13 @@ async function filterLargeImages(images) {
   const MIN_SIZE = 512
   const results = await Promise.all(
     images.map(async (img) => {
+      if (img.url && img.url.startsWith('data:image/')) {
+        return {
+          ...img,
+          url: normalizeDataImageUrls(img.url),
+          isLarge: true
+        }
+      }
       const size = await getImageSize(img.url)
       return {
         ...img,
