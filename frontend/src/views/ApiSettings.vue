@@ -84,8 +84,16 @@
               :class="['provider-item', {
                 active: selectedProvider?.id === provider.id,
                 'no-models': !provider.disabled && (!provider.models || provider.models.length === 0),
-                'batch-selected': batchSelectMode && selectedProviderIds.includes(provider.id)
+                'batch-selected': batchSelectMode && selectedProviderIds.includes(provider.id),
+                'is-dragging': draggedProviderId === provider.id,
+                'drag-over': dragOverProviderId === provider.id
               }]"
+              :draggable="!batchSelectMode"
+              @dragstart="handleProviderDragStart($event, provider)"
+              @dragover="handleProviderDragOver($event, provider)"
+              @dragleave="handleProviderDragLeave($event, provider)"
+              @drop="handleProviderDrop($event, provider)"
+              @dragend="handleProviderDragEnd"
               @click="batchSelectMode ? toggleProviderSelection(provider.id) : selectProvider(provider)"
             >
               <input
@@ -95,6 +103,16 @@
                 @click.stop="toggleProviderSelection(provider.id)"
                 class="provider-checkbox"
               >
+              <button
+                v-if="!batchSelectMode"
+                class="provider-drag-handle"
+                type="button"
+                title="拖动排序"
+                aria-label="拖动排序"
+                @click.stop
+              >
+                ⋮⋮
+              </button>
               <div class="provider-item-icon">{{ provider.name.charAt(0) }}</div>
               <div class="provider-item-info">
                 <div class="provider-item-name">
@@ -463,7 +481,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import axios from 'axios'
 import apiStyleManager from '../utils/apiStyleManager.js'
 import SearchableSelect from '../components/SearchableSelect.vue'
@@ -497,6 +515,8 @@ const batchSelectMode = ref(false) // 批量选择模式
 const selectedProviderIds = ref([]) // 已选择的供应商ID列表
 const modelBatchSelectMode = ref(false) // 模型批量选择模式
 const selectedModelIds = ref([]) // 已选择的模型ID列表
+const draggedProviderId = ref(null)
+const dragOverProviderId = ref(null)
 
 // 风格选择相关
 const currentApiStyle = ref(apiStyleManager.getCurrentStyle())
@@ -706,6 +726,18 @@ function canMoveProviderDown(provider) {
   return index !== -1 && index < list.length - 1
 }
 
+async function reorderProvidersInGroup(groupId, orderedIds) {
+  await axios.put('/api/providers/reorder', { groupId, orderedIds })
+  await loadProviders()
+
+  if (selectedProvider.value?.id) {
+    const matched = providers.value.find(p => p.id === selectedProvider.value.id)
+    if (matched) {
+      selectedProvider.value = matched
+    }
+  }
+}
+
 async function moveProvider(provider, direction) {
   const groupId = getProviderGroupId(provider)
   const list = getProvidersInGroup(groupId)
@@ -719,8 +751,72 @@ async function moveProvider(provider, direction) {
   orderedIds[index] = orderedIds[targetIndex]
   orderedIds[targetIndex] = temp
 
-  await axios.put('/api/providers/reorder', { groupId, orderedIds })
-  await loadProviders()
+  await reorderProvidersInGroup(groupId, orderedIds)
+}
+
+function handleProviderDragStart(event, provider) {
+  if (batchSelectMode.value) {
+    event.preventDefault()
+    return
+  }
+
+  draggedProviderId.value = provider.id
+  dragOverProviderId.value = null
+  event.dataTransfer.effectAllowed = 'move'
+  event.dataTransfer.setData('text/plain', provider.id)
+}
+
+function handleProviderDragOver(event, provider) {
+  if (!draggedProviderId.value || draggedProviderId.value === provider.id) return
+  event.preventDefault()
+  dragOverProviderId.value = provider.id
+  event.dataTransfer.dropEffect = 'move'
+}
+
+function handleProviderDragLeave(event, provider) {
+  if (dragOverProviderId.value !== provider.id) return
+  const currentTarget = event.currentTarget
+  const relatedTarget = event.relatedTarget
+  if (currentTarget && relatedTarget instanceof Node && currentTarget.contains(relatedTarget)) {
+    return
+  }
+  dragOverProviderId.value = null
+}
+
+async function handleProviderDrop(event, targetProvider) {
+  event.preventDefault()
+
+  const sourceProviderId = draggedProviderId.value || event.dataTransfer.getData('text/plain')
+  dragOverProviderId.value = null
+
+  if (!sourceProviderId || sourceProviderId === targetProvider.id) {
+    draggedProviderId.value = null
+    return
+  }
+
+  const groupId = getProviderGroupId(targetProvider)
+  const list = getProvidersInGroup(groupId)
+  const sourceIndex = list.findIndex(p => p.id === sourceProviderId)
+  const targetIndex = list.findIndex(p => p.id === targetProvider.id)
+
+  if (sourceIndex === -1 || targetIndex === -1) {
+    draggedProviderId.value = null
+    return
+  }
+
+  const orderedIds = list.map(p => p.id)
+  const [movedId] = orderedIds.splice(sourceIndex, 1)
+  orderedIds.splice(targetIndex, 0, movedId)
+
+  await reorderProvidersInGroup(groupId, orderedIds)
+  draggedProviderId.value = null
+
+  await nextTick()
+}
+
+function handleProviderDragEnd() {
+  draggedProviderId.value = null
+  dragOverProviderId.value = null
 }
 
 function updateAvailableModelsCache(providerId, models) {
@@ -1911,6 +2007,45 @@ onUnmounted(() => {
   cursor: pointer;
   transition: all 0.2s;
   position: relative;
+  border: 1px solid transparent;
+}
+
+.provider-item.is-dragging {
+  opacity: 0.45;
+  transform: scale(0.985);
+}
+
+.provider-item.drag-over {
+  border-color: #66b3ff;
+  background: #edf6ff;
+  box-shadow: 0 0 0 1px rgba(102, 179, 255, 0.24);
+}
+
+.provider-drag-handle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  margin-right: 10px;
+  border: 1px solid #dee2e6;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #6c757d;
+  cursor: grab;
+  line-height: 1;
+  letter-spacing: -1px;
+  transition: all 0.2s ease;
+}
+
+.provider-drag-handle:hover {
+  background: #eef6ff;
+  border-color: #9ecbff;
+  color: #0d6efd;
+}
+
+.provider-drag-handle:active {
+  cursor: grabbing;
 }
 
 .provider-item-actions {
@@ -1945,9 +2080,20 @@ onUnmounted(() => {
   background: #e9ecef;
 }
 
+.provider-item:hover .provider-drag-handle {
+  border-color: #cbd5e1;
+  color: #334155;
+}
+
 .provider-item.active {
   background: #007bff;
   color: white;
+}
+
+.provider-item.active .provider-drag-handle {
+  background: rgba(255, 255, 255, 0.16);
+  border-color: rgba(255, 255, 255, 0.28);
+  color: rgba(255, 255, 255, 0.92);
 }
 
 .provider-item.no-models {
