@@ -1672,10 +1672,9 @@ app.put('/api/settings', async (req, res) => {
       ...(currentSettings.proxyApiKeys || {}),
       ...(req.body.proxyApiKeys || {})
     },
-    modelTypes: {
-      ...(currentSettings.modelTypes || {}),
-      ...(req.body.modelTypes || {})
-    }
+    modelTypes: req.body.modelTypes !== undefined
+      ? req.body.modelTypes
+      : (currentSettings.modelTypes || {})
   };
 
   const savedSettings = saveUserSettingsToDb(mergedSettings);
@@ -3700,11 +3699,11 @@ async function handleStreamingResponse(response, res, stream, selectedProvider, 
 // ==================== 图像生成模型支持 ====================
 
 /**
- * 识别模型类型（文本或图像生成）
+ * 识别模型类型（文本、图像、嵌入、重排）
  * @param {Object} provider - 提供商对象
  * @param {string} modelId - 模型ID
  * @param {Object} userSettings - 用户设置（包含modelTypes配置）
- * @returns {string} - 'text', 'image', 'image-generation', 'image-edit'
+ * @returns {string} - 'text', 'image', 'image-generation', 'image-edit', 'embedding', 'rerank'
  */
 function getModelType(provider, modelId, userSettings = null) {
   // 1. 优先从用户设置的modelTypes读取（最高优先级）
@@ -3727,7 +3726,12 @@ function getModelType(provider, modelId, userSettings = null) {
   // 3. 从模型ID推断（作为备选）
   const modelIdLower = modelId.toLowerCase();
 
-  // 精确匹配图像生成/编辑模型的关键词
+  const embeddingKeywords = [
+    'embedding', 'embeddings', 'embed', 'bge-m3', 'text-embedding', 'm3e'
+  ];
+  const rerankKeywords = [
+    'rerank', 're-rank', 'bge-reranker', 'jina-reranker', 'ranker'
+  ];
   const imageKeywords = [
     'dall-e', 'dalle',
     'stable-diffusion', 'midjourney', 'imagen',
@@ -3735,14 +3739,21 @@ function getModelType(provider, modelId, userSettings = null) {
     'nano', 'banana',
     'imagine', 'image-edit', 'img-edit',
     'flux', 'playground',
-    'gpt-image' // OpenAI 的新图像模型
+    'gpt-image'
   ];
 
-  const isImageModel = imageKeywords.some(kw => modelIdLower.includes(kw));
+  if (embeddingKeywords.some(kw => modelIdLower.includes(kw))) {
+    log.debug(`[ModelType] Inferred as embedding model from ID: ${modelId}`);
+    return 'embedding';
+  }
 
-  if (isImageModel) {
+  if (rerankKeywords.some(kw => modelIdLower.includes(kw))) {
+    log.debug(`[ModelType] Inferred as rerank model from ID: ${modelId}`);
+    return 'rerank';
+  }
+
+  if (imageKeywords.some(kw => modelIdLower.includes(kw))) {
     log.debug(`[ModelType] Inferred as image model from ID: ${modelId}`);
-    // 默认推断为通用图像模型（支持文生图和图生图）
     return 'image';
   }
 
@@ -3757,6 +3768,24 @@ function getModelType(provider, modelId, userSettings = null) {
  */
 function isImageModel(modelType) {
   return ['image', 'image-generation', 'image-edit'].includes(modelType);
+}
+
+/**
+ * 判断模型是否为嵌入模型
+ * @param {string} modelType - 模型类型
+ * @returns {boolean}
+ */
+function isEmbeddingModel(modelType) {
+  return modelType === 'embedding';
+}
+
+/**
+ * 判断模型是否为重排模型
+ * @param {string} modelType - 模型类型
+ * @returns {boolean}
+ */
+function isRerankModel(modelType) {
+  return modelType === 'rerank';
 }
 
 /**
@@ -5195,6 +5224,381 @@ app.post('/v1/responses', verifyProxyApiKey, async (req, res) => {
     });
 
     sendErrorResponse(res, stream, {
+      message: error.message,
+      type: 'server_error',
+      code: 'internal_error'
+    });
+  }
+});
+
+// OpenAI 兼容 - Embeddings（支持自动故障转移）
+app.post('/v1/embeddings', verifyProxyApiKey, async (req, res) => {
+  const traceId = generateTraceId();
+  const perfTracker = new PerformanceTracker(traceId);
+  perfTracker.checkpoint('request_start');
+
+  const clientIp = req.ip || req.connection.remoteAddress ||
+                   req.headers['x-forwarded-for']?.split(',')[0].trim() ||
+                   'unknown';
+  const userAgent = req.headers['user-agent'] || 'unknown';
+  const apiKeyName = req.apiKeyInfo?.name || 'unknown';
+
+  try {
+    const { input, model, ...otherParams } = req.body;
+
+    console.log(`\n========== 新的 Embeddings 请求 ==========`);
+    console.log(`[请求] 模型: ${model}`);
+    console.log(`[请求] input类型: ${Array.isArray(input) ? 'array' : typeof input}`);
+
+    const otherParamKeys = Object.keys(otherParams);
+    if (otherParamKeys.length > 0) {
+      console.log(`[请求] 其他参数:`);
+      otherParamKeys.forEach(key => {
+        const value = otherParams[key];
+        console.log(`  - ${key}: ${typeof value === 'object' ? JSON.stringify(value) : value}`);
+      });
+    }
+    console.log(`========================================\n`);
+
+    if (input === undefined || input === null || (Array.isArray(input) && input.length === 0)) {
+      console.log(`[错误] input 参数无效`);
+      return sendErrorResponse(res, false, {
+        message: 'input is required and must not be empty',
+        type: 'invalid_request_error',
+        code: 'invalid_input'
+      }, 400);
+    }
+
+    if (!model) {
+      console.log(`[错误] 未指定模型`);
+      return sendErrorResponse(res, false, {
+        message: 'model is required. Please specify a model in the request.',
+        type: 'invalid_request_error',
+        code: 'model_required'
+      }, 400);
+    }
+
+    const settings = await getApiSettings();
+    const userSettings = await getUserSettings();
+    console.log(`[配置] 已加载 ${settings.providers.length} 个提供商`);
+    const pollingConfig = userSettings.pollingConfig || { available: {}, excluded: {} };
+
+    const modelName = model;
+    const pureModelName = extractModelName(modelName);
+    console.log(`[模型] 标准化模型名称: ${pureModelName}`);
+
+    const usePolling = req.apiKeyInfo?.usePolling !== false;
+    const allowedModels = req.apiKeyInfo?.allowedModels || [];
+
+    if (allowedModels.length > 0) {
+      if (usePolling) {
+        if (!allowedModels.includes(pureModelName)) {
+          console.log(`[错误] 模型 ${pureModelName} 不在此 API Key 允许的列表中`);
+          return sendErrorResponse(res, false, {
+            message: `Model '${pureModelName}' is not allowed for this API key. Allowed models: ${allowedModels.join(', ')}`,
+            type: 'permission_error',
+            code: 'model_not_allowed'
+          }, 403);
+        }
+      } else {
+        const normalizedAllowed = allowedModels
+          .filter(modelName => !modelName.includes('::'))
+          .map(modelName => normalizeModelName(modelName));
+
+        const allowedById = allowedModels.includes(modelName);
+        const allowedByNormalized = normalizedAllowed.includes(pureModelName);
+        if (!allowedById && !allowedByNormalized) {
+          console.log(`[错误] 模型 ${modelName} 不在此 API Key 允许的列表中`);
+          return sendErrorResponse(res, false, {
+            message: `Model '${modelName}' is not allowed for this API key. Allowed models: ${allowedModels.join(', ')}`,
+            type: 'permission_error',
+            code: 'model_not_allowed'
+          }, 403);
+        }
+      }
+    }
+    console.log(`[轮询] 轮询模式: ${usePolling ? '启用' : '禁用'}`);
+
+    if (usePolling) {
+      const availableProviderIds = pollingConfig.available?.[pureModelName] || [];
+      console.log(`[轮询] 模型 ${pureModelName} 可用提供商数量: ${availableProviderIds.length}`);
+      if (availableProviderIds.length < 2) {
+        console.log(`[错误] 模型 ${pureModelName} 提供商不足: ${availableProviderIds.length}`);
+        return sendErrorResponse(res, false, {
+          message: `Model '${pureModelName}' requires at least 2 providers for polling. Current providers: ${availableProviderIds.length}. Please configure more providers in polling settings.`,
+          type: 'invalid_request_error',
+          code: 'insufficient_providers'
+        }, 400);
+      }
+
+      const excludedSet = new Set();
+      if (Array.isArray(pollingConfig.excluded)) {
+        pollingConfig.excluded.forEach(item => {
+          if (item.modelName === pureModelName) {
+            excludedSet.add(item.providerId);
+          }
+        });
+      }
+
+      const allowedPollingGroups = req.apiKeyInfo?.allowedPollingGroups || [];
+      const allowedPollingProviders = req.apiKeyInfo?.allowedPollingProviders || [];
+      const hasPollingGroupLimit = allowedPollingGroups.length > 0;
+      const hasPollingProviderLimit = allowedPollingProviders.length > 0;
+
+      const providerById = new Map(settings.providers.map(p => [p.id, p]));
+      const actualAvailableProviders = availableProviderIds.filter(id => !excludedSet.has(id));
+      const scopedAvailableProviders = actualAvailableProviders.filter(id => {
+        if (!hasPollingGroupLimit && !hasPollingProviderLimit) return true;
+        const provider = providerById.get(id);
+        if (!provider) return false;
+        const providerGroupId = provider.groupId || 'default';
+        const groupMatch = hasPollingGroupLimit && allowedPollingGroups.includes(providerGroupId);
+        const providerMatch = hasPollingProviderLimit && allowedPollingProviders.includes(provider.id);
+        return groupMatch || providerMatch;
+      });
+
+      console.log(`[轮询] 排除后实际可用提供商数量: ${actualAvailableProviders.length}`);
+      console.log(`[轮询] 按密钥范围筛选后可用提供商数量: ${scopedAvailableProviders.length}`);
+
+      if (scopedAvailableProviders.length === 0) {
+        return sendErrorResponse(res, false, {
+          message: `Model '${pureModelName}' has no available providers within API key polling scope.`,
+          type: 'invalid_request_error',
+          code: 'all_providers_excluded'
+        }, 400);
+      }
+    } else {
+      const allowedGroups = req.apiKeyInfo?.allowedGroups || [];
+      const allowedProviders = req.apiKeyInfo?.allowedProviders || [];
+      const hasGroupLimit = allowedGroups.length > 0;
+      const hasProviderLimit = allowedProviders.length > 0;
+      const requestedProviderId = modelName.includes('::') ? modelName.split('::')[0] : null;
+
+      const modelExists = settings.providers.some(provider => {
+        if (provider.disabled) return false;
+        if (requestedProviderId && provider.id !== requestedProviderId) return false;
+        const providerGroupId = provider.groupId || 'default';
+        if (hasGroupLimit || hasProviderLimit) {
+          const groupMatch = hasGroupLimit && allowedGroups.includes(providerGroupId);
+          const providerMatch = hasProviderLimit && allowedProviders.includes(provider.id);
+          if (!groupMatch && !providerMatch) return false;
+        }
+        return provider.models?.some(m => normalizeModelName(m.id) === pureModelName && m.visible !== false);
+      });
+
+      if (!modelExists) {
+        return sendErrorResponse(res, false, {
+          message: `Model '${pureModelName}' is not available in the allowed provider scope.`,
+          type: 'invalid_request_error',
+          code: 'model_not_available'
+        }, 400);
+      }
+    }
+
+    const errors = [];
+    const triedProviderIds = [];
+    const failoverProviders = getFailoverProviders(settings.providers, pureModelName, pollingConfig, userSettings, [], req.apiKeyInfo);
+
+    if (failoverProviders.length === 0) {
+      console.log(`[错误] 模型 ${pureModelName} 没有可用的提供商`);
+      return sendErrorResponse(res, false, {
+        message: `No available providers for model '${pureModelName}'`,
+        type: 'server_error',
+        code: 'no_providers_available'
+      }, 503);
+    }
+
+    console.log(`[故障转移] 找到 ${failoverProviders.length} 个可用提供商`);
+
+    for (let attempt = 0; attempt < failoverProviders.length; attempt++) {
+      const selectedProvider = failoverProviders[attempt];
+      triedProviderIds.push(selectedProvider.id);
+
+      if (attempt > 0) {
+        const prevProvider = failoverProviders[attempt - 1];
+        console.log(`[故障转移] 切换提供商: ${prevProvider.name} -> ${selectedProvider.name}`);
+        setImmediate(() => {
+          logProviderSwitch({
+            traceId,
+            fromProvider: prevProvider.name,
+            toProvider: selectedProvider.name,
+            reason: `Previous provider failed: ${errors[errors.length - 1]?.error || 'Unknown error'}`
+          });
+        });
+      }
+
+      console.log(`[请求] 尝试 ${attempt + 1}/${failoverProviders.length}: 使用提供商 ${selectedProvider.name} (ID: ${selectedProvider.id})`);
+
+      const keyInfo = selectProviderKey(selectedProvider, userSettings);
+      const providerModelId = await getProviderModelId(selectedProvider, pureModelName, keyInfo);
+      if (!providerModelId) {
+        console.log(`[错误] 模型 ${pureModelName} 在提供商 ${selectedProvider.name} 中未找到，尝试下一个...`);
+        errors.push({
+          provider: selectedProvider.name,
+          error: 'Model not found in provider'
+        });
+        await incrementModelFailCount(selectedProvider.id, pureModelName, userSettings);
+        await incrementKeyFailCount(keyInfo?.key?.id, userSettings);
+        continue;
+      }
+
+      console.log(`[请求] 使用模型ID: ${providerModelId}`);
+
+      const apiType = selectedProvider.apiType || 'openai';
+      const url = buildApiUrl(selectedProvider.baseUrl, 'embeddings', apiType, selectedProvider.customEndpoints);
+      console.log(`[请求] API 类型: ${apiType}`);
+      console.log(`[请求] 目标URL: ${url}`);
+
+      try {
+        const requestBody = {
+          ...req.body,
+          model: providerModelId
+        };
+
+        const headers = {
+          'Authorization': `Bearer ${keyInfo?.key?.apiKey || selectedProvider.apiKey}`,
+          'Content-Type': 'application/json',
+          ...(apiType === 'anthropic' && {
+            'anthropic-version': '2023-06-01'
+          })
+        };
+
+        console.log(`[透传] 请求体参数:`);
+        console.log(`  - model: ${requestBody.model}`);
+        console.log(`  - input类型: ${Array.isArray(requestBody.input) ? 'array' : typeof requestBody.input}`);
+        console.log(`  - encoding_format: ${requestBody.encoding_format !== undefined ? requestBody.encoding_format : '未设置'}`);
+        console.log(`  - dimensions: ${requestBody.dimensions !== undefined ? requestBody.dimensions : '未设置'}`);
+
+        const response = await axios.post(url, requestBody, {
+          headers,
+          timeout: 120000
+        });
+
+        console.log(`[非流式] Embeddings 请求成功，状态码: ${response.status}`);
+
+        backgroundProcessor.handleSuccess(selectedProvider, pureModelName, userSettings, pollingConfig, null, keyInfo);
+
+        perfTracker.checkpoint('request_complete');
+        setImmediate(() => {
+          logApiRequest({
+            traceId,
+            clientIp,
+            userAgent,
+            apiKeyName,
+            sessionId: null,
+            isPolling: usePolling,
+            isNewConversation: false,
+            request: { model: pureModelName, inputType: Array.isArray(input) ? 'array' : typeof input },
+            providers: [{
+              attempt: attempt + 1,
+              providerId: selectedProvider.id,
+              providerName: selectedProvider.name,
+              status: 'success',
+              statusCode: response.status,
+              duration: perfTracker.getDuration('request_complete')
+            }],
+            result: {
+              status: 'success',
+              successfulProvider: selectedProvider.id,
+              totalAttempts: 1,
+              totalDuration: perfTracker.getTotalDuration(),
+              tokenUsage: response.data?.usage || null,
+              estimatedCost: null
+            },
+            metadata: { failoverOccurred: attempt > 0, endpoint: 'embeddings' }
+          });
+        });
+
+        return res.status(200).json(response.data);
+      } catch (error) {
+        console.log(`[错误] 提供商 ${selectedProvider.name} Embeddings 请求失败: ${error.message}`);
+
+        const errorDetails = parseErrorResponse(error);
+        const errorMessage = formatErrorForLog(errorDetails);
+
+        backgroundProcessor.handleFailure(selectedProvider, pureModelName, userSettings, errorMessage, keyInfo);
+
+        errors.push({
+          provider: selectedProvider.name,
+          error: errorMessage,
+          status: error.response?.status
+        });
+      }
+    }
+
+    backgroundProcessor.addTask(async () => {
+      await savePollingState(userSettings);
+    });
+
+    const errorDetails = errors.map(e => `${e.provider}: ${e.error}`).join('; ');
+    console.log(`[错误] 所有 ${triedProviderIds.length} 个提供商都失败了，模型: ${pureModelName}`);
+    console.log(`[错误] 详细错误: ${errorDetails}`);
+
+    perfTracker.checkpoint('all_providers_failed');
+    setImmediate(() => {
+      logApiRequest({
+        traceId,
+        clientIp,
+        userAgent,
+        apiKeyName,
+        sessionId: null,
+        isPolling: usePolling,
+        isNewConversation: false,
+        request: { model: pureModelName, inputType: Array.isArray(input) ? 'array' : typeof input },
+        providers: errors.map((e, idx) => ({
+          attempt: idx + 1,
+          providerId: `provider_${idx}`,
+          providerName: e.provider,
+          status: 'failed',
+          statusCode: e.status,
+          error: e.error
+        })),
+        result: {
+          status: 'failed',
+          successfulProvider: null,
+          totalAttempts: triedProviderIds.length,
+          totalDuration: perfTracker.getTotalDuration(),
+          tokenUsage: null,
+          estimatedCost: null
+        },
+        metadata: { failoverOccurred: triedProviderIds.length > 1, endpoint: 'embeddings' }
+      });
+    });
+
+    return sendErrorResponse(res, false, {
+      message: `All providers failed for model '${pureModelName}'. Tried ${triedProviderIds.length} providers.`,
+      type: 'server_error',
+      code: 'all_providers_failed',
+      details: errors
+    }, 503);
+  } catch (error) {
+    console.log(`[错误] Embeddings 路由发生意外错误: ${error.message}`);
+
+    perfTracker.checkpoint('error');
+    setImmediate(() => {
+      logApiRequest({
+        traceId,
+        clientIp,
+        userAgent,
+        apiKeyName,
+        sessionId: null,
+        isPolling: false,
+        isNewConversation: false,
+        request: { model: req.body?.model || 'unknown', inputType: Array.isArray(req.body?.input) ? 'array' : typeof req.body?.input },
+        providers: [],
+        result: {
+          status: 'failed',
+          successfulProvider: null,
+          totalAttempts: 0,
+          totalDuration: perfTracker.getTotalDuration(),
+          tokenUsage: null,
+          estimatedCost: null
+        },
+        metadata: { errorType: 'internal_error', errorMessage: error.message, endpoint: 'embeddings' }
+      });
+    });
+
+    return sendErrorResponse(res, false, {
       message: error.message,
       type: 'server_error',
       code: 'internal_error'

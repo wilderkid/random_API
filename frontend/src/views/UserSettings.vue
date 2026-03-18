@@ -367,113 +367,67 @@
       <div v-else-if="selectedSetting === 'modelTypes'" class="details-content full-width">
         <div class="details-header">
           <h2>模型类型管理</h2>
-          <p class="hint-text">为图像生成模型配置类型，系统将根据类型自动选择正确的API端点</p>
+          <p class="hint-text">为图像、嵌入与重排模型手动分类，系统会按类型匹配对应能力和接口</p>
         </div>
 
         <div class="settings-form">
           <section class="settings-section">
             <h3>模型分类</h3>
+            <p class="hint-text">切换下方选项卡后，可只针对一种能力类型进行维护，未分类模型会出现在当前类型的待添加列表中。</p>
 
-            <div class="type-categories-panel-solo">
-              <div class="type-category">
-                <div class="category-header">
-                  <h4>🖼️ 文生图模型</h4>
-                  <span class="category-count">{{ imageGenerationModels.length }}</span>
+            <div class="model-type-tabs">
+              <button
+                v-for="tab in modelTypeTabs"
+                :key="tab.key"
+                :class="['model-type-tab', { active: activeModelTypeTab === tab.key }]"
+                @click="selectModelTypeTab(tab.key)"
+              >
+                <span class="tab-title">{{ tab.icon }} {{ tab.title }}</span>
+                <span class="tab-count">{{ tab.count }}</span>
+              </button>
+            </div>
+
+            <div v-if="activeModelTypeTabConfig" class="type-category active-tab-panel">
+              <div class="category-header">
+                <div>
+                  <h4>{{ activeModelTypeTabConfig.icon }} {{ activeModelTypeTabConfig.title }}</h4>
+                  <p class="category-desc">{{ activeModelTypeTabConfig.description }}</p>
                 </div>
-                <p class="category-desc">仅支持文本生成图片（/v1/images/generations）</p>
-                <div class="category-models">
-                  <div
-                    v-for="model in imageGenerationModels"
-                    :key="model.value"
-                    class="category-model-item"
-                  >
-                    <span class="model-name">{{ model.label }}</span>
-                    <button @click="removeModelType(model.value)" class="btn-remove-tiny">×</button>
-                  </div>
-                  <div class="add-model-section">
-                    <SearchableSelect
-                      v-model="selectedModelToAdd.imageGeneration"
-                      :options="availableModelsForType"
-                      placeholder="选择模型..."
-                      search-placeholder="搜索模型..."
-                      class="model-select-searchable"
-                    />
-                    <button
-                      @click="addModelType('image-generation')"
-                      :disabled="!selectedModelToAdd.imageGeneration"
-                      class="btn-add-tiny"
-                    >
-                      添加
-                    </button>
-                  </div>
-                </div>
+                <span class="category-count">{{ activeModelTypeModels.length }}</span>
               </div>
 
-              <div class="type-category">
-                <div class="category-header">
-                  <h4>✏️ 图生图模型</h4>
-                  <span class="category-count">{{ imageEditModels.length }}</span>
-                </div>
-                <p class="category-desc">仅支持图片编辑（/v1/images/edits）</p>
-                <div class="category-models">
-                  <div
-                    v-for="model in imageEditModels"
-                    :key="model.value"
-                    class="category-model-item"
-                  >
-                    <span class="model-name">{{ model.label }}</span>
-                    <button @click="removeModelType(model.value)" class="btn-remove-tiny">×</button>
-                  </div>
-                  <div class="add-model-section">
-                    <SearchableSelect
-                      v-model="selectedModelToAdd.imageEdit"
-                      :options="availableModelsForType"
-                      placeholder="选择模型..."
-                      search-placeholder="搜索模型..."
-                      class="model-select-searchable"
-                    />
-                    <button
-                      @click="addModelType('image-edit')"
-                      :disabled="!selectedModelToAdd.imageEdit"
-                      class="btn-add-tiny"
-                    >
-                      添加
-                    </button>
-                  </div>
-                </div>
+              <div class="model-type-endpoint-card">
+                <span class="endpoint-chip">推荐接口</span>
+                <code class="model-type-endpoint">{{ activeModelTypeTabConfig.endpoint }}</code>
               </div>
 
-              <div class="type-category">
-                <div class="category-header">
-                  <h4>🎨 通用图像模型</h4>
-                  <span class="category-count">{{ imageUniversalModels.length }}</span>
+              <div class="category-models">
+                <div
+                  v-for="model in activeModelTypeModels"
+                  :key="model.value"
+                  class="category-model-item"
+                >
+                  <span class="model-name">{{ model.label }}</span>
+                  <button @click="removeModelType(model.value)" class="btn-remove-tiny">×</button>
                 </div>
-                <p class="category-desc">同时支持文生图和图生图</p>
-                <div class="category-models">
-                  <div
-                    v-for="model in imageUniversalModels"
-                    :key="model.value"
-                    class="category-model-item"
+                <div v-if="!activeModelTypeModels.length" class="model-type-empty">
+                  当前类型还没有已标记模型
+                </div>
+                <div class="add-model-section">
+                  <SearchableSelect
+                    v-model="activeModelTypeSelection"
+                    :options="availableModelsForType"
+                    placeholder="选择模型..."
+                    search-placeholder="搜索模型..."
+                    class="model-select-searchable"
+                  />
+                  <button
+                    @click="addModelType(activeModelTypeTab)"
+                    :disabled="!activeModelTypeSelection"
+                    class="btn-add-tiny"
                   >
-                    <span class="model-name">{{ model.label }}</span>
-                    <button @click="removeModelType(model.value)" class="btn-remove-tiny">×</button>
-                  </div>
-                  <div class="add-model-section">
-                    <SearchableSelect
-                      v-model="selectedModelToAdd.imageUniversal"
-                      :options="availableModelsForType"
-                      placeholder="选择模型..."
-                      search-placeholder="搜索模型..."
-                      class="model-select-searchable"
-                    />
-                    <button
-                      @click="addModelType('image')"
-                      :disabled="!selectedModelToAdd.imageUniversal"
-                      class="btn-add-tiny"
-                    >
-                      添加
-                    </button>
-                  </div>
+                    添加到当前类型
+                  </button>
                 </div>
               </div>
             </div>
@@ -497,6 +451,49 @@ import axios from 'axios'
 import contentStyleManager from '../utils/contentStyleManager.js'
 import SearchableSelect from '../components/SearchableSelect.vue'
 
+const MODEL_TYPE_TABS = [
+  {
+    key: 'image-generation',
+    title: '文生图',
+    icon: '🖼️',
+    description: '仅支持文本生成图片，系统会优先走文生图能力。',
+    endpoint: '/v1/images/generations',
+    selectKey: 'imageGeneration'
+  },
+  {
+    key: 'image-edit',
+    title: '图生图',
+    icon: '✏️',
+    description: '仅支持图片编辑、局部修改或二次生成。',
+    endpoint: '/v1/images/edits',
+    selectKey: 'imageEdit'
+  },
+  {
+    key: 'image',
+    title: '通用图像',
+    icon: '🎨',
+    description: '同时支持文生图与图生图，适合综合图像模型。',
+    endpoint: '自动匹配图像端点',
+    selectKey: 'imageUniversal'
+  },
+  {
+    key: 'embedding',
+    title: '嵌入模型',
+    icon: '🧠',
+    description: '用于向量化、文档切片表示和知识库召回。',
+    endpoint: '/v1/embeddings',
+    selectKey: 'embedding'
+  },
+  {
+    key: 'rerank',
+    title: '重排模型',
+    icon: '🏆',
+    description: '用于召回结果重排序，提升检索命中质量。',
+    endpoint: '第三方知识库/检索重排接口',
+    selectKey: 'rerank'
+  }
+]
+
 const settings = ref({
   defaultParams: { temperature: 0.7, max_tokens: 2000, top_p: 1 },
   globalFrequency: 10,
@@ -508,7 +505,7 @@ const settings = ref({
   translatePollingEnabled: false,
   quickTranslations: [],
   pollingConfig: { available: {}, excluded: {}, disabled: {} },
-  modelTypes: {} // 格式: { 'providerId::modelId': 'image-generation' | 'image-edit' | 'image' }
+  modelTypes: {} // 格式: { 'providerId::modelId': 'image-generation' | 'image-edit' | 'image' | 'embedding' | 'rerank' }
 })
 const saveMessage = ref('')
 const selectedSetting = ref('user')
@@ -522,8 +519,11 @@ const languageForm = ref({ name: '', code: '' })
 const selectedModelToAdd = ref({
   imageGeneration: '',
   imageEdit: '',
-  imageUniversal: ''
+  imageUniversal: '',
+  embedding: '',
+  rerank: ''
 })
+const activeModelTypeTab = ref('image-generation')
 
 // 动态获取API基础URL
 const apiBaseUrl = computed(() => {
@@ -604,41 +604,62 @@ const isTranslateModelPollingSupported = computed(() => {
 })
 
 // 模型类型管理相关计算属性
-const imageGenerationModels = computed(() => {
-  return allModels.value.filter(m => settings.value.modelTypes?.[m.value] === 'image-generation')
+const modelTypeTabs = computed(() => {
+  return MODEL_TYPE_TABS.map(tab => ({
+    ...tab,
+    count: allModels.value.filter(m => settings.value.modelTypes?.[m.value] === tab.key).length
+  }))
 })
 
-const imageEditModels = computed(() => {
-  return allModels.value.filter(m => settings.value.modelTypes?.[m.value] === 'image-edit')
+const modelTypeModelsMap = computed(() => {
+  const grouped = {}
+  MODEL_TYPE_TABS.forEach(tab => {
+    grouped[tab.key] = allModels.value.filter(m => settings.value.modelTypes?.[m.value] === tab.key)
+  })
+  return grouped
 })
 
-const imageUniversalModels = computed(() => {
-  return allModels.value.filter(m => settings.value.modelTypes?.[m.value] === 'image')
+const activeModelTypeTabConfig = computed(() => {
+  return modelTypeTabs.value.find(tab => tab.key === activeModelTypeTab.value) || modelTypeTabs.value[0]
+})
+
+const activeModelTypeModels = computed(() => {
+  return modelTypeModelsMap.value[activeModelTypeTab.value] || []
 })
 
 const availableModelsForType = computed(() => {
   return allModels.value.filter(m => !settings.value.modelTypes?.[m.value])
 })
 
+const activeModelTypeSelection = computed({
+  get() {
+    const selectKey = activeModelTypeTabConfig.value?.selectKey
+    return selectKey ? selectedModelToAdd.value[selectKey] : ''
+  },
+  set(value) {
+    const selectKey = activeModelTypeTabConfig.value?.selectKey
+    if (selectKey) {
+      selectedModelToAdd.value[selectKey] = value
+    }
+  }
+})
+
+function selectModelTypeTab(type) {
+  activeModelTypeTab.value = type
+}
+
 function addModelType(type) {
   if (!settings.value.modelTypes) {
     settings.value.modelTypes = {}
   }
 
-  let modelValue = ''
-  if (type === 'image-generation') {
-    modelValue = selectedModelToAdd.value.imageGeneration
-    selectedModelToAdd.value.imageGeneration = ''
-  } else if (type === 'image-edit') {
-    modelValue = selectedModelToAdd.value.imageEdit
-    selectedModelToAdd.value.imageEdit = ''
-  } else if (type === 'image') {
-    modelValue = selectedModelToAdd.value.imageUniversal
-    selectedModelToAdd.value.imageUniversal = ''
-  }
+  const currentTab = MODEL_TYPE_TABS.find(tab => tab.key === type)
+  const selectKey = currentTab?.selectKey
+  const modelValue = selectKey ? selectedModelToAdd.value[selectKey] : ''
 
   if (modelValue) {
     settings.value.modelTypes[modelValue] = type
+    selectedModelToAdd.value[selectKey] = ''
   }
 }
 
@@ -719,8 +740,8 @@ const settingsItems = ref([
   {
     id: 'modelTypes',
     name: '模型类型管理',
-    description: '配置图像生成模型',
-    icon: '🖼️'
+    description: '配置图像、嵌入与重排模型',
+    icon: '🧩'
   }
 ])
 
@@ -745,7 +766,7 @@ async function loadModels() {
       if (provider.disabled) continue
       const addedModels = provider.models || []
       addedModels.forEach(m => {
-        if (m.visible) {
+        if (m.visible !== false) {
           models.push({
             value: `${provider.id}::${m.id}`,
             label: `${provider.name} - ${m.id}`
@@ -890,9 +911,9 @@ function copyToClipboard(text) {
   })
 }
 
-onMounted(() => {
-  loadSettings()
-  loadModels()
+onMounted(async () => {
+  await loadSettings()
+  await loadModels()
   loadPrompts()
   loadLanguages()
 })
@@ -1345,19 +1366,64 @@ onMounted(() => {
 }
 
 /* 模型类型管理样式 */
-.type-categories-panel-solo {
+.model-type-tabs {
   display: flex;
-  flex-direction: column;
-  gap: 24px;
+  flex-wrap: wrap;
+  gap: 12px;
   margin-top: 16px;
-  width: 100%;
+  margin-bottom: 16px;
+}
+
+.model-type-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border: 1px solid #d0d7de;
+  border-radius: 999px;
+  background: #f8fafc;
+  color: #334155;
+  cursor: pointer;
+  transition: all 0.2s;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.model-type-tab:hover {
+  background: #eef6ff;
+  border-color: #93c5fd;
+}
+
+.model-type-tab.active {
+  background: #1976d2;
+  color: #fff;
+  border-color: #1976d2;
+  box-shadow: 0 6px 16px rgba(25, 118, 210, 0.2);
+}
+
+.tab-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tab-count {
+  min-width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 6px;
+  background: rgba(255, 255, 255, 0.22);
+  font-size: 12px;
 }
 
 .type-category {
   background: white;
   border: 1px solid #dee2e6;
-  border-radius: 8px;
-  padding: 16px;
+  border-radius: 12px;
+  padding: 20px;
   transition: all 0.2s;
   display: flex;
   flex-direction: column;
@@ -1368,10 +1434,15 @@ onMounted(() => {
   box-shadow: 0 4px 8px rgba(0,0,0,0.08);
 }
 
+.active-tab-panel {
+  width: 100%;
+}
+
 .category-header {
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  align-items: flex-start;
+  gap: 16px;
   margin-bottom: 10px;
 }
 
@@ -1394,8 +1465,37 @@ onMounted(() => {
 .category-desc {
   font-size: 13px;
   color: #6c757d;
-  margin-bottom: 14px;
+  margin: 6px 0 0;
   line-height: 1.5;
+}
+
+.model-type-endpoint-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+  padding: 12px 14px;
+  background: #f8fbff;
+  border: 1px solid #dbeafe;
+  border-radius: 10px;
+}
+
+.endpoint-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: #dbeafe;
+  color: #1d4ed8;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.model-type-endpoint {
+  font-family: 'Consolas', 'Monaco', monospace;
+  font-size: 13px;
+  color: #1e293b;
 }
 
 .category-models {
@@ -1441,6 +1541,16 @@ onMounted(() => {
 .btn-remove-tiny:hover {
   background: #c82333;
   transform: scale(1.05);
+}
+
+.model-type-empty {
+  padding: 14px;
+  border: 1px dashed #cbd5e1;
+  border-radius: 8px;
+  background: #f8fafc;
+  color: #64748b;
+  font-size: 13px;
+  text-align: center;
 }
 
 .add-model-section {
