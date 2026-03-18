@@ -200,6 +200,21 @@ function buildUserSettingsFromDb(db) {
 }
 
 function upsertProviderGroups(db, groups) {
+  const normalizedGroups = (groups && groups.length ? groups : [DEFAULT_PROVIDER_GROUP]).map(group => ({
+    id: group.id,
+    name: group.name,
+    description: group.description || '',
+    created_at: group.createdAt || group.created_at || nowIso()
+  }));
+
+  const validGroupIds = new Set(normalizedGroups.map(group => group.id));
+  validGroupIds.add(DEFAULT_PROVIDER_GROUP.id);
+
+  db.prepare(`
+    DELETE FROM provider_groups
+    WHERE id NOT IN (${Array.from(validGroupIds).map(() => '?').join(', ')})
+  `).run(...Array.from(validGroupIds));
+
   const stmt = db.prepare(`
     INSERT INTO provider_groups (id, name, description, created_at, updated_at)
     VALUES (@id, @name, @description, @created_at, CURRENT_TIMESTAMP)
@@ -209,12 +224,16 @@ function upsertProviderGroups(db, groups) {
       updated_at = CURRENT_TIMESTAMP
   `);
 
-  for (const group of groups) {
+  for (const group of normalizedGroups) {
+    stmt.run(group);
+  }
+
+  if (!validGroupIds.has(DEFAULT_PROVIDER_GROUP.id)) {
     stmt.run({
-      id: group.id,
-      name: group.name,
-      description: group.description || '',
-      created_at: group.createdAt || group.created_at || nowIso()
+      id: DEFAULT_PROVIDER_GROUP.id,
+      name: DEFAULT_PROVIDER_GROUP.name,
+      description: DEFAULT_PROVIDER_GROUP.description || '',
+      created_at: DEFAULT_PROVIDER_GROUP.createdAt || DEFAULT_PROVIDER_GROUP.created_at || nowIso()
     });
   }
 }
