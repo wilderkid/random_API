@@ -925,7 +925,50 @@ function saveConversationToDb(conversation) {
   const tx = db.transaction(() => {
     db.prepare('DELETE FROM conversation_messages WHERE conversation_id = ?').run(conversation.id);
     db.prepare('DELETE FROM conversations WHERE id = ?').run(conversation.id);
-    replaceConversations(db, [conversation]);
+
+    db.prepare(`
+      INSERT INTO conversations (id, title, model, created_at, updated_at)
+      VALUES (@id, @title, @model, @created_at, @updated_at)
+    `).run({
+      id: conversation.id,
+      title: conversation.title || '',
+      model: conversation.model || '',
+      created_at: conversation.createdAt || conversation.created_at || nowIso(),
+      updated_at: conversation.updatedAt || conversation.updated_at || nowIso()
+    });
+
+    const insertMessage = db.prepare(`
+      INSERT INTO conversation_messages (
+        conversation_id, message_index, role, content, error, streaming,
+        message_type, rendered, text_content, metadata_json, error_details_json,
+        generated_images_json, images_json, files_json, created_at, updated_at
+      ) VALUES (
+        @conversation_id, @message_index, @role, @content, @error, @streaming,
+        @message_type, @rendered, @text_content, @metadata_json, @error_details_json,
+        @generated_images_json, @images_json, @files_json, @created_at, @updated_at
+      )
+    `);
+
+    (conversation.messages || []).forEach((msg, index) => {
+      insertMessage.run({
+        conversation_id: conversation.id,
+        message_index: index,
+        role: msg.role,
+        content: msg.content || '',
+        error: msg.error ? 1 : 0,
+        streaming: msg.streaming ? 1 : 0,
+        message_type: msg.messageType || '',
+        rendered: msg.rendered || '',
+        text_content: msg.textContent || '',
+        metadata_json: serialize(msg.metadata || null),
+        error_details_json: serialize(msg.errorDetails || null),
+        generated_images_json: serialize(msg.generatedImages || null),
+        images_json: serialize(msg.images || null),
+        files_json: serialize(msg.files || null),
+        created_at: msg.createdAt || msg.created_at || nowIso(),
+        updated_at: msg.updatedAt || msg.updated_at || nowIso()
+      });
+    });
   });
   tx();
   return getConversationByIdFromDb(conversation.id);
@@ -933,7 +976,11 @@ function saveConversationToDb(conversation) {
 
 function deleteConversationFromDb(id) {
   const db = getDb();
-  db.prepare('DELETE FROM conversations WHERE id = ?').run(id);
+  const tx = db.transaction(() => {
+    db.prepare('DELETE FROM conversation_messages WHERE conversation_id = ?').run(id);
+    db.prepare('DELETE FROM conversations WHERE id = ?').run(id);
+  });
+  tx();
 }
 
 module.exports = {
