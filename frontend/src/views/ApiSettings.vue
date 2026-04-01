@@ -43,7 +43,7 @@
             </div>
           </div>
 
-          <input v-model="searchProvider" placeholder="搜索模型平台名..." class="search-input">
+          <input v-model="searchProvider" placeholder="搜索供应商名称/URL/域名..." class="search-input">
           <div class="button-group">
             <button @click="showAddProvider = true" class="btn-add-provider">+ 添加</button>
             <button @click="importProviders" class="btn-import">导入</button>
@@ -528,8 +528,31 @@ const apiStyleOptionsContainer = ref(null)
 const apiStyleOptionRefs = new Map()
 
 const filteredProviders = computed(() => {
-  const query = searchProvider.value.toLowerCase()
-  return query ? providers.value.filter(p => p.name.toLowerCase().includes(query)) : providers.value
+  const query = searchProvider.value.toLowerCase().trim()
+  if (!query) return providers.value
+  
+  return providers.value.filter(p => {
+    // 匹配供应商名称
+    const nameMatch = p.name.toLowerCase().includes(query)
+    
+    // 匹配完整 URL
+    const urlMatch = p.baseUrl && p.baseUrl.toLowerCase().includes(query)
+    
+    // 匹配域名（从 URL 中提取）
+    let domainMatch = false
+    if (p.baseUrl) {
+      try {
+        const urlObj = new URL(p.baseUrl)
+        const domain = urlObj.hostname.toLowerCase()
+        // 匹配完整域名或子域名
+        domainMatch = domain.includes(query) || query.includes(domain)
+      } catch {
+        // URL 解析失败时忽略域名匹配
+      }
+    }
+    
+    return nameMatch || urlMatch || domainMatch
+  })
 })
 
 const groupedProviders = computed(() => {
