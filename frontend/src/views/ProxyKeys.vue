@@ -69,6 +69,15 @@
                 </label>
               </div>
               <div class="form-group">
+                <label>客户端用途</label>
+                <select v-model="selectedKey.clientTag">
+                  <option v-for="tag in clientTagOptions" :key="tag.value" :value="tag.value">
+                    {{ tag.label }}
+                  </option>
+                </select>
+                <small class="hint">后续路由会按此用途筛选 provider 标签。</small>
+              </div>
+              <div class="form-group">
                 <label>轮询模式</label>
                 <label class="toggle">
                   <input type="checkbox" v-model="selectedKey.usePolling">
@@ -84,6 +93,27 @@
               <div class="api-key-display">
                 <input :value="selectedKey.apiKey" type="text" readonly class="key-input">
                 <button @click="copyKey" class="btn-copy">📋 复制</button>
+              </div>
+            </div>
+
+            <div class="config-section">
+              <h4>Client Config</h4>
+              <p class="section-desc">Copy these snippets into OpenAI-compatible or Claude-compatible clients.</p>
+              <div class="snippet-grid">
+                <div class="snippet-card">
+                  <div class="snippet-header">
+                    <span>OpenAI / Codex</span>
+                    <button @click="copySnippet('OpenAI config', openaiConfigSnippet)" class="btn-copy">Copy</button>
+                  </div>
+                  <textarea :value="openaiConfigSnippet" readonly class="config-snippet"></textarea>
+                </div>
+                <div class="snippet-card">
+                  <div class="snippet-header">
+                    <span>Claude / Anthropic</span>
+                    <button @click="copySnippet('Claude config', anthropicConfigSnippet)" class="btn-copy">Copy</button>
+                  </div>
+                  <textarea :value="anthropicConfigSnippet" readonly class="config-snippet"></textarea>
+                </div>
               </div>
             </div>
 
@@ -285,6 +315,14 @@
             <label>描述</label>
             <textarea v-model="newKey.description" placeholder="描述这个密钥的用途"></textarea>
           </div>
+          <div class="form-group">
+            <label>客户端用途</label>
+            <select v-model="newKey.clientTag">
+              <option v-for="tag in clientTagOptions" :key="tag.value" :value="tag.value">
+                {{ tag.label }}
+              </option>
+            </select>
+          </div>
         </div>
         <div class="modal-footer">
           <button @click="showCreateModal = false" class="btn-cancel">取消</button>
@@ -312,6 +350,55 @@ const modelSearchQuery = ref('') // 模型搜索关键词
 const pollingProviderSearchQuery = ref('')
 const providerSearchQuery = ref('')
 const isModelListReady = ref(false)
+
+const clientTagOptions = [
+  { label: '普通', value: 'normal' },
+  { label: 'Codex', value: 'codex' },
+  { label: 'Claude Code', value: 'claude' },
+  { label: 'OpenClaw', value: 'openclaw' }
+]
+
+function normalizeClientTag(tag) {
+  return clientTagOptions.some(option => option.value === tag) ? tag : 'normal'
+}
+
+const proxyOrigin = computed(() => {
+  if (typeof window === 'undefined') return 'http://127.0.0.1:3000'
+  return window.location.origin
+})
+
+const openaiConfigSnippet = computed(() => {
+  const key = selectedKey.value?.apiKey || '<api-key>'
+  return [
+    `OPENAI_BASE_URL=${proxyOrigin.value}/v1`,
+    `OPENAI_API_KEY=${key}`,
+    '',
+    'Endpoints:',
+    `GET  ${proxyOrigin.value}/v1/models`,
+    `POST ${proxyOrigin.value}/v1/chat/completions`,
+    `POST ${proxyOrigin.value}/v1/responses`,
+    `GET  ${proxyOrigin.value}/v1/health`
+  ].join('\n')
+})
+
+const anthropicConfigSnippet = computed(() => {
+  const key = selectedKey.value?.apiKey || '<api-key>'
+  return [
+    `ANTHROPIC_BASE_URL=${proxyOrigin.value}`,
+    `ANTHROPIC_AUTH_TOKEN=${key}`,
+    `ANTHROPIC_API_KEY=${key}`,
+    '',
+    'Headers:',
+    'anthropic-version: 2023-06-01',
+    'x-api-key: <api-key>',
+    '',
+    'Endpoints:',
+    `GET  ${proxyOrigin.value}/v1/models`,
+    `POST ${proxyOrigin.value}/v1/messages`,
+    `POST ${proxyOrigin.value}/v1/messages/count_tokens`,
+    `GET  ${proxyOrigin.value}/v1/health`
+  ].join('\n')
+})
 
 const pollingScopeProviders = computed(() => {
   if (!selectedKey.value) return []
@@ -387,7 +474,8 @@ const filteredPollingModels = computed(() => {
 
 const newKey = ref({
   name: '',
-  description: ''
+  description: '',
+  clientTag: 'normal'
 })
 
 // 计算是否有变更
@@ -589,6 +677,7 @@ function selectKey(key) {
     allowedProviders: key.allowedProviders || [],
     allowedPollingGroups: key.allowedPollingGroups || [],
     allowedPollingProviders: key.allowedPollingProviders || [],
+    clientTag: normalizeClientTag(key.clientTag),
     usePolling: key.usePolling !== undefined ? key.usePolling : true // 默认启用轮询
   }
   selectedKey.value = JSON.parse(JSON.stringify(keyWithDefaults))
@@ -609,7 +698,7 @@ function formatDate(dateString) {
 
 // 创建新密钥
 function createNewKey() {
-  newKey.value = { name: '', description: '' }
+  newKey.value = { name: '', description: '', clientTag: 'normal' }
   showCreateModal.value = true
 }
 
@@ -622,7 +711,7 @@ async function confirmCreateKey() {
     apiKeys.value.push(response.data)
     selectKey(response.data)
     showCreateModal.value = false
-    newKey.value = { name: '', description: '' }
+    newKey.value = { name: '', description: '', clientTag: 'normal' }
   } catch (error) {
     console.error('创建密钥失败:', error)
     alert('创建密钥失败: ' + (error.response?.data?.error || error.message))
@@ -686,6 +775,16 @@ async function copyKey() {
     alert('密钥已复制到剪贴板')
   } catch (error) {
     console.error('复制失败:', error)
+    alert('复制失败，请手动复制')
+  }
+}
+
+async function copySnippet(label, content) {
+  try {
+    await navigator.clipboard.writeText(content)
+    alert(`${label} copied`)
+  } catch (error) {
+    console.error('复制配置失败:', error)
     alert('复制失败，请手动复制')
   }
 }
@@ -1082,7 +1181,7 @@ onMounted(async () => {
   color: #333;
 }
 
-.form-group input, .form-group textarea {
+.form-group input, .form-group textarea, .form-group select {
   width: 100%;
   padding: 8px 12px;
   border: 1px solid #ddd;
@@ -1090,7 +1189,7 @@ onMounted(async () => {
   font-size: 14px;
 }
 
-.form-group input:focus, .form-group textarea:focus {
+.form-group input:focus, .form-group textarea:focus, .form-group select:focus {
   outline: none;
   border-color: #007bff;
   box-shadow: 0 0 0 2px rgba(0, 123, 255, 0.25);
@@ -1138,6 +1237,43 @@ onMounted(async () => {
 
 .btn-copy:hover {
   background-color: #5a6268;
+}
+
+.snippet-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 16px;
+}
+
+.snippet-card {
+  border: 1px solid #e0e0e0;
+  border-radius: 6px;
+  background: #f8f9fa;
+  overflow: hidden;
+}
+
+.snippet-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-bottom: 1px solid #e0e0e0;
+  font-weight: 600;
+  color: #333;
+}
+
+.config-snippet {
+  width: 100%;
+  min-height: 190px;
+  padding: 12px;
+  border: none;
+  resize: vertical;
+  background: #fff;
+  color: #222;
+  font-family: Consolas, Monaco, 'Courier New', monospace;
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .params-grid {

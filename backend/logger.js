@@ -1055,7 +1055,7 @@ function parseModernLogs(logEntries) {
                 stats.providerStats[providerName].models[modelName].total;
             }
 
-            if (result?.tokenUsage) {
+            if (provider.status === 'success' && result?.tokenUsage) {
               stats.providerStats[providerName].models[modelName].totalPromptTokens += result.tokenUsage.promptTokens || 0;
               stats.providerStats[providerName].models[modelName].totalCompletionTokens += result.tokenUsage.completionTokens || 0;
               stats.providerStats[providerName].models[modelName].totalTokens += result.tokenUsage.totalTokens || 0;

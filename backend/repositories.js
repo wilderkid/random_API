@@ -38,6 +38,15 @@ const DEFAULT_USER_SETTINGS = {
   modelTypes: {}
 };
 
+const DEFAULT_PROVIDER_CLIENT_TAGS = {
+  normal: true,
+  codex: false,
+  claude: false,
+  openclaw: false
+};
+
+const VALID_CLIENT_TAGS = ['normal', 'codex', 'claude', 'openclaw'];
+
 const DEFAULT_LANGUAGES = {
   sourceLanguages: [
     { id: '1', name: '中文', code: 'zh' },
@@ -85,6 +94,26 @@ function deserialize(value, fallback = null) {
   } catch {
     return fallback;
   }
+}
+
+function normalizeProviderClientTags(tags) {
+  const source = tags && typeof tags === 'object' ? tags : {};
+  const normalized = {
+    normal: source.normal === true,
+    codex: source.codex === true,
+    claude: source.claude === true,
+    openclaw: source.openclaw === true
+  };
+
+  if (!normalized.normal && !normalized.codex && !normalized.claude && !normalized.openclaw) {
+    normalized.normal = true;
+  }
+
+  return normalized;
+}
+
+function normalizeProxyClientTag(tag) {
+  return VALID_CLIENT_TAGS.includes(tag) ? tag : 'normal';
 }
 
 function normalizeProviderKeys(provider) {
@@ -192,6 +221,7 @@ function buildUserSettingsFromDb(db) {
       allowedPollingGroups: deserialize(row.allowed_polling_groups_json, []),
       allowedPollingProviders: deserialize(row.allowed_polling_providers_json, []),
       usePolling: row.use_polling === 0 ? false : true,
+      clientTag: normalizeProxyClientTag(row.client_tag),
       rateLimit: deserialize(row.rate_limit_json, { requestsPerMinute: 60, requestsPerHour: 1000 })
     }])
   );
@@ -243,12 +273,12 @@ function replaceProviders(db, providers) {
     INSERT INTO providers (
       id, name, base_url, api_key, group_id, api_type, model_type,
       sort_order, disabled, fail_count, exclude_auto_refresh,
-      custom_endpoints_chat, custom_endpoints_models, custom_endpoints_images,
+      custom_endpoints_chat, custom_endpoints_models, custom_endpoints_images, client_tags_json,
       created_at, updated_at
     ) VALUES (
       @id, @name, @base_url, @api_key, @group_id, @api_type, @model_type,
       @sort_order, @disabled, @fail_count, @exclude_auto_refresh,
-      @custom_endpoints_chat, @custom_endpoints_models, @custom_endpoints_images,
+      @custom_endpoints_chat, @custom_endpoints_models, @custom_endpoints_images, @client_tags_json,
       @created_at, CURRENT_TIMESTAMP
     )
     ON CONFLICT(id) DO UPDATE SET
@@ -265,6 +295,7 @@ function replaceProviders(db, providers) {
       custom_endpoints_chat = excluded.custom_endpoints_chat,
       custom_endpoints_models = excluded.custom_endpoints_models,
       custom_endpoints_images = excluded.custom_endpoints_images,
+      client_tags_json = excluded.client_tags_json,
       updated_at = CURRENT_TIMESTAMP
   `);
 
@@ -304,6 +335,7 @@ function replaceProviders(db, providers) {
       custom_endpoints_chat: provider.customEndpoints?.chat || '',
       custom_endpoints_models: provider.customEndpoints?.models || '',
       custom_endpoints_images: provider.customEndpoints?.images || '',
+      client_tags_json: serialize(normalizeProviderClientTags(provider.clientTags)),
       created_at: provider.createdAt || provider.created_at || nowIso()
     });
 
@@ -430,6 +462,7 @@ function buildApiSettingsFromDb(db) {
       groupId: row.group_id || 'default',
       apiType: row.api_type || 'openai',
       modelType: row.model_type || 'text',
+      clientTags: normalizeProviderClientTags(deserialize(row.client_tags_json, DEFAULT_PROVIDER_CLIENT_TAGS)),
       sortOrder: row.sort_order ?? 0,
       disabled: !!row.disabled,
       failCount: row.fail_count || 0,
@@ -772,10 +805,10 @@ function migrateJsonDataToSqlite() {
     const insertProxyKey = db.prepare(`
       INSERT INTO proxy_keys (
         id, name, description, api_key, enabled, created_at, last_used,
-        usage_count, allowed_models_json, allowed_groups_json, allowed_providers_json, allowed_polling_groups_json, allowed_polling_providers_json, use_polling, rate_limit_json, updated_at
+        usage_count, allowed_models_json, allowed_groups_json, allowed_providers_json, allowed_polling_groups_json, allowed_polling_providers_json, use_polling, client_tag, rate_limit_json, updated_at
       ) VALUES (
         @id, @name, @description, @api_key, @enabled, @created_at, @last_used,
-        @usage_count, @allowed_models_json, @allowed_groups_json, @allowed_providers_json, @allowed_polling_groups_json, @allowed_polling_providers_json, @use_polling, @rate_limit_json, CURRENT_TIMESTAMP
+        @usage_count, @allowed_models_json, @allowed_groups_json, @allowed_providers_json, @allowed_polling_groups_json, @allowed_polling_providers_json, @use_polling, @client_tag, @rate_limit_json, CURRENT_TIMESTAMP
       )
     `);
 
@@ -795,6 +828,7 @@ function migrateJsonDataToSqlite() {
         allowed_polling_groups_json: serialize(key.allowedPollingGroups || []),
         allowed_polling_providers_json: serialize(key.allowedPollingProviders || []),
         use_polling: key.usePolling === false ? 0 : 1,
+        client_tag: normalizeProxyClientTag(key.clientTag),
         rate_limit_json: serialize(key.rateLimit || { requestsPerMinute: 60, requestsPerHour: 1000 })
       });
     });
@@ -825,6 +859,11 @@ function getApiSettingsFromDb() {
 function saveApiSettingsToDb(data) {
   const db = getDb();
   ensureProvidersSortOrderColumn(db);
+  try {
+    db.prepare('SELECT client_tags_json FROM providers LIMIT 1').get();
+  } catch (error) {
+    db.prepare(`ALTER TABLE providers ADD COLUMN client_tags_json TEXT DEFAULT '{"normal":true,"codex":false,"claude":false,"openclaw":false}'`).run();
+  }
   const tx = db.transaction(() => {
     const providers = (data.providers || []).map((provider, index) => {
       if (provider.sortOrder === undefined || provider.sortOrder === null) {
@@ -845,6 +884,11 @@ function getUserSettingsFromDb() {
 
 function saveUserSettingsToDb(settings) {
   const db = getDb();
+  try {
+    db.prepare('SELECT client_tag FROM proxy_keys LIMIT 1').get();
+  } catch (error) {
+    db.prepare("ALTER TABLE proxy_keys ADD COLUMN client_tag TEXT DEFAULT 'normal'").run();
+  }
   const tx = db.transaction(() => {
     Object.entries(settings).forEach(([key, value]) => {
       if (key === 'proxyApiKeys') return;
@@ -855,10 +899,10 @@ function saveUserSettingsToDb(settings) {
     const insertProxyKey = db.prepare(`
       INSERT INTO proxy_keys (
         id, name, description, api_key, enabled, created_at, last_used,
-        usage_count, allowed_models_json, allowed_groups_json, allowed_providers_json, allowed_polling_groups_json, allowed_polling_providers_json, use_polling, rate_limit_json, updated_at
+        usage_count, allowed_models_json, allowed_groups_json, allowed_providers_json, allowed_polling_groups_json, allowed_polling_providers_json, use_polling, client_tag, rate_limit_json, updated_at
       ) VALUES (
         @id, @name, @description, @api_key, @enabled, @created_at, @last_used,
-        @usage_count, @allowed_models_json, @allowed_groups_json, @allowed_providers_json, @allowed_polling_groups_json, @allowed_polling_providers_json, @use_polling, @rate_limit_json, CURRENT_TIMESTAMP
+        @usage_count, @allowed_models_json, @allowed_groups_json, @allowed_providers_json, @allowed_polling_groups_json, @allowed_polling_providers_json, @use_polling, @client_tag, @rate_limit_json, CURRENT_TIMESTAMP
       )
     `);
 
@@ -878,6 +922,7 @@ function saveUserSettingsToDb(settings) {
         allowed_polling_groups_json: serialize(key.allowedPollingGroups || []),
         allowed_polling_providers_json: serialize(key.allowedPollingProviders || []),
         use_polling: key.usePolling === false ? 0 : 1,
+        client_tag: normalizeProxyClientTag(key.clientTag),
         rate_limit_json: serialize(key.rateLimit || { requestsPerMinute: 60, requestsPerHour: 1000 })
       });
     });

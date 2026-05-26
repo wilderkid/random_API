@@ -91,10 +91,10 @@
             <thead>
               <tr>
                 <th>提供商</th>
-                <th>请求数</th>
+                <th>尝试数</th>
                 <th>成功率</th>
                 <th>平均响应时间</th>
-                <th>成本占比</th>
+                <th v-if="stats.costStats">成本占比</th>
               </tr>
             </thead>
             <tbody>
@@ -112,6 +112,132 @@
         </div>
       </div>
 
+      <!-- 模型轮询分布 -->
+      <div class="distribution-section">
+        <div class="section-heading">
+          <h2>模型轮询分布</h2>
+          <div class="distribution-controls">
+            <select v-model="selectedDistributionModel" class="model-select">
+              <option value="all">全部模型</option>
+              <option
+                v-for="modelName in distributionModelOptions"
+                :key="modelName"
+                :value="modelName"
+              >
+                {{ modelName }}
+              </option>
+            </select>
+            <label class="checkbox-control">
+              <input v-model="showOnlyMultiProvider" type="checkbox">
+              <span>只看多 Provider</span>
+            </label>
+          </div>
+        </div>
+        <div class="table-container">
+          <table class="stats-table distribution-table">
+            <thead>
+              <tr>
+                <th>模型</th>
+                <th>Provider 数</th>
+                <th>成功调用</th>
+                <th>失败尝试</th>
+                <th>均衡度</th>
+                <th>成功 Provider 分布</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-if="filteredDistributionRows.length === 0">
+                <td colspan="6" class="empty-cell">暂无可展示的模型分布数据</td>
+              </tr>
+              <tr v-for="row in filteredDistributionRows" :key="row.modelName">
+                <td class="model-name-cell">{{ row.modelName }}</td>
+                <td>{{ row.providerCount }}</td>
+                <td>{{ formatNumber(row.totalSuccess) }}</td>
+                <td>{{ formatNumber(row.totalFailed) }}</td>
+                <td>
+                  <span :class="['balance-badge', getBalanceClass(row)]">
+                    {{ getBalanceText(row) }}
+                  </span>
+                </td>
+                <td>
+                  <div class="provider-distribution-list">
+                    <div
+                      v-for="provider in row.providers"
+                      :key="`${row.modelName}-${provider.providerName}`"
+                      class="provider-distribution-item"
+                    >
+                      <div class="provider-distribution-meta">
+                        <span class="provider-name-inline">{{ provider.providerName }}</span>
+                        <span>{{ formatNumber(provider.success) }} 成功 / {{ formatNumber(provider.failed) }} 失败 / {{ provider.share }}%</span>
+                      </div>
+                      <div class="distribution-bar">
+                        <span :style="{ width: `${provider.share}%` }"></span>
+                      </div>
+                    </div>
+                  </div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- 最近调用顺序 -->
+      <div class="recent-section">
+        <div class="section-heading">
+          <h2>最近调用顺序</h2>
+          <div class="section-hint">最多显示最近 50 条 API 请求</div>
+        </div>
+        <div class="table-container">
+          <table class="stats-table recent-table">
+            <thead>
+              <tr>
+                <th>时间</th>
+                <th>模型</th>
+                <th>最终 Provider</th>
+                <th>API 密钥</th>
+                <th>轮询</th>
+                <th>尝试</th>
+                <th>尝试链路</th>
+                <th>耗时</th>
+                <th>状态</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-if="recentCalls.length === 0">
+                <td colspan="9" class="empty-cell">暂无最近调用数据</td>
+              </tr>
+              <tr v-for="call in recentCalls" :key="call.id">
+                <td>{{ call.time }}</td>
+                <td class="model-name-cell">{{ call.model }}</td>
+                <td class="provider-name">{{ call.providerName }}</td>
+                <td>{{ call.apiKeyName }}</td>
+                <td>{{ call.isPolling ? '是' : '否' }}</td>
+                <td>{{ call.totalAttempts }}</td>
+                <td>
+                  <div class="attempt-chain">
+                    <span
+                      v-for="attempt in call.attempts"
+                      :key="`${call.id}-${attempt.attempt}-${attempt.providerName}`"
+                      :class="['attempt-chip', attempt.status]"
+                      :title="attempt.error || ''"
+                    >
+                      {{ attempt.attempt }}. {{ attempt.providerName }}
+                    </span>
+                  </div>
+                </td>
+                <td>{{ formatDuration(call.duration) }}</td>
+                <td>
+                  <span :class="['status-badge', call.status]">
+                    {{ call.status === 'success' ? '成功' : '失败' }}
+                  </span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
       <!-- 模型统计 -->
       <div class="models-section">
         <h2>模型使用统计</h2>
@@ -121,7 +247,7 @@
               <tr>
                 <th>提供商</th>
                 <th>模型</th>
-                <th>调用次数</th>
+                <th>尝试次数</th>
                 <th>成功率</th>
                 <th>平均响应时间</th>
                 <th>Prompt Tokens</th>
@@ -154,7 +280,7 @@
               <tr>
                 <th>提供商</th>
                 <th>API密钥</th>
-                <th>调用次数</th>
+                <th>尝试次数</th>
                 <th>成功率</th>
               </tr>
             </thead>
@@ -222,9 +348,12 @@ const stats = ref({
   levelStats: {},
   typeStats: {}
 })
+const recentCalls = ref([])
 const selectedTimeRange = ref('today')
 const customStartDate = ref('')
 const customEndDate = ref('')
+const selectedDistributionModel = ref('all')
+const showOnlyMultiProvider = ref(false)
 
 const providerRows = computed(() =>
   Object.entries(stats.value.providerStats || {}).map(([name, provider]) => ({
@@ -260,6 +389,79 @@ const apiKeyRows = computed(() => {
   })
   return rows
 })
+
+const modelDistributionRows = computed(() => {
+  const grouped = new Map()
+
+  for (const row of modelRows.value) {
+    if (!grouped.has(row.modelName)) {
+      grouped.set(row.modelName, {
+        modelName: row.modelName,
+        totalSuccess: 0,
+        totalFailed: 0,
+        totalAttempts: 0,
+        providers: []
+      })
+    }
+
+    const group = grouped.get(row.modelName)
+    const total = Number(row.total || 0)
+    const success = Number(row.success || 0)
+    const failed = Number(row.failed || 0)
+    group.totalAttempts += total
+    group.totalSuccess += success
+    group.totalFailed += failed
+    group.providers.push({
+      providerName: row.providerName,
+      total,
+      success,
+      failed,
+      avgDuration: row.avgDuration || 0,
+      share: 0
+    })
+  }
+
+  return Array.from(grouped.values())
+    .map(group => {
+      const providers = group.providers
+        .map(provider => ({
+          ...provider,
+          share: group.totalSuccess > 0 ? Number(((provider.success / group.totalSuccess) * 100).toFixed(1)) : 0
+        }))
+        .sort((a, b) => b.success - a.success || b.total - a.total || a.providerName.localeCompare(b.providerName))
+      const counts = providers.map(provider => provider.success)
+      const max = counts.length ? Math.max(...counts) : 0
+      const min = counts.length ? Math.min(...counts) : 0
+
+      return {
+        ...group,
+        providers,
+        providerCount: providers.length,
+        maxProviderCalls: max,
+        minProviderCalls: min,
+        spread: max - min
+      }
+    })
+    .sort((a, b) => b.totalSuccess - a.totalSuccess || b.totalAttempts - a.totalAttempts || a.modelName.localeCompare(b.modelName))
+})
+
+const distributionModelOptions = computed(() =>
+  modelDistributionRows.value.map(row => row.modelName)
+)
+
+const filteredDistributionRows = computed(() =>
+  modelDistributionRows.value.filter(row => {
+    if (selectedDistributionModel.value !== 'all' && row.modelName !== selectedDistributionModel.value) {
+      return false
+    }
+
+    if (showOnlyMultiProvider.value && row.providerCount < 2) {
+      return false
+    }
+
+    return true
+  })
+)
 
 // 计算属性
 const successRate = computed(() => {
@@ -326,10 +528,30 @@ async function loadStats() {
     })
 
     stats.value = response.data.stats
+    await loadRecentCalls(start, end)
   } catch (err) {
     error.value = err.response?.data?.error || err.message || '加载统计数据失败'
   } finally {
     loading.value = false
+  }
+}
+
+async function loadRecentCalls(start, end) {
+  try {
+    const response = await axios.get(`${API_BASE}/api/logs`, {
+      params: {
+        startDate: start,
+        endDate: end,
+        type: 'API_REQUEST',
+        limit: 50,
+        offset: 0
+      }
+    })
+
+    recentCalls.value = (response.data.logs || []).map(mapRecentCall)
+  } catch (err) {
+    recentCalls.value = []
+    console.error('Error loading recent API requests:', err)
   }
 }
 
@@ -399,6 +621,60 @@ function getRateClass(item) {
   if (rate >= 95) return 'rate-good'
   if (rate >= 90) return 'rate-medium'
   return 'rate-poor'
+}
+
+function getBalanceClass(row) {
+  if (row.totalSuccess === 0) return 'skewed'
+  if (row.providerCount <= 1) return 'single'
+  if (row.spread <= 1) return 'balanced'
+  if (row.spread <= Math.max(2, Math.ceil(row.totalSuccess * 0.15))) return 'watch'
+  return 'skewed'
+}
+
+function getBalanceText(row) {
+  if (row.totalSuccess === 0) return '无成功'
+  if (row.providerCount <= 1) return '单 Provider'
+  if (row.spread <= 1) return '均衡'
+  return `差 ${formatNumber(row.spread)} 次`
+}
+
+function mapRecentCall(log) {
+  const request = log.data?.request || {}
+  const result = log.data?.result || {}
+  const providers = Array.isArray(log.data?.providers) ? log.data.providers : []
+  const attempts = providers
+    .map(provider => ({
+      attempt: provider.attempt || 0,
+      providerName: provider.providerName || '-',
+      status: provider.status === 'success' ? 'success' : 'failed',
+      statusCode: provider.statusCode || null,
+      error: provider.error || ''
+    }))
+    .sort((a, b) => a.attempt - b.attempt)
+  const successProvider =
+    providers.find(provider => provider.providerId === result.successfulProvider) ||
+    providers.find(provider => provider.status === 'success') ||
+    providers[0]
+
+  return {
+    id: `${log.timestamp}-${log.traceId}`,
+    time: formatDateTime(log.timestamp),
+    model: request.model || '-',
+    providerName: successProvider?.providerName || attempts[0]?.providerName || '-',
+    apiKeyName: request.apiKeyName || '-',
+    isPolling: Boolean(request.isPolling),
+    totalAttempts: result.totalAttempts || attempts.length || 0,
+    attempts,
+    duration: result.totalDuration || successProvider?.duration || 0,
+    status: result.status === 'success' ? 'success' : 'failed'
+  }
+}
+
+function formatDateTime(value) {
+  if (!value) return '-'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return date.toLocaleString('zh-CN', { hour12: false })
 }
 
 // 获取趋势样式类（模拟）
@@ -659,6 +935,8 @@ h2 {
 
 /* 各个统计部分 */
 .providers-section,
+.distribution-section,
+.recent-section,
 .models-section,
 .apikeys-section,
 .performance-section {
@@ -667,6 +945,51 @@ h2 {
   padding: 24px;
   border: 1px solid rgba(226, 232, 240, 0.95);
   box-shadow: 0 8px 18px rgba(15, 23, 42, 0.04);
+}
+
+.section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.section-heading h2 {
+  margin-bottom: 0;
+}
+
+.distribution-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.model-select {
+  min-width: 220px;
+  height: 38px;
+  padding: 0 12px;
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  background: #fff;
+  color: #0f172a;
+  font-size: 14px;
+}
+
+.checkbox-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #475569;
+  font-size: 14px;
+  white-space: nowrap;
+}
+
+.section-hint {
+  color: #64748b;
+  font-size: 13px;
 }
 
 /* 表格 */
@@ -705,6 +1028,156 @@ h2 {
 .provider-name {
   font-weight: 600;
   color: #1a1a1a;
+}
+
+.model-name-cell {
+  font-weight: 700;
+  color: #0f172a;
+  word-break: break-all;
+}
+
+.distribution-table {
+  min-width: 860px;
+}
+
+.recent-table {
+  min-width: 1120px;
+}
+
+.distribution-table th:last-child,
+.distribution-table td:last-child {
+  min-width: 360px;
+}
+
+.empty-cell {
+  text-align: center;
+  color: #64748b;
+  padding: 28px 16px;
+}
+
+.balance-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.balance-badge.balanced {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.balance-badge.watch {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.balance-badge.skewed {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.balance-badge.single {
+  background: #e2e8f0;
+  color: #334155;
+}
+
+.provider-distribution-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.provider-distribution-item {
+  min-width: 0;
+}
+
+.provider-distribution-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 5px;
+  color: #475569;
+  font-size: 13px;
+}
+
+.provider-name-inline {
+  color: #0f172a;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.distribution-bar {
+  height: 7px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e2e8f0;
+}
+
+.distribution-bar span {
+  display: block;
+  height: 100%;
+  min-width: 3px;
+  border-radius: inherit;
+  background: #0891b2;
+}
+
+.attempt-chain {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  min-width: 240px;
+}
+
+.attempt-chip {
+  display: inline-flex;
+  align-items: center;
+  max-width: 220px;
+  min-height: 24px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attempt-chip.success {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.attempt-chip.failed {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.status-badge.success {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.status-badge.failed {
+  background: #fee2e2;
+  color: #991b1b;
 }
 
 /* 成功率样式 */
@@ -844,6 +1317,8 @@ h2 {
 
   .overview-section,
   .providers-section,
+  .distribution-section,
+  .recent-section,
   .models-section,
   .apikeys-section,
   .performance-section {
@@ -874,6 +1349,14 @@ h2 {
     min-width: 640px;
   }
 
+  .distribution-table {
+    min-width: 820px;
+  }
+
+  .recent-table {
+    min-width: 1040px;
+  }
+
   .stats-table th,
   .stats-table td {
     padding: 10px 12px;
@@ -893,6 +1376,8 @@ h2 {
   .time-range-selector,
   .overview-section,
   .providers-section,
+  .distribution-section,
+  .recent-section,
   .models-section,
   .apikeys-section,
   .performance-section {
@@ -904,6 +1389,11 @@ h2 {
     flex-direction: column;
     align-items: stretch;
     padding-top: 10px;
+  }
+
+  .model-select,
+  .distribution-controls {
+    width: 100%;
   }
 
   .performance-grid {

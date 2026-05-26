@@ -53,9 +53,39 @@
               <input v-model.number="settings.globalFrequency" type="number" class="input-field">
             </label>
           </section>
-          
+
           <button @click="saveSettings" class="btn-save">保存设置</button>
           <div v-if="saveMessage" class="save-message">{{ saveMessage }}</div>
+        </div>
+      </div>
+
+      <div v-else-if="selectedSetting === 'password'" class="details-content">
+        <div class="details-header">
+          <h2>密码管理</h2>
+        </div>
+
+        <div class="settings-form">
+          <section class="settings-section">
+            <h3>修改登录密码</h3>
+            <label>
+              当前密码:
+              <input v-model="passwordForm.currentPassword" type="password" class="input-field" autocomplete="current-password">
+            </label>
+            <label>
+              新密码:
+              <input v-model="passwordForm.newPassword" type="password" class="input-field" autocomplete="new-password">
+            </label>
+            <label>
+              确认新密码:
+              <input v-model="passwordForm.confirmPassword" type="password" class="input-field" autocomplete="new-password">
+            </label>
+            <p class="hint-text">修改成功后，除当前登录外的其它登录会话将失效。</p>
+          </section>
+
+          <button @click="changePassword" class="btn-save" type="button" :disabled="passwordSaving">
+            {{ passwordSaving ? '修改中...' : '修改密码' }}
+          </button>
+          <div v-if="passwordMessage" :class="['form-message', passwordMessageType]">{{ passwordMessage }}</div>
         </div>
       </div>
       
@@ -508,6 +538,14 @@ const settings = ref({
   modelTypes: {} // 格式: { 'providerId::modelId': 'image-generation' | 'image-edit' | 'image' | 'embedding' | 'rerank' }
 })
 const saveMessage = ref('')
+const passwordMessage = ref('')
+const passwordMessageType = ref('success')
+const passwordSaving = ref(false)
+const passwordForm = ref({
+  currentPassword: '',
+  newPassword: '',
+  confirmPassword: ''
+})
 const selectedSetting = ref('user')
 const allModels = ref([])
 const allPrompts = ref([])
@@ -690,6 +728,12 @@ const settingsItems = ref([
     icon: '👤'
   },
   {
+    id: 'password',
+    name: '密码管理',
+    description: '修改登录密码',
+    icon: '🔒'
+  },
+  {
     id: 'defaultModel',
     name: '默认模型',
     description: '新对话默认模型',
@@ -747,6 +791,7 @@ const settingsItems = ref([
 
 function selectSetting(settingId) {
   selectedSetting.value = settingId
+  passwordMessage.value = ''
 }
 
 async function loadSettings() {
@@ -899,6 +944,50 @@ async function saveSettings() {
   await axios.put('/api/settings', settings.value)
   saveMessage.value = '设置已保存'
   setTimeout(() => saveMessage.value = '', 2000)
+}
+
+async function changePassword() {
+  passwordMessage.value = ''
+
+  if (!passwordForm.value.currentPassword || !passwordForm.value.newPassword) {
+    passwordMessageType.value = 'error'
+    passwordMessage.value = '请输入当前密码和新密码'
+    return
+  }
+
+  if (passwordForm.value.newPassword.length < 8) {
+    passwordMessageType.value = 'error'
+    passwordMessage.value = '新密码至少需要 8 个字符'
+    return
+  }
+
+  if (passwordForm.value.newPassword !== passwordForm.value.confirmPassword) {
+    passwordMessageType.value = 'error'
+    passwordMessage.value = '两次输入的新密码不一致'
+    return
+  }
+
+  passwordSaving.value = true
+  try {
+    await axios.post('/api/auth/change-password', {
+      currentPassword: passwordForm.value.currentPassword,
+      newPassword: passwordForm.value.newPassword
+    })
+
+    passwordForm.value = {
+      currentPassword: '',
+      newPassword: '',
+      confirmPassword: ''
+    }
+    passwordMessageType.value = 'success'
+    passwordMessage.value = '密码已修改'
+    setTimeout(() => passwordMessage.value = '', 3000)
+  } catch (error) {
+    passwordMessageType.value = 'error'
+    passwordMessage.value = error.response?.data?.error || '修改密码失败'
+  } finally {
+    passwordSaving.value = false
+  }
 }
 
 // 复制到剪贴板
@@ -1090,6 +1179,19 @@ onMounted(async () => {
   margin-top: 12px;
   color: #4caf50;
   font-size: 14px;
+}
+
+.form-message {
+  margin-top: 12px;
+  font-size: 14px;
+}
+
+.form-message.success {
+  color: #4caf50;
+}
+
+.form-message.error {
+  color: #d32f2f;
 }
 
 .empty-state {

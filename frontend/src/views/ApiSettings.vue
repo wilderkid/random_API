@@ -371,6 +371,16 @@
           />
           <small class="hint">OpenAI格式使用 /v1/chat/completions，Responses格式使用 /v1/responses，Anthropic格式使用 /v1/messages</small>
         </label>
+        <div class="client-tags-editor">
+          <div class="client-tags-title">用途标签</div>
+          <small class="hint">用于后续中转路由筛选。未设置标签的旧提供商默认视为普通用途。</small>
+          <div class="client-tags-grid">
+            <label v-for="tag in clientTagOptions" :key="tag.value" class="client-tag-option">
+              <input type="checkbox" v-model="providerForm.clientTags[tag.value]">
+              <span>{{ tag.label }}</span>
+            </label>
+          </div>
+        </div>
         <label>
           所属分组
           <SearchableSelect
@@ -500,7 +510,7 @@ const expandedGroups = ref({}) // 分组展开状态
 const showAddProvider = ref(false)
 const isSidebarToolsCollapsed = ref(false)
 const editingProvider = ref(null)
-const providerForm = ref({ name: '', baseUrl: '', apiKey: '', apiKeys: [], groupId: 'default', apiType: 'openai', customEndpoints: { chat: '', models: '', images: '' } })
+const providerForm = ref({ name: '', baseUrl: '', apiKey: '', apiKeys: [], groupId: 'default', apiType: 'openai', clientTags: defaultClientTags(), customEndpoints: { chat: '', models: '', images: '' } })
 const showAdvanced = ref(false)
 const showApiKey = ref(false)
 const showAddModelModal = ref(false)
@@ -517,6 +527,35 @@ const modelBatchSelectMode = ref(false) // 模型批量选择模式
 const selectedModelIds = ref([]) // 已选择的模型ID列表
 const draggedProviderId = ref(null)
 const dragOverProviderId = ref(null)
+
+function defaultClientTags() {
+  return {
+    normal: true,
+    codex: false,
+    claude: false,
+    openclaw: false
+  }
+}
+
+const clientTagOptions = [
+  { label: '普通', value: 'normal' },
+  { label: 'Codex', value: 'codex' },
+  { label: 'Claude Code', value: 'claude' },
+  { label: 'OpenClaw', value: 'openclaw' }
+]
+
+function normalizeClientTags(tags) {
+  const normalized = {
+    ...defaultClientTags(),
+    ...(tags || {})
+  }
+
+  if (!normalized.normal && !normalized.codex && !normalized.claude && !normalized.openclaw) {
+    normalized.normal = true
+  }
+
+  return normalized
+}
 
 // 风格选择相关
 const currentApiStyle = ref(apiStyleManager.getCurrentStyle())
@@ -673,6 +712,7 @@ async function loadProviders() {
       models: p.models || [],
       groupId: p.groupId || 'default',
       apiType: p.apiType || 'openai', // 默认为OpenAI兼容格式
+      clientTags: normalizeClientTags(p.clientTags),
       apiKeys
     }
   })
@@ -1134,6 +1174,7 @@ function editProvider() {
     })),
     groupId: selectedProvider.value.groupId || 'default',
     apiType: selectedProvider.value.apiType || 'openai',
+    clientTags: normalizeClientTags(selectedProvider.value.clientTags),
     customEndpoints: { chat: ce.chat || '', models: ce.models || '', images: ce.images || '' }
   }
   showAdvanced.value = !!(ce.chat || ce.models || ce.images)
@@ -1145,6 +1186,7 @@ async function saveProvider() {
   const payload = {
     ...providerForm.value,
     apiKey,
+    clientTags: normalizeClientTags(providerForm.value.clientTags),
     apiKeys: normalizedKeys.length > 0
       ? normalizedKeys
       : (apiKey ? [{ name: '默认 Key', apiKey, enabled: true, weight: 1, priority: 0 }] : [])
@@ -1338,7 +1380,7 @@ function getModelIcon(modelId) {
 function closeModal() {
   showAddProvider.value = false
   editingProvider.value = null
-  providerForm.value = { name: '', baseUrl: '', apiKey: '', apiKeys: [], groupId: 'default', apiType: 'openai', customEndpoints: { chat: '', models: '', images: '' } }
+  providerForm.value = { name: '', baseUrl: '', apiKey: '', apiKeys: [], groupId: 'default', apiType: 'openai', clientTags: defaultClientTags(), customEndpoints: { chat: '', models: '', images: '' } }
   showAdvanced.value = false
 }
 
@@ -2467,6 +2509,39 @@ onUnmounted(() => {
 
 .api-key-row:last-child {
   margin-bottom: 0;
+}
+
+.client-tags-editor {
+  margin: 12px 0 16px;
+  padding: 12px;
+  border: 1px solid #dee2e6;
+  border-radius: 6px;
+  background: #f8f9fa;
+}
+
+.client-tags-title {
+  font-weight: 600;
+  color: #495057;
+  margin-bottom: 4px;
+}
+
+.client-tags-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.client-tag-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid #dee2e6;
+  border-radius: 6px;
+  background: #fff;
+  font-size: 13px;
+  color: #495057;
 }
 
 .input-mini {

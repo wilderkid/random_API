@@ -25,6 +25,18 @@
         />
       </div>
 
+      <div class="control-group">
+        <label>用途标签:</label>
+        <SearchableSelect
+          v-model="selectedClientTag"
+          :options="clientTagOptions"
+          class="control-select"
+          placeholder="选择用途标签"
+          search-placeholder="搜索用途标签..."
+          @change="updateDisplayedModels"
+        />
+      </div>
+
       <div class="control-group" v-if="viewMode === 'grouped'">
         <label>选择分组:</label>
         <SearchableSelect
@@ -35,6 +47,24 @@
           search-placeholder="搜索分组..."
           @change="updateDisplayedModels"
         />
+      </div>
+
+      <div class="control-group reset-control">
+        <label>Reset model:</label>
+        <SearchableSelect
+          v-model="resetModelName"
+          :options="resetModelOptions"
+          class="control-select reset-select"
+          placeholder="Select model"
+          search-placeholder="Search model..."
+        />
+        <button
+          @click="resetPollingPosition"
+          class="btn-reset"
+          :disabled="!resetModelName || resetInProgress"
+        >
+          {{ resetInProgress ? 'Resetting...' : 'Reset position' }}
+        </button>
       </div>
 
       <div class="control-group">
@@ -55,7 +85,7 @@
         <div class="column-content">
           <div v-if="Object.keys(displayedAvailableGroups).length === 0" class="empty-state">
             <p>暂无重复模型</p>
-            <p>请确保至少有2个提供商支持相同的模型</p>
+            <p>请确保当前用途标签下至少有2个提供商支持相同的模型</p>
             <button @click="refreshConfig" class="btn-refresh">刷新配置</button>
           </div>
           <div v-for="(group, modelName) in displayedAvailableGroups" :key="modelName" class="model-group">
@@ -66,6 +96,9 @@
                 <span class="group-count">({{ group.length }})</span>
                 <span v-if="viewMode === 'grouped' && selectedGroup" class="group-badge">
                   {{ getGroupName(selectedGroup) }}
+                </span>
+                <span v-if="selectedClientTag !== 'all'" class="group-badge client-tag">
+                  {{ getClientTagLabel(selectedClientTag) }}
                 </span>
               </span>
               <button @click.stop="moveAllToExcluded(modelName)" class="btn-arrow" title="排除所有">→→</button>
@@ -150,7 +183,39 @@ const showDebug = ref(false)
 // 新增：视图控制相关的响应式数据
 const viewMode = ref('all') // 'all', 'grouped', 'unique'
 const selectedGroup = ref('') // 选中的分组ID
+const selectedClientTag = ref('all')
 const groupsData = ref([]) // 存储从API获取的分组数据
+const resetModelName = ref('')
+const resetInProgress = ref(false)
+
+const clientTagOptions = [
+  { label: '全部用途', value: 'all' },
+  { label: '普通', value: 'normal' },
+  { label: 'Codex', value: 'codex' },
+  { label: 'Claude Code', value: 'claude' },
+  { label: 'OpenClaw', value: 'openclaw' }
+]
+
+function normalizeClientTags(tags) {
+  const normalized = {
+    normal: tags?.normal === true,
+    codex: tags?.codex === true,
+    claude: tags?.claude === true,
+    openclaw: tags?.openclaw === true
+  }
+
+  if (!normalized.normal && !normalized.codex && !normalized.claude && !normalized.openclaw) {
+    normalized.normal = true
+  }
+
+  return normalized
+}
+
+function providerMatchesSelectedClientTag(provider) {
+  if (selectedClientTag.value === 'all') return true
+  const tags = normalizeClientTags(provider?.clientTags)
+  return tags[selectedClientTag.value] === true
+}
 
 const availableGroups = computed(() => {
   const groups = {}
@@ -164,7 +229,8 @@ const availableGroups = computed(() => {
     })
 
     if (availableProviders.length > 0) {
-      groups[normalizedModelName] = availableProviders.map(id => {
+      const filteredProviders = availableProviders
+        .map(id => {
         const provider = providers.value.find(p => p.id === id)
         // 找到该提供商中对应的具体模型ID（通过规范化匹配）
         let actualModelId = normalizedModelName
@@ -186,6 +252,14 @@ const availableGroups = computed(() => {
           groupId: provider?.groupId || 'default'
         }
       })
+        .filter(item => {
+          const provider = providers.value.find(p => p.id === item.id)
+          return providerMatchesSelectedClientTag(provider)
+        })
+
+      if (filteredProviders.length > 0) {
+        groups[normalizedModelName] = filteredProviders
+      }
     }
   }
   return groups
@@ -266,6 +340,15 @@ const groupOptions = computed(() => [
   }))
 ])
 
+const resetModelOptions = computed(() => {
+  return Object.keys(settings.value.pollingConfig?.available || {})
+    .sort()
+    .map(modelName => ({
+      label: modelName,
+      value: modelName
+    }))
+})
+
 const disabledItems = computed(() => {
   const disabled = []
 
@@ -321,6 +404,7 @@ async function loadData() {
 
   // 总是重新构建轮询配置以确保数据是最新的
   await buildPollingConfig()
+  ensureResetModelSelection()
 }
 
 /**
@@ -425,6 +509,18 @@ async function buildPollingConfig() {
 
   await saveSettings()
   console.log('Polling config saved')
+}
+
+function ensureResetModelSelection() {
+  const options = resetModelOptions.value
+  if (options.length === 0) {
+    resetModelName.value = ''
+    return
+  }
+
+  if (!options.some(option => option.value === resetModelName.value)) {
+    resetModelName.value = options[0].value
+  }
 }
 
 function toggleGroup(modelName) {
@@ -532,6 +628,24 @@ async function saveSettings() {
 async function refreshConfig() {
   console.log('Refreshing polling config...')
   await buildPollingConfig()
+  ensureResetModelSelection()
+}
+
+async function resetPollingPosition() {
+  if (!resetModelName.value || resetInProgress.value) return
+
+  resetInProgress.value = true
+  try {
+    await axios.post('/api/polling/reset-position', {
+      modelName: resetModelName.value
+    })
+    alert(`已重置 ${resetModelName.value} 的轮询位置`)
+  } catch (error) {
+    console.error('重置轮询位置失败:', error)
+    alert('重置失败: ' + (error.response?.data?.error || error.message))
+  } finally {
+    resetInProgress.value = false
+  }
 }
 
 // 新增：视图模式相关方法
@@ -579,6 +693,10 @@ function getGroupName(groupId) {
   // 从 groupsData 中查找分组名称
   const group = groupsData.value.find(g => g.id === groupId)
   return group ? group.name : groupId
+}
+
+function getClientTagLabel(tag) {
+  return clientTagOptions.find(option => option.value === tag)?.label || tag
 }
 
 onMounted(loadData)
@@ -644,6 +762,14 @@ onMounted(loadData)
   outline: none;
   border-color: #007bff;
   box-shadow: 0 0 0 2px rgba(0, 123, 255, 0.25);
+}
+
+.reset-control {
+  flex-wrap: nowrap;
+}
+
+.reset-select {
+  min-width: 220px;
 }
 
 /* 新增：三列容器样式 */
@@ -775,6 +901,10 @@ onMounted(loadData)
   font-weight: normal;
 }
 
+.group-badge.client-tag {
+  background: #6f42c1;
+}
+
 .provider-group-badge {
   background: #28a745;
   color: white;
@@ -883,7 +1013,7 @@ onMounted(loadData)
   margin: 4px 0;
 }
 
-.btn-arrow, .btn-reenable, .btn-refresh, .btn-debug {
+.btn-arrow, .btn-reenable, .btn-refresh, .btn-debug, .btn-reset {
   padding: 4px 8px;
   border: 1px solid #dee2e6;
   border-radius: 3px;
@@ -892,8 +1022,13 @@ onMounted(loadData)
   font-size: 12px;
 }
 
-.btn-arrow:hover, .btn-reenable:hover, .btn-refresh:hover, .btn-debug:hover {
+.btn-arrow:hover, .btn-reenable:hover, .btn-refresh:hover, .btn-debug:hover, .btn-reset:hover:not(:disabled) {
   background: #e9ecef;
+}
+
+.btn-reset:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 .btn-reenable {

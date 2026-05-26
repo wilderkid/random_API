@@ -64,6 +64,7 @@ function createSchema(db) {
       custom_endpoints_chat TEXT DEFAULT '',
       custom_endpoints_models TEXT DEFAULT '',
       custom_endpoints_images TEXT DEFAULT '',
+      client_tags_json TEXT DEFAULT '{"normal":true,"codex":false,"claude":false,"openclaw":false}',
       created_at TEXT DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (group_id) REFERENCES provider_groups(id) ON DELETE SET DEFAULT
@@ -193,6 +194,7 @@ function createSchema(db) {
       allowed_polling_groups_json TEXT DEFAULT '[]',
       allowed_polling_providers_json TEXT DEFAULT '[]',
       use_polling INTEGER DEFAULT 1,
+      client_tag TEXT DEFAULT 'normal',
       rate_limit_json TEXT DEFAULT '{"requestsPerMinute":60,"requestsPerHour":1000}',
       updated_at TEXT DEFAULT CURRENT_TIMESTAMP
     );
@@ -270,6 +272,22 @@ function ensureProxyKeysAllowedProvidersColumn(db) {
   }
 }
 
+function ensureProviderClientTagsColumn(db) {
+  try {
+    db.prepare('SELECT client_tags_json FROM providers LIMIT 1').get();
+  } catch (error) {
+    db.prepare(`ALTER TABLE providers ADD COLUMN client_tags_json TEXT DEFAULT '{"normal":true,"codex":false,"claude":false,"openclaw":false}'`).run();
+  }
+}
+
+function ensureProxyKeysClientTagColumn(db) {
+  try {
+    db.prepare('SELECT client_tag FROM proxy_keys LIMIT 1').get();
+  } catch (error) {
+    db.prepare("ALTER TABLE proxy_keys ADD COLUMN client_tag TEXT DEFAULT 'normal'").run();
+  }
+}
+
 function initializeDatabase() {
   if (dbInstance) {
     return dbInstance;
@@ -281,6 +299,8 @@ function initializeDatabase() {
   ensureProxyKeysUsePollingColumn(db);
   ensureProxyKeysAllowedPollingColumns(db);
   ensureProxyKeysAllowedProvidersColumn(db);
+  ensureProviderClientTagsColumn(db);
+  ensureProxyKeysClientTagColumn(db);
 
   dbInstance = db;
   return dbInstance;

@@ -25,7 +25,7 @@ const {
   PerformanceTracker,      // 新增
   generateTraceId         // 新增
 } = require('./logger');
-const { initializeDatabase } = require('./db');
+const { initializeDatabase, getDb } = require('./db');
 const {
   migrateJsonDataToSqlite,
   getApiSettingsFromDb,
@@ -41,6 +41,12 @@ const {
   saveConversationToDb,
   deleteConversationFromDb
 } = require('./repositories');
+const {
+  normalizeTokenUsage,
+  buildAnthropicProxyHeaders,
+  formatOpenAIModel,
+  formatAnthropicModel
+} = require('./proxyUtils');
 
 const app = express();
 const PORT = 3000;
@@ -106,6 +112,15 @@ const log = {
   warn: console.warn
 };
 
+function buildHealthPayload() {
+  return {
+    status: 'ok',
+    service: 'equal-ask',
+    uptime: Math.round(process.uptime()),
+    timestamp: new Date().toISOString()
+  };
+}
+
 app.use(cors());
 app.use(express.json({ limit: '50mb' })); // 增加请求体大小限制
 app.use(express.urlencoded({ limit: '50mb', extended: true })); // 增加URL编码请求体大小限制
@@ -114,7 +129,7 @@ app.use(express.static(path.join(__dirname, '../frontend/dist')));
 // 添加全局CORS中间件，确保所有响应都包含CORS头
 app.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Session-ID');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-API-Key, X-Session-ID, Anthropic-Version, Anthropic-Beta');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
   res.setHeader('Access-Control-Max-Age', '86400');
 
@@ -447,6 +462,178 @@ function invalidateLanguagesCache() {
   languagesCacheTime = 0;
 }
 
+const AUTH_COOKIE_NAME = 'equal_ask_session';
+const SESSION_TTL_MS = Number(process.env.SESSION_TTL_MS || 7 * 24 * 60 * 60 * 1000);
+const LOGIN_WINDOW_MS = 10 * 60 * 1000;
+const MAX_LOGIN_ATTEMPTS = 10;
+const loginAttempts = new Map();
+
+function parseCookies(cookieHeader = '') {
+  return cookieHeader
+    .split(';')
+    .map(part => part.trim())
+    .filter(Boolean)
+    .reduce((cookies, part) => {
+      const separatorIndex = part.indexOf('=');
+      if (separatorIndex === -1) return cookies;
+      const key = decodeURIComponent(part.slice(0, separatorIndex));
+      const value = decodeURIComponent(part.slice(separatorIndex + 1));
+      cookies[key] = value;
+      return cookies;
+    }, {});
+}
+
+function hashToken(token) {
+  return crypto.createHash('sha256').update(token).digest('hex');
+}
+
+function hashPassword(password, salt = crypto.randomBytes(16).toString('hex'), iterations = 120000) {
+  const hash = crypto.pbkdf2Sync(password, salt, iterations, 64, 'sha512').toString('hex');
+  return `pbkdf2$${iterations}$${salt}$${hash}`;
+}
+
+function verifyPassword(password, storedHash) {
+  if (!password || !storedHash) return false;
+
+  const [algorithm, iterationsText, salt, expectedHash] = storedHash.split('$');
+  if (algorithm !== 'pbkdf2' || !iterationsText || !salt || !expectedHash) {
+    return false;
+  }
+
+  const iterations = Number(iterationsText);
+  const actualHash = crypto.pbkdf2Sync(password, salt, iterations, 64, 'sha512');
+  const expected = Buffer.from(expectedHash, 'hex');
+  return expected.length === actualHash.length && crypto.timingSafeEqual(expected, actualHash);
+}
+
+function setAuthCookie(res, token, maxAgeMs = SESSION_TTL_MS) {
+  const cookieParts = [
+    `${AUTH_COOKIE_NAME}=${encodeURIComponent(token)}`,
+    'HttpOnly',
+    'SameSite=Lax',
+    'Path=/',
+    `Max-Age=${Math.floor(maxAgeMs / 1000)}`
+  ];
+
+  if (process.env.AUTH_SECURE_COOKIE === 'true') {
+    cookieParts.push('Secure');
+  }
+
+  res.setHeader('Set-Cookie', cookieParts.join('; '));
+}
+
+function clearAuthCookie(res) {
+  res.setHeader('Set-Cookie', `${AUTH_COOKIE_NAME}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0`);
+}
+
+function publicUser(row) {
+  return {
+    id: row.id,
+    username: row.username,
+    displayName: row.display_name || row.username,
+    role: row.role
+  };
+}
+
+function isLoginRateLimited(ip) {
+  const now = Date.now();
+  const attempts = (loginAttempts.get(ip) || []).filter(timestamp => now - timestamp < LOGIN_WINDOW_MS);
+  loginAttempts.set(ip, attempts);
+  return attempts.length >= MAX_LOGIN_ATTEMPTS;
+}
+
+function recordLoginFailure(ip) {
+  const now = Date.now();
+  const attempts = (loginAttempts.get(ip) || []).filter(timestamp => now - timestamp < LOGIN_WINDOW_MS);
+  attempts.push(now);
+  loginAttempts.set(ip, attempts);
+}
+
+function clearLoginFailures(ip) {
+  loginAttempts.delete(ip);
+}
+
+function getSessionUser(req) {
+  const cookies = parseCookies(req.headers.cookie || '');
+  const token = cookies[AUTH_COOKIE_NAME];
+  if (!token) return null;
+
+  const db = getDb();
+  const tokenHash = hashToken(token);
+  const row = db.prepare(`
+    SELECT
+      user_sessions.id AS session_id,
+      users.id,
+      users.username,
+      users.display_name,
+      users.role,
+      users.enabled,
+      user_sessions.expires_at
+    FROM user_sessions
+    JOIN users ON users.id = user_sessions.user_id
+    WHERE user_sessions.token_hash = ?
+  `).get(tokenHash);
+
+  if (!row || !row.enabled) return null;
+
+  if (new Date(row.expires_at).getTime() <= Date.now()) {
+    db.prepare('DELETE FROM user_sessions WHERE id = ?').run(row.session_id);
+    return null;
+  }
+
+  db.prepare('UPDATE user_sessions SET last_used_at = CURRENT_TIMESTAMP WHERE id = ?').run(row.session_id);
+  return publicUser(row);
+}
+
+function requireAuth(req, res, next) {
+  if (req.method === 'OPTIONS') {
+    return next();
+  }
+
+  try {
+    const user = getSessionUser(req);
+    if (!user) {
+      return res.status(401).json({ error: '未登录或登录已过期' });
+    }
+
+    req.user = user;
+    next();
+  } catch (error) {
+    console.error('Auth check failed:', error);
+    res.status(500).json({ error: '登录状态验证失败' });
+  }
+}
+
+function ensureDefaultAdminUser() {
+  const db = getDb();
+  const existing = db.prepare('SELECT COUNT(*) AS count FROM users').get();
+  if (existing.count > 0) return;
+
+  const username = process.env.ADMIN_USERNAME || 'admin';
+  const envPassword = process.env.ADMIN_PASSWORD;
+  const password = envPassword || crypto.randomBytes(18).toString('base64url');
+  const now = new Date().toISOString();
+
+  db.prepare(`
+    INSERT INTO users (id, username, display_name, password_hash, role, enabled, created_at, updated_at)
+    VALUES (?, ?, ?, ?, 'admin', 1, ?, ?)
+  `).run(crypto.randomUUID(), username, '管理员', hashPassword(password), now, now);
+
+  console.log(`[Auth] Created admin user: ${username}`);
+  if (!envPassword) {
+    console.log(`[Auth] Generated initial admin password: ${password}`);
+    console.log('[Auth] Set ADMIN_PASSWORD before first start if you want to choose it yourself.');
+  }
+}
+
+function cleanupExpiredSessions() {
+  try {
+    getDb().prepare('DELETE FROM user_sessions WHERE expires_at <= ?').run(new Date().toISOString());
+  } catch (error) {
+    console.error('Error cleaning expired sessions:', error);
+  }
+}
+
 // 读取语言数据
 async function getLanguages() {
   const now = Date.now();
@@ -501,6 +688,124 @@ async function savePrompts(data) {
   savePromptsToDb(data);
   invalidatePromptsCache();
 }
+
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    const ip = req.ip || req.socket?.remoteAddress || 'unknown';
+    if (isLoginRateLimited(ip)) {
+      return res.status(429).json({ error: '登录失败次数过多，请稍后再试' });
+    }
+
+    const { username, password } = req.body || {};
+    if (!username || !password) {
+      recordLoginFailure(ip);
+      return res.status(400).json({ error: '请输入用户名和密码' });
+    }
+
+    const db = getDb();
+    const user = db.prepare(`
+      SELECT id, username, display_name, password_hash, role, enabled
+      FROM users
+      WHERE username = ?
+    `).get(String(username).trim());
+
+    if (!user || !user.enabled || !verifyPassword(password, user.password_hash)) {
+      recordLoginFailure(ip);
+      return res.status(401).json({ error: '用户名或密码错误' });
+    }
+
+    const token = crypto.randomBytes(32).toString('base64url');
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + SESSION_TTL_MS).toISOString();
+
+    db.prepare(`
+      INSERT INTO user_sessions (id, user_id, token_hash, expires_at, created_at, last_used_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(crypto.randomUUID(), user.id, hashToken(token), expiresAt, now.toISOString(), now.toISOString());
+
+    clearLoginFailures(ip);
+    setAuthCookie(res, token);
+    res.json({ user: publicUser(user) });
+  } catch (error) {
+    console.error('Login failed:', error);
+    res.status(500).json({ error: '登录失败' });
+  }
+});
+
+app.post('/api/auth/logout', async (req, res) => {
+  try {
+    const token = parseCookies(req.headers.cookie || '')[AUTH_COOKIE_NAME];
+    if (token) {
+      getDb().prepare('DELETE FROM user_sessions WHERE token_hash = ?').run(hashToken(token));
+    }
+    clearAuthCookie(res);
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Logout failed:', error);
+    clearAuthCookie(res);
+    res.status(500).json({ error: '退出登录失败' });
+  }
+});
+
+app.get('/api/auth/me', async (req, res) => {
+  try {
+    const user = getSessionUser(req);
+    if (!user) {
+      return res.status(401).json({ authenticated: false });
+    }
+    res.json({ authenticated: true, user });
+  } catch (error) {
+    console.error('Auth status check failed:', error);
+    res.status(500).json({ error: '获取登录状态失败' });
+  }
+});
+
+app.post('/api/auth/change-password', requireAuth, async (req, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body || {};
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({ error: '请输入当前密码和新密码' });
+    }
+
+    if (String(newPassword).length < 8) {
+      return res.status(400).json({ error: '新密码至少需要 8 个字符' });
+    }
+
+    const db = getDb();
+    const user = db.prepare(`
+      SELECT id, username, password_hash, enabled
+      FROM users
+      WHERE id = ?
+    `).get(req.user.id);
+
+    if (!user || !user.enabled || !verifyPassword(currentPassword, user.password_hash)) {
+      return res.status(401).json({ error: '当前密码错误' });
+    }
+
+    const now = new Date().toISOString();
+    db.prepare('UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?')
+      .run(hashPassword(newPassword), now, user.id);
+
+    const currentToken = parseCookies(req.headers.cookie || '')[AUTH_COOKIE_NAME];
+    if (currentToken) {
+      db.prepare('DELETE FROM user_sessions WHERE user_id = ? AND token_hash <> ?')
+        .run(user.id, hashToken(currentToken));
+    } else {
+      db.prepare('DELETE FROM user_sessions WHERE user_id = ?').run(user.id);
+    }
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Change password failed:', error);
+    res.status(500).json({ error: '修改密码失败' });
+  }
+});
+
+app.get('/api/health', (req, res) => {
+  res.json(buildHealthPayload());
+});
+
+app.use('/api', requireAuth);
 
 // API 路由
 app.get('/api/providers', async (req, res) => {
@@ -1448,8 +1753,8 @@ app.post('/api/chat', async (req, res) => {
     console.log(`Polling mode enabled for model: ${modelName}`);
     console.log(`User settings polling config:`, JSON.stringify(userSettings.pollingConfig, null, 2));
 
-    // 获取所有可用的轮询提供商
-    const pollingProviders = getPollingProviders(settings.providers, modelName, userSettings.pollingConfig, req.apiKeyInfo);
+    // 获取所有可用的轮询提供商，使用与 /v1 外部接口一致的顺序轮询候选逻辑
+    const pollingProviders = getFailoverProviders(settings.providers, modelName, userSettings.pollingConfig, userSettings, [], req.apiKeyInfo);
 
     if (pollingProviders.length === 0) {
       console.log(`No polling providers available for model ${modelName}`);
@@ -1536,19 +1841,7 @@ app.post('/api/chat', async (req, res) => {
         await resetModelFailCount(provider.id, modelName, userSettings);
         await resetKeyFailCount(keyInfo?.key?.id, userSettings);
 
-        // 标记该提供商在当前轮次已使用
-        const pollingState = userSettings.pollingState || {};
-        if (!pollingState[modelName]) {
-          pollingState[modelName] = {
-            currentIndex: 0,
-            usedInCurrentRound: []
-          };
-        }
-        if (!pollingState[modelName].usedInCurrentRound.includes(provider.id)) {
-          pollingState[modelName].usedInCurrentRound.push(provider.id);
-        }
-        userSettings.pollingState = pollingState;
-
+        updatePollingStateAfterSuccess(modelName, provider.id, userSettings.pollingConfig, userSettings);
         await savePollingState(userSettings);
 
         console.log(`Successfully used provider ${provider.name} for model ${modelName}`);
@@ -1680,6 +1973,33 @@ app.put('/api/settings', async (req, res) => {
   const savedSettings = saveUserSettingsToDb(mergedSettings);
   invalidateUserSettingsCache(); // 缓存失效
   res.json(savedSettings);
+});
+
+app.post('/api/polling/reset-position', async (req, res) => {
+  const modelName = String(req.body?.modelName || '').trim();
+
+  if (!modelName) {
+    return res.status(400).json({ error: 'modelName is required' });
+  }
+
+  const userSettings = await getUserSettings();
+  const pollingState = userSettings.pollingState || {};
+
+  pollingState[modelName] = {
+    currentIndex: 0,
+    usedInCurrentRound: [],
+    lastResetAt: new Date().toISOString()
+  };
+
+  userSettings.pollingState = pollingState;
+  const savedSettings = saveUserSettingsToDb(userSettings);
+  invalidateUserSettingsCache();
+
+  res.json({
+    success: true,
+    modelName,
+    state: savedSettings.pollingState?.[modelName] || pollingState[modelName]
+  });
 });
 
 // 提示词变量替换函数
@@ -2182,6 +2502,11 @@ function getConversationProvider(sessionIdentifier, modelName, userSettings, pro
     // 检查映射的提供商是否仍然可用
     const provider = providers.find(p => p.id === mapping.providerId);
     if (provider && !provider.disabled) {
+      if (!providerMatchesClientTag(provider, apiKeyInfo)) {
+        console.log(`[Session] Provider ${provider.name} does not match client tag ${getApiKeyClientTag(apiKeyInfo)}, will select new provider`);
+        return null;
+      }
+
       // 非轮询模式下，校验分组/提供商权限是否仍然允许当前绑定提供商
       if (!usePolling) {
         const allowedGroups = apiKeyInfo?.allowedGroups || [];
@@ -2234,6 +2559,37 @@ function getConversationProvider(sessionIdentifier, modelName, userSettings, pro
   }
   
   return null;
+}
+
+const VALID_CLIENT_TAGS = ['normal', 'codex', 'claude', 'openclaw'];
+
+function normalizeProviderClientTags(tags) {
+  const source = tags && typeof tags === 'object' ? tags : {};
+  const normalized = {
+    normal: source.normal === true,
+    codex: source.codex === true,
+    claude: source.claude === true,
+    openclaw: source.openclaw === true
+  };
+
+  if (!normalized.normal && !normalized.codex && !normalized.claude && !normalized.openclaw) {
+    normalized.normal = true;
+  }
+
+  return normalized;
+}
+
+function getApiKeyClientTag(apiKeyInfo = null) {
+  if (!apiKeyInfo) return null;
+  return VALID_CLIENT_TAGS.includes(apiKeyInfo.clientTag) ? apiKeyInfo.clientTag : 'normal';
+}
+
+function providerMatchesClientTag(provider, apiKeyInfo = null) {
+  const clientTag = getApiKeyClientTag(apiKeyInfo);
+  if (!clientTag) return true;
+
+  const tags = normalizeProviderClientTags(provider?.clientTags);
+  return tags[clientTag] === true;
 }
 
 // 保存会话-提供商映射
@@ -2351,6 +2707,7 @@ function getPollingProviders(providers, modelName, config, apiKeyInfo = null) {
       return provider;
     })
     .filter(p => p && !p.disabled && !excludedSet.has(p.id))
+    .filter(p => providerMatchesClientTag(p, apiKeyInfo))
     .filter(p => {
       const hasVisibleModel = p.models?.some(m => normalizeModelName(m.id) === modelName && m.visible !== false);
       if (!hasVisibleModel) return false;
@@ -2607,12 +2964,14 @@ function isModelDisabledForProvider(modelName, providerId, userSettings) {
 }
 
 // 获取所有可用于故障转移的提供商列表（不使用 usedInCurrentRound 机制）
-function getFailoverProviders(providers, modelName, config, userSettings, excludeProviderIds = [], apiKeyInfo = null) {
+function getFailoverProviders(providers, modelName, config, userSettings, excludeProviderIds = [], apiKeyInfo = null, options = {}) {
   console.log(`[Failover] Getting failover providers for model: ${modelName}`);
   console.log(`[Failover] Excluding providers: ${excludeProviderIds.join(', ')}`);
 
   // 判断是否使用轮询模式
   const usePolling = apiKeyInfo?.usePolling !== false; // 默认为true
+  const providerFilter = typeof options.providerFilter === 'function' ? options.providerFilter : null;
+  const reservePolling = options.reservePolling !== false;
 
   let candidateProviders = [];
 
@@ -2622,8 +2981,7 @@ function getFailoverProviders(providers, modelName, config, userSettings, exclud
     console.log(`[Failover] Polling mode - Available provider IDs for ${modelName}:`, available);
 
     if (available.length === 0) {
-      console.log(`[Failover] No available providers for model ${modelName}`);
-      return [];
+      console.log(`[Failover] No polling pool providers configured for model ${modelName}; will fall back to matching providers`);
     }
 
     // 构建排除集合（新格式：数组）
@@ -2693,6 +3051,28 @@ function getFailoverProviders(providers, modelName, config, userSettings, exclud
         continue;
       }
 
+      if (!providerMatchesClientTag(provider, apiKeyInfo)) {
+        console.log(`[Failover] Provider ${provider.name} does not match client tag ${getApiKeyClientTag(apiKeyInfo)}, skipping`);
+        continue;
+      }
+
+      if (providerFilter && !providerFilter(provider)) {
+        console.log(`[Failover] Provider ${provider.name} does not match endpoint filter, skipping`);
+        continue;
+      }
+
+      const isModelDisabled = isModelDisabledForProvider(modelName, provider.id, userSettings);
+      if (isModelDisabled) {
+        console.log(`[Failover] Model ${modelName} is disabled for provider ${provider.name}, skipping`);
+        continue;
+      }
+
+      const hasVisibleModel = provider.models?.some(m => normalizeModelName(m.id) === modelName && m.visible !== false);
+      if (!hasVisibleModel) {
+        console.log(`[Failover] Provider ${provider.name} does not expose visible model ${modelName}, skipping`);
+        continue;
+      }
+
       if (hasPollingGroupLimit || hasPollingProviderLimit) {
         const providerGroupId = provider.groupId || 'default';
         const groupMatch = hasPollingGroupLimit && allowedPollingGroups.includes(providerGroupId);
@@ -2704,6 +3084,61 @@ function getFailoverProviders(providers, modelName, config, userSettings, exclud
       }
 
       candidateProviders.push(provider);
+    }
+
+    if (candidateProviders.length === 0) {
+      console.log(`[Failover] Polling pool empty after filtering; falling back to all matching providers for ${modelName}`);
+
+      for (const provider of providers) {
+        if (excludeProviderIds.includes(provider.id)) {
+          console.log(`[Failover] Provider ${provider.id} already tried, skipping`);
+          continue;
+        }
+
+        if (excludedFromPool.has(provider.id)) {
+          console.log(`[Failover] Provider ${provider.id} is in excluded pool for model ${modelName}, skipping`);
+          continue;
+        }
+
+        if (provider.disabled) {
+          console.log(`[Failover] Provider ${provider.name} is disabled globally`);
+          continue;
+        }
+
+        if (!providerMatchesClientTag(provider, apiKeyInfo)) {
+          console.log(`[Failover] Provider ${provider.name} does not match client tag ${getApiKeyClientTag(apiKeyInfo)}, skipping`);
+          continue;
+        }
+
+        if (providerFilter && !providerFilter(provider)) {
+          console.log(`[Failover] Provider ${provider.name} does not match endpoint filter, skipping`);
+          continue;
+        }
+
+        const isModelDisabled = isModelDisabledForProvider(modelName, provider.id, userSettings);
+        if (isModelDisabled) {
+          console.log(`[Failover] Model ${modelName} is disabled for provider ${provider.name}, skipping`);
+          continue;
+        }
+
+        const hasVisibleModel = provider.models?.some(m => normalizeModelName(m.id) === modelName && m.visible !== false);
+        if (!hasVisibleModel) {
+          continue;
+        }
+
+        if (hasPollingGroupLimit || hasPollingProviderLimit) {
+          const providerGroupId = provider.groupId || 'default';
+          const groupMatch = hasPollingGroupLimit && allowedPollingGroups.includes(providerGroupId);
+          const providerMatch = hasPollingProviderLimit && allowedPollingProviders.includes(provider.id);
+          if (!groupMatch && !providerMatch) {
+            console.log(`[Failover] Provider ${provider.name} (group: ${providerGroupId}) not allowed by polling scope, skipping`);
+            continue;
+          }
+        }
+
+        console.log(`[Failover] Fallback provider ${provider.name} supports model ${modelName}`);
+        candidateProviders.push(provider);
+      }
     }
   } else {
     // 非轮询模式：从所有提供商中查找支持该模型的提供商
@@ -2723,6 +3158,16 @@ function getFailoverProviders(providers, modelName, config, userSettings, exclud
 
       if (provider.disabled) {
         console.log(`[Failover] Provider ${provider.name} is disabled globally`);
+        continue;
+      }
+
+      if (!providerMatchesClientTag(provider, apiKeyInfo)) {
+        console.log(`[Failover] Provider ${provider.name} does not match client tag ${getApiKeyClientTag(apiKeyInfo)}, skipping`);
+        continue;
+      }
+
+      if (providerFilter && !providerFilter(provider)) {
+        console.log(`[Failover] Provider ${provider.name} does not match endpoint filter, skipping`);
         continue;
       }
 
@@ -2747,6 +3192,29 @@ function getFailoverProviders(providers, modelName, config, userSettings, exclud
         console.log(`[Failover] Provider ${provider.name} supports model ${modelName}`);
         candidateProviders.push(provider);
       }
+    }
+  }
+
+  if (usePolling && reservePolling && candidateProviders.length > 0) {
+    const selectedProviderId = candidateProviders[0].id;
+    const available = config.available[modelName] || [];
+    const selectedIndex = available.indexOf(selectedProviderId);
+
+    if (selectedIndex !== -1) {
+      const pollingState = userSettings.pollingState || {};
+      if (!pollingState[modelName]) {
+        pollingState[modelName] = {
+          currentIndex: 0,
+          usedInCurrentRound: []
+        };
+      }
+
+      pollingState[modelName].currentIndex = (selectedIndex + 1) % available.length;
+      pollingState[modelName].lastReservedProviderId = selectedProviderId;
+      pollingState[modelName].lastReservedAt = new Date().toISOString();
+      userSettings.pollingState = pollingState;
+
+      console.log(`[Failover] Reserved provider ${selectedProviderId} for ${modelName}; nextIndex=${pollingState[modelName].currentIndex}`);
     }
   }
 
@@ -2954,8 +3422,8 @@ class BackgroundTaskProcessor {
         // Update polling state (synchronous)
         updatePollingStateAfterSuccess(pureModelName, selectedProvider.id, pollingConfig, userSettings);
 
-        // Save conversation provider if needed
-        if (sessionIdentifier) {
+        // Save conversation provider only for non-polling keys. Strict polling should not stick to one provider.
+        if (sessionIdentifier && keyInfo?.usePolling === false) {
           saveConversationProvider(sessionIdentifier, pureModelName, selectedProvider.id, userSettings, keyInfo);
         }
 
@@ -3064,6 +3532,45 @@ function formatErrorForLog(errorDetails) {
   }
 
   return parts.join(' | ') || 'Unknown error'
+}
+
+function formatProviderAttemptError(error) {
+  if (!error) return null;
+  if (typeof error === 'string') return error;
+  if (error.status || error.statusText || error.code || error.message) {
+    return formatErrorForLog(error);
+  }
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return String(error);
+  }
+}
+
+function recordProviderAttempt(providerAttempts, {
+  attempt,
+  provider,
+  status,
+  statusCode = null,
+  duration = null,
+  error = null
+}) {
+  const entry = {
+    attempt,
+    providerId: provider?.id || null,
+    providerName: provider?.name || 'unknown',
+    status,
+    statusCode,
+    duration
+  };
+
+  const formattedError = formatProviderAttemptError(error);
+  if (formattedError) {
+    entry.error = formattedError;
+  }
+
+  providerAttempts.push(entry);
+  return entry;
 }
 
 // Performance optimization: Unified error response handler
@@ -4488,19 +4995,31 @@ async function verifyProxyApiKey(req, res, next) {
   const proxyKeys = userSettings.proxyApiKeys || {};
   const legacyKey = userSettings.proxyApiKey;
   
-  // 从请求头获取 API Key
+  // 从请求头获取 API Key，兼容 OpenAI 的 Bearer 和 Anthropic 的 x-api-key
   const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+  const xApiKey = req.headers['x-api-key'];
+  let providedKey = null;
+
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    providedKey = authHeader.substring(7);
+    req.proxyAuthType = 'bearer';
+  } else if (Array.isArray(xApiKey) && xApiKey[0]?.trim()) {
+    providedKey = xApiKey[0].trim();
+    req.proxyAuthType = 'x-api-key';
+  } else if (typeof xApiKey === 'string' && xApiKey.trim()) {
+    providedKey = xApiKey.trim();
+    req.proxyAuthType = 'x-api-key';
+  }
+
+  if (!providedKey) {
     return res.status(401).json({
       error: {
-        message: 'Missing or invalid Authorization header. Expected: Bearer <api_key>',
+        message: 'Missing or invalid API key. Expected Authorization: Bearer <api_key> or x-api-key: <api_key>',
         type: 'invalid_request_error',
         code: 'invalid_api_key'
       }
     });
   }
-  
-  const providedKey = authHeader.substring(7); // 去掉 'Bearer ' 前缀
   
   // 检查多密钥系统
   let validKey = null;
@@ -4521,14 +5040,15 @@ async function verifyProxyApiKey(req, res, next) {
       enabled: true,
       params: userSettings.defaultParams || { temperature: 0.7, max_tokens: 2000, top_p: 1 },
       allowedModels: [], // 空数组表示允许所有模型
+      clientTag: 'normal',
       rateLimit: { requestsPerMinute: 60, requestsPerHour: 1000 }
     };
   }
   
   // 如果没有找到有效密钥
   if (!validKey) {
-    // 如果既没有配置多密钥也没有配置旧密钥，允许所有请求
-    if (Object.keys(proxyKeys).length === 0 && (!legacyKey || legacyKey.trim() === '')) {
+    // 默认不开放代理接口；如确实需要无密钥访问，可显式设置 ALLOW_OPEN_PROXY=true
+    if (process.env.ALLOW_OPEN_PROXY === 'true' && Object.keys(proxyKeys).length === 0 && (!legacyKey || legacyKey.trim() === '')) {
       return next();
     }
     
@@ -4559,155 +5079,201 @@ async function verifyProxyApiKey(req, res, next) {
   next();
 }
 
-// OpenAI 兼容 - 获取模型列表（根据API密钥权限过滤）
-app.get('/v1/models', verifyProxyApiKey, async (req, res) => {
-  try {
-    const userSettings = await getUserSettings();
-    const settings = await getApiSettings();
-    const pollingConfig = userSettings.pollingConfig || { available: {}, excluded: {} };
-    const apiKeyInfo = req.apiKeyInfo;
+function shouldReturnAnthropicModelFormat(req) {
+  return (
+    req.proxyAuthType === 'x-api-key' ||
+    req.headers['anthropic-version'] ||
+    req.headers['anthropic-beta'] ||
+    getApiKeyClientTag(req.apiKeyInfo) === 'claude'
+  );
+}
 
-    let availableModelNames = [];
-    let availableModelsWithProvider = [];
+function providerSupportsAnthropicProtocol(provider) {
+  const tags = normalizeProviderClientTags(provider?.clientTags);
+  const chatEndpoint = String(provider?.customEndpoints?.chat || '').toLowerCase();
 
-    // 判断是否使用轮询模式
-    const usePolling = apiKeyInfo?.usePolling !== false; // 默认为true
+  return (
+    (provider?.apiType || 'openai') === 'anthropic' ||
+    tags.claude === true ||
+    chatEndpoint.includes('/messages')
+  );
+}
 
-    if (usePolling) {
-      // 轮询模式：返回轮询池中的模型
-      const availableModels = pollingConfig.available || {};
+app.get('/v1/health', verifyProxyApiKey, (req, res) => {
+  res.json(buildHealthPayload());
+});
 
-      // 构建排除集合（新格式：数组）
-      const excludedModels = new Map(); // modelName -> Set of excluded providerIds
-      if (Array.isArray(pollingConfig.excluded)) {
-        pollingConfig.excluded.forEach(item => {
-          if (!excludedModels.has(item.modelName)) {
-            excludedModels.set(item.modelName, new Set());
-          }
-          excludedModels.get(item.modelName).add(item.providerId);
-        });
-      }
+async function getVisibleProxyModelIds(apiKeyInfo = null, options = {}) {
+  const userSettings = await getUserSettings();
+  const settings = await getApiSettings();
+  const pollingConfig = userSettings.pollingConfig || { available: {}, excluded: {} };
+  const providerFilter = typeof options.providerFilter === 'function' ? options.providerFilter : null;
 
-      const allowedPollingGroups = apiKeyInfo?.allowedPollingGroups || [];
-      const allowedPollingProviders = apiKeyInfo?.allowedPollingProviders || [];
-      const hasPollingGroupLimit = allowedPollingGroups.length > 0;
-      const hasPollingProviderLimit = allowedPollingProviders.length > 0;
+  let availableModelNames = [];
+  let availableModelsWithProvider = [];
+  const usePolling = apiKeyInfo?.usePolling !== false;
 
-      const providerById = new Map(settings.providers.map(p => [p.id, p]));
-
-      for (const modelName of Object.keys(availableModels)) {
-        const allProviders = availableModels[modelName] || [];
-
-        // 过滤掉被排除的提供商
-        const excludedSet = excludedModels.get(modelName) || new Set();
-        let availableProviders = allProviders.filter(id => !excludedSet.has(id));
-
-        if (hasPollingGroupLimit || hasPollingProviderLimit) {
-          availableProviders = availableProviders.filter(id => {
-            const provider = providerById.get(id);
-            if (!provider) return false;
-            const providerGroupId = provider.groupId || 'default';
-            const groupMatch = hasPollingGroupLimit && allowedPollingGroups.includes(providerGroupId);
-            const providerMatch = hasPollingProviderLimit && allowedPollingProviders.includes(provider.id);
-            return groupMatch || providerMatch;
-          });
+  if (usePolling) {
+    const availableModels = pollingConfig.available || {};
+    const excludedModels = new Map();
+    if (Array.isArray(pollingConfig.excluded)) {
+      pollingConfig.excluded.forEach(item => {
+        if (!excludedModels.has(item.modelName)) {
+          excludedModels.set(item.modelName, new Set());
         }
+        excludedModels.get(item.modelName).add(item.providerId);
+      });
+    }
 
-        // 过滤掉隐藏模型对应的提供商
+    const allowedPollingGroups = apiKeyInfo?.allowedPollingGroups || [];
+    const allowedPollingProviders = apiKeyInfo?.allowedPollingProviders || [];
+    const hasPollingGroupLimit = allowedPollingGroups.length > 0;
+    const hasPollingProviderLimit = allowedPollingProviders.length > 0;
+    const providerById = new Map(settings.providers.map(p => [p.id, p]));
+
+    for (const modelName of Object.keys(availableModels)) {
+      const allProviders = availableModels[modelName] || [];
+      const excludedSet = excludedModels.get(modelName) || new Set();
+      let availableProviders = allProviders.filter(id => !excludedSet.has(id));
+
+      if (hasPollingGroupLimit || hasPollingProviderLimit) {
         availableProviders = availableProviders.filter(id => {
           const provider = providerById.get(id);
           if (!provider) return false;
-          return provider.models?.some(m => normalizeModelName(m.id) === modelName && m.visible !== false);
+          const providerGroupId = provider.groupId || 'default';
+          const groupMatch = hasPollingGroupLimit && allowedPollingGroups.includes(providerGroupId);
+          const providerMatch = hasPollingProviderLimit && allowedPollingProviders.includes(provider.id);
+          return groupMatch || providerMatch;
         });
-
-        // 只有拥有至少2个可用提供商的模型才能被外部使用
-        if (availableProviders.length >= 2) {
-          availableModelNames.push(modelName);
-        }
       }
+
+      availableProviders = availableProviders.filter(id => {
+        const provider = providerById.get(id);
+        if (!provider) return false;
+        if (provider.disabled) return false;
+        if (!providerMatchesClientTag(provider, apiKeyInfo)) return false;
+        if (providerFilter && !providerFilter(provider)) return false;
+        return provider.models?.some(m => normalizeModelName(m.id) === modelName && m.visible !== false);
+      });
+
+      if (availableProviders.length >= 1) {
+        availableModelNames.push(modelName);
+      }
+    }
+
+    const visibleModelSet = new Set(availableModelNames);
+    settings.providers.forEach(provider => {
+      if (provider.disabled) return;
+      if (!providerMatchesClientTag(provider, apiKeyInfo)) return;
+      if (providerFilter && !providerFilter(provider)) return;
+
+      const providerGroupId = provider.groupId || 'default';
+      const groupMatch = hasPollingGroupLimit && allowedPollingGroups.includes(providerGroupId);
+      const providerMatch = hasPollingProviderLimit && allowedPollingProviders.includes(provider.id);
+      if ((hasPollingGroupLimit || hasPollingProviderLimit) && !groupMatch && !providerMatch) return;
+
+      (provider.models || []).forEach(model => {
+        if (model.visible === false) return;
+        const normalizedModelName = normalizeModelName(model.id);
+        const excludedSet = excludedModels.get(normalizedModelName) || new Set();
+        if (excludedSet.has(provider.id)) return;
+        visibleModelSet.add(normalizedModelName);
+      });
+    });
+    availableModelNames = Array.from(visibleModelSet);
+  } else {
+    const allowedGroups = apiKeyInfo?.allowedGroups || [];
+    const allowedProviders = apiKeyInfo?.allowedProviders || [];
+    const hasGroupLimit = allowedGroups.length > 0;
+    const hasProviderLimit = allowedProviders.length > 0;
+    const providersToInclude = settings.providers.filter(p => {
+      if (p.disabled) return false;
+      if (!providerMatchesClientTag(p, apiKeyInfo)) return false;
+      if (providerFilter && !providerFilter(p)) return false;
+      if (!hasGroupLimit && !hasProviderLimit) return true;
+      const providerGroupId = p.groupId || 'default';
+      const groupMatch = hasGroupLimit && allowedGroups.includes(providerGroupId);
+      const providerMatch = hasProviderLimit && allowedProviders.includes(p.id);
+      return groupMatch || providerMatch;
+    });
+
+    const modelsWithProvider = [];
+    providersToInclude.forEach(provider => {
+      if (provider.models) {
+        provider.models.forEach(model => {
+          if (model.visible !== false) {
+            modelsWithProvider.push({
+              id: `${provider.id}::${model.id}`,
+              providerId: provider.id,
+              modelId: model.id,
+              normalizedName: normalizeModelName(model.id)
+            });
+          }
+        });
+      }
+    });
+
+    availableModelsWithProvider = modelsWithProvider;
+    availableModelNames = modelsWithProvider.map(item => item.id);
+  }
+
+  const allowedModels = apiKeyInfo?.allowedModels || [];
+  let filteredModels = availableModelNames;
+
+  if (allowedModels.length > 0) {
+    if (usePolling) {
+      filteredModels = availableModelNames.filter(modelName => allowedModels.includes(modelName));
     } else {
-      // 非轮询模式：返回指定分组/提供商的所有模型（providerId::modelId）
-      const allowedGroups = apiKeyInfo?.allowedGroups || [];
-      const allowedProviders = apiKeyInfo?.allowedProviders || [];
-      const hasGroupLimit = allowedGroups.length > 0;
-      const hasProviderLimit = allowedProviders.length > 0;
+      const allowedSet = new Set(allowedModels);
+      const normalizedAllowed = allowedModels
+        .filter(modelName => !modelName.includes('::'))
+        .map(modelName => normalizeModelName(modelName));
 
-      // 如果没有指定分组/提供商，返回所有分组的模型
-      const providersToInclude = settings.providers.filter(p => {
-        if (p.disabled) return false;
-        if (!hasGroupLimit && !hasProviderLimit) return true; // 没有限制，包含所有
-        const providerGroupId = p.groupId || 'default';
-        const groupMatch = hasGroupLimit && allowedGroups.includes(providerGroupId);
-        const providerMatch = hasProviderLimit && allowedProviders.includes(p.id);
-        return groupMatch || providerMatch;
-      });
-
-      const modelsWithProvider = [];
-      providersToInclude.forEach(provider => {
-        if (provider.models) {
-          provider.models.forEach(model => {
-            if (model.visible !== false) {
-              modelsWithProvider.push({
-                id: `${provider.id}::${model.id}`,
-                providerId: provider.id,
-                modelId: model.id,
-                normalizedName: normalizeModelName(model.id)
-              });
-            }
-          });
-        }
-      });
-
-      availableModelsWithProvider = modelsWithProvider;
-      availableModelNames = modelsWithProvider.map(item => item.id);
+      filteredModels = availableModelsWithProvider
+        .filter(modelInfo => {
+          if (allowedSet.has(modelInfo.id)) return true;
+          if (normalizedAllowed.length > 0 && normalizedAllowed.includes(modelInfo.normalizedName)) return true;
+          return false;
+        })
+        .map(modelInfo => modelInfo.id);
     }
+  }
 
-    // 根据API密钥权限过滤模型
-    const allowedModels = apiKeyInfo?.allowedModels || [];
+  return {
+    models: filteredModels,
+    usePolling,
+    allowedModels
+  };
+}
 
-    // 如果密钥配置了允许的模型列表，则只返回允许的模型
-    // 如果没有配置（空数组），则返回所有可用的模型
-    let filteredModels = availableModelNames;
-    if (allowedModels.length > 0) {
-      if (usePolling) {
-        filteredModels = availableModelNames.filter(modelName =>
-          allowedModels.includes(modelName)
-        );
-      } else {
-        const allowedSet = new Set(allowedModels);
-        const normalizedAllowed = allowedModels
-          .filter(modelName => !modelName.includes('::'))
-          .map(modelName => normalizeModelName(modelName));
-
-        filteredModels = availableModelsWithProvider
-          .filter(modelInfo => {
-            if (allowedSet.has(modelInfo.id)) return true;
-            if (normalizedAllowed.length > 0 && normalizedAllowed.includes(modelInfo.normalizedName)) return true;
-            return false;
-          })
-          .map(modelInfo => modelInfo.id);
-      }
-    }
-
-    const models = filteredModels.map(modelName => ({
-      id: modelName,
-      object: 'model',
-      created: Date.now(),
-      owned_by: 'equal-ask-proxy',
-      permission: [],
-      root: modelName,
-      parent: null
-    }));
+// OpenAI 兼容 - 获取模型列表（根据API密钥权限过滤）
+app.get('/v1/models', verifyProxyApiKey, async (req, res) => {
+  try {
+    const apiKeyInfo = req.apiKeyInfo;
+    const useAnthropicFormat = shouldReturnAnthropicModelFormat(req);
+    const { models: filteredModels, usePolling, allowedModels } = await getVisibleProxyModelIds(
+      apiKeyInfo,
+      useAnthropicFormat ? { providerFilter: providerSupportsAnthropicProtocol } : {}
+    );
+    const models = filteredModels.map(modelName =>
+      useAnthropicFormat ? formatAnthropicModel(modelName) : formatOpenAIModel(modelName)
+    );
 
     console.log(`[Models API] API Key: ${apiKeyInfo?.name || 'Legacy'}`);
     console.log(`[Models API] Use Polling: ${usePolling}`);
     console.log(`[Models API] Allowed models: ${allowedModels.length > 0 ? allowedModels.join(', ') : 'All models'}`);
     console.log(`[Models API] Returned models: ${filteredModels.join(', ')}`);
 
-    res.json({
-      object: 'list',
-      data: models
-    });
+    if (useAnthropicFormat) {
+      return res.json({
+        data: models,
+        first_id: models[0]?.id || null,
+        last_id: models[models.length - 1]?.id || null,
+        has_more: false
+      });
+    }
+
+    res.json({ object: 'list', data: models });
   } catch (error) {
     console.error('Error getting models:', error);
     res.status(500).json({
@@ -4715,6 +5281,524 @@ app.get('/v1/models', verifyProxyApiKey, async (req, res) => {
         message: error.message,
         type: 'server_error',
         code: 'internal_error'
+      }
+    });
+  }
+});
+
+app.get('/v1/models/:modelId', verifyProxyApiKey, async (req, res) => {
+  try {
+    const useAnthropicFormat = shouldReturnAnthropicModelFormat(req);
+    const { models } = await getVisibleProxyModelIds(
+      req.apiKeyInfo,
+      useAnthropicFormat ? { providerFilter: providerSupportsAnthropicProtocol } : {}
+    );
+    const requestedModel = req.params.modelId;
+    const matchedModel = models.find(modelName =>
+      modelName === requestedModel || normalizeModelName(modelName) === normalizeModelName(requestedModel)
+    );
+
+    if (!matchedModel) {
+      return res.status(404).json({
+        error: {
+          message: `Model '${requestedModel}' not found or not allowed`,
+          type: 'invalid_request_error',
+          code: 'model_not_found'
+        }
+      });
+    }
+
+    return res.json(useAnthropicFormat ? formatAnthropicModel(matchedModel) : formatOpenAIModel(matchedModel));
+  } catch (error) {
+    console.error('Error getting model:', error);
+    res.status(500).json({
+      error: {
+        message: error.message,
+        type: 'server_error',
+        code: 'internal_error'
+      }
+    });
+  }
+});
+
+// Anthropic 兼容 - Messages（透传到 Anthropic 协议 Provider）
+app.post('/v1/messages', verifyProxyApiKey, async (req, res) => {
+  const traceId = generateTraceId();
+  const perfTracker = new PerformanceTracker(traceId);
+  perfTracker.checkpoint('request_start');
+
+  const clientIp = req.ip || req.connection.remoteAddress ||
+                   req.headers['x-forwarded-for']?.split(',')[0].trim() ||
+                   'unknown';
+  const userAgent = req.headers['user-agent'] || 'unknown';
+  const apiKeyName = req.apiKeyInfo?.name || 'unknown';
+
+  try {
+    const { model, messages, stream = false } = req.body || {};
+
+    if (!model) {
+      return res.status(400).json({
+        type: 'error',
+        error: { type: 'invalid_request_error', message: 'model is required' }
+      });
+    }
+
+    if (!Array.isArray(messages)) {
+      return res.status(400).json({
+        type: 'error',
+        error: { type: 'invalid_request_error', message: 'messages is required and must be an array' }
+      });
+    }
+
+    const settings = await getApiSettings();
+    const userSettings = await getUserSettings();
+    const pollingConfig = userSettings.pollingConfig || { available: {}, excluded: {} };
+    const pureModelName = extractModelName(model);
+    const usePolling = req.apiKeyInfo?.usePolling !== false;
+    const allowedModels = req.apiKeyInfo?.allowedModels || [];
+
+    if (allowedModels.length > 0) {
+      const normalizedAllowed = allowedModels
+        .map(modelName => extractModelName(modelName));
+      if (!allowedModels.includes(model) && !normalizedAllowed.includes(pureModelName)) {
+        return res.status(403).json({
+          type: 'error',
+          error: {
+            type: 'permission_error',
+            message: `Model '${model}' is not allowed for this API key.`
+          }
+        });
+      }
+    }
+
+    const providerAttempts = [];
+    const errors = [];
+    const triedProviderIds = [];
+    const failoverProviders = getFailoverProviders(
+      settings.providers,
+      pureModelName,
+      pollingConfig,
+      userSettings,
+      [],
+      req.apiKeyInfo,
+      { providerFilter: providerSupportsAnthropicProtocol }
+    );
+
+    if (failoverProviders.length === 0) {
+      return res.status(503).json({
+        type: 'error',
+        error: {
+          type: 'api_error',
+          message: `No available Anthropic protocol providers for model '${pureModelName}'`
+        }
+      });
+    }
+
+    for (let attempt = 0; attempt < failoverProviders.length; attempt++) {
+      const selectedProvider = failoverProviders[attempt];
+      const attemptStartedAt = Date.now();
+      triedProviderIds.push(selectedProvider.id);
+
+      if (attempt > 0) {
+        const prevProvider = failoverProviders[attempt - 1];
+        setImmediate(() => {
+          logProviderSwitch({
+            traceId,
+            fromProvider: prevProvider.name,
+            toProvider: selectedProvider.name,
+            reason: `Previous provider failed: ${errors[errors.length - 1]?.error || 'Unknown error'}`
+          });
+        });
+      }
+
+      const keyInfo = selectProviderKey(selectedProvider, userSettings);
+      const providerModelId = await getProviderModelId(selectedProvider, pureModelName, keyInfo);
+      if (!providerModelId) {
+        const errorMessage = 'Model not found in provider';
+        recordProviderAttempt(providerAttempts, {
+          attempt: attempt + 1,
+          provider: selectedProvider,
+          status: 'failed',
+          duration: Date.now() - attemptStartedAt,
+          error: errorMessage
+        });
+        errors.push({ provider: selectedProvider.name, error: errorMessage });
+        await incrementModelFailCount(selectedProvider.id, pureModelName, userSettings);
+        await incrementKeyFailCount(keyInfo?.key?.id, userSettings);
+        continue;
+      }
+
+      const url = buildApiUrl(selectedProvider.baseUrl, 'chat/completions', 'anthropic', selectedProvider.customEndpoints);
+      const requestBody = {
+        ...req.body,
+        model: providerModelId
+      };
+
+      try {
+        if (stream) {
+          const response = await axios.post(url, requestBody, {
+            headers: buildAnthropicProxyHeaders(selectedProvider, keyInfo, req),
+            responseType: 'stream',
+            timeout: 120000,
+            validateStatus: () => true
+          });
+
+          if (response.status < 200 || response.status >= 300) {
+            let errorData = '';
+            response.data.on('data', chunk => {
+              errorData += chunk.toString();
+            });
+            await new Promise(resolve => response.data.on('end', resolve));
+            const err = new Error(`HTTP ${response.status}: ${errorData}`);
+            err.response = { status: response.status, statusText: response.statusText, data: errorData };
+            throw err;
+          }
+
+          backgroundProcessor.handleSuccess(selectedProvider, pureModelName, userSettings, pollingConfig, null, keyInfo);
+          perfTracker.checkpoint('request_complete');
+          recordProviderAttempt(providerAttempts, {
+            attempt: attempt + 1,
+            provider: selectedProvider,
+            status: 'success',
+            statusCode: response.status,
+            duration: Date.now() - attemptStartedAt
+          });
+
+          setImmediate(() => {
+            logApiRequest({
+              traceId,
+              clientIp,
+              userAgent,
+              apiKeyName,
+              sessionId: null,
+              isPolling: usePolling,
+              isNewConversation: false,
+              request: { model: pureModelName, stream, messages },
+              providers: providerAttempts,
+              result: {
+                status: 'success',
+                successfulProvider: selectedProvider.id,
+                totalAttempts: providerAttempts.length,
+                totalDuration: perfTracker.getTotalDuration(),
+                tokenUsage: null,
+                estimatedCost: null
+              },
+              metadata: { endpoint: 'messages', protocol: 'anthropic', failoverOccurred: attempt > 0 }
+            });
+          });
+
+          res.status(response.status);
+          res.setHeader('Content-Type', response.headers['content-type'] || 'text/event-stream; charset=utf-8');
+          res.setHeader('Cache-Control', 'no-cache');
+          res.setHeader('Connection', 'keep-alive');
+          response.data.pipe(res);
+          return;
+        }
+
+        const response = await axios.post(url, requestBody, {
+          headers: buildAnthropicProxyHeaders(selectedProvider, keyInfo, req),
+          timeout: 120000,
+          validateStatus: () => true
+        });
+
+        if (response.status < 200 || response.status >= 300) {
+          const err = new Error(`HTTP ${response.status}`);
+          err.response = response;
+          throw err;
+        }
+
+        backgroundProcessor.handleSuccess(selectedProvider, pureModelName, userSettings, pollingConfig, null, keyInfo);
+        perfTracker.checkpoint('request_complete');
+        recordProviderAttempt(providerAttempts, {
+          attempt: attempt + 1,
+          provider: selectedProvider,
+          status: 'success',
+          statusCode: response.status,
+          duration: Date.now() - attemptStartedAt
+        });
+
+        setImmediate(() => {
+          logApiRequest({
+            traceId,
+            clientIp,
+            userAgent,
+            apiKeyName,
+            sessionId: null,
+            isPolling: usePolling,
+            isNewConversation: false,
+            request: { model: pureModelName, stream, messages },
+            providers: providerAttempts,
+            result: {
+              status: 'success',
+              successfulProvider: selectedProvider.id,
+              totalAttempts: providerAttempts.length,
+              totalDuration: perfTracker.getTotalDuration(),
+              tokenUsage: normalizeTokenUsage(response.data?.usage, 'anthropic'),
+              estimatedCost: null
+            },
+            metadata: { endpoint: 'messages', protocol: 'anthropic', failoverOccurred: attempt > 0 }
+          });
+        });
+
+        return res.status(response.status).json(response.data);
+      } catch (error) {
+        const errorDetails = parseErrorResponse(error);
+        const errorMessage = formatErrorForLog(errorDetails);
+        backgroundProcessor.handleFailure(selectedProvider, pureModelName, userSettings, errorMessage, keyInfo);
+        recordProviderAttempt(providerAttempts, {
+          attempt: attempt + 1,
+          provider: selectedProvider,
+          status: 'failed',
+          statusCode: errorDetails.status,
+          duration: Date.now() - attemptStartedAt,
+          error: errorMessage
+        });
+        errors.push({
+          provider: selectedProvider.name,
+          error: errorMessage,
+          status: errorDetails.status
+        });
+      }
+    }
+
+    backgroundProcessor.addTask(async () => {
+      await savePollingState(userSettings);
+    });
+
+    perfTracker.checkpoint('all_providers_failed');
+    setImmediate(() => {
+      logApiRequest({
+        traceId,
+        clientIp,
+        userAgent,
+        apiKeyName,
+        sessionId: null,
+        isPolling: usePolling,
+        isNewConversation: false,
+        request: { model: pureModelName, stream, messages },
+        providers: providerAttempts,
+        result: {
+          status: 'failed',
+          successfulProvider: null,
+          totalAttempts: providerAttempts.length,
+          totalDuration: perfTracker.getTotalDuration(),
+          tokenUsage: null,
+          estimatedCost: null
+        },
+        metadata: { endpoint: 'messages', protocol: 'anthropic', failoverOccurred: triedProviderIds.length > 1 }
+      });
+    });
+
+    return res.status(503).json({
+      type: 'error',
+      error: {
+        type: 'api_error',
+        message: `All Anthropic providers failed for model '${pureModelName}'. Tried ${triedProviderIds.length} providers.`
+      },
+      details: errors
+    });
+  } catch (error) {
+    console.error('[Anthropic Messages] Unexpected error:', error);
+    return res.status(500).json({
+      type: 'error',
+      error: {
+        type: 'api_error',
+        message: error.message
+      }
+    });
+  }
+});
+
+// Anthropic 兼容 - Token 计数（不消耗轮询位置）
+app.post('/v1/messages/count_tokens', verifyProxyApiKey, async (req, res) => {
+  const traceId = generateTraceId();
+  const perfTracker = new PerformanceTracker(traceId);
+  perfTracker.checkpoint('request_start');
+
+  const clientIp = req.ip || req.connection.remoteAddress ||
+                   req.headers['x-forwarded-for']?.split(',')[0].trim() ||
+                   'unknown';
+  const userAgent = req.headers['user-agent'] || 'unknown';
+  const apiKeyName = req.apiKeyInfo?.name || 'unknown';
+
+  try {
+    const { model } = req.body || {};
+    if (!model) {
+      return res.status(400).json({
+        type: 'error',
+        error: { type: 'invalid_request_error', message: 'model is required' }
+      });
+    }
+
+    const settings = await getApiSettings();
+    const userSettings = await getUserSettings();
+    const pollingConfig = userSettings.pollingConfig || { available: {}, excluded: {} };
+    const pureModelName = extractModelName(model);
+    const usePolling = req.apiKeyInfo?.usePolling !== false;
+    const allowedModels = req.apiKeyInfo?.allowedModels || [];
+
+    if (allowedModels.length > 0) {
+      const normalizedAllowed = allowedModels.map(modelName => extractModelName(modelName));
+      if (!allowedModels.includes(model) && !normalizedAllowed.includes(pureModelName)) {
+        return res.status(403).json({
+          type: 'error',
+          error: {
+            type: 'permission_error',
+            message: `Model '${model}' is not allowed for this API key.`
+          }
+        });
+      }
+    }
+
+    const providerAttempts = [];
+    const errors = [];
+    const failoverProviders = getFailoverProviders(
+      settings.providers,
+      pureModelName,
+      pollingConfig,
+      userSettings,
+      [],
+      req.apiKeyInfo,
+      { providerFilter: providerSupportsAnthropicProtocol, reservePolling: false }
+    );
+
+    if (failoverProviders.length === 0) {
+      return res.status(503).json({
+        type: 'error',
+        error: {
+          type: 'api_error',
+          message: `No available Anthropic protocol providers for model '${pureModelName}'`
+        }
+      });
+    }
+
+    for (let attempt = 0; attempt < failoverProviders.length; attempt++) {
+      const selectedProvider = failoverProviders[attempt];
+      const attemptStartedAt = Date.now();
+      const keyInfo = selectProviderKey(selectedProvider, userSettings);
+      const providerModelId = await getProviderModelId(selectedProvider, pureModelName, keyInfo);
+
+      if (!providerModelId) {
+        const errorMessage = 'Model not found in provider';
+        recordProviderAttempt(providerAttempts, {
+          attempt: attempt + 1,
+          provider: selectedProvider,
+          status: 'failed',
+          duration: Date.now() - attemptStartedAt,
+          error: errorMessage
+        });
+        errors.push({ provider: selectedProvider.name, error: errorMessage });
+        continue;
+      }
+
+      try {
+        const url = buildApiUrl(selectedProvider.baseUrl, 'messages/count_tokens', 'anthropic', selectedProvider.customEndpoints);
+        const response = await axios.post(url, {
+          ...req.body,
+          model: providerModelId
+        }, {
+          headers: buildAnthropicProxyHeaders(selectedProvider, keyInfo, req),
+          timeout: 120000,
+          validateStatus: () => true
+        });
+
+        if (response.status < 200 || response.status >= 300) {
+          const err = new Error(`HTTP ${response.status}`);
+          err.response = response;
+          throw err;
+        }
+
+        perfTracker.checkpoint('request_complete');
+        recordProviderAttempt(providerAttempts, {
+          attempt: attempt + 1,
+          provider: selectedProvider,
+          status: 'success',
+          statusCode: response.status,
+          duration: Date.now() - attemptStartedAt
+        });
+
+        setImmediate(() => {
+          logApiRequest({
+            traceId,
+            clientIp,
+            userAgent,
+            apiKeyName,
+            sessionId: null,
+            isPolling: usePolling,
+            isNewConversation: false,
+            request: { model: pureModelName, stream: false, messages: req.body?.messages || [] },
+            providers: providerAttempts,
+            result: {
+              status: 'success',
+              successfulProvider: selectedProvider.id,
+              totalAttempts: providerAttempts.length,
+              totalDuration: perfTracker.getTotalDuration(),
+              tokenUsage: null,
+              estimatedCost: null
+            },
+            metadata: { endpoint: 'messages/count_tokens', protocol: 'anthropic', pollingReserved: false, failoverOccurred: attempt > 0 }
+          });
+        });
+
+        return res.status(response.status).json(response.data);
+      } catch (error) {
+        const errorDetails = parseErrorResponse(error);
+        const errorMessage = formatErrorForLog(errorDetails);
+        recordProviderAttempt(providerAttempts, {
+          attempt: attempt + 1,
+          provider: selectedProvider,
+          status: 'failed',
+          statusCode: errorDetails.status,
+          duration: Date.now() - attemptStartedAt,
+          error: errorMessage
+        });
+        errors.push({
+          provider: selectedProvider.name,
+          error: errorMessage,
+          status: errorDetails.status
+        });
+      }
+    }
+
+    perfTracker.checkpoint('all_providers_failed');
+    setImmediate(() => {
+      logApiRequest({
+        traceId,
+        clientIp,
+        userAgent,
+        apiKeyName,
+        sessionId: null,
+        isPolling: usePolling,
+        isNewConversation: false,
+        request: { model: pureModelName, stream: false, messages: req.body?.messages || [] },
+        providers: providerAttempts,
+        result: {
+          status: 'failed',
+          successfulProvider: null,
+          totalAttempts: providerAttempts.length,
+          totalDuration: perfTracker.getTotalDuration(),
+          tokenUsage: null,
+          estimatedCost: null
+        },
+        metadata: { endpoint: 'messages/count_tokens', protocol: 'anthropic', pollingReserved: false, failoverOccurred: providerAttempts.length > 1 }
+      });
+    });
+
+    return res.status(503).json({
+      type: 'error',
+      error: {
+        type: 'api_error',
+        message: `All Anthropic token count providers failed for model '${pureModelName}'.`
+      },
+      details: errors
+    });
+  } catch (error) {
+    console.error('[Anthropic Count Tokens] Unexpected error:', error);
+    return res.status(500).json({
+      type: 'error',
+      error: {
+        type: 'api_error',
+        message: error.message
       }
     });
   }
@@ -4880,9 +5964,10 @@ app.post('/v1/responses', verifyProxyApiKey, async (req, res) => {
       const providerById = new Map(settings.providers.map(p => [p.id, p]));
       const actualAvailableProviders = availableProviderIds.filter(id => !excludedSet.has(id));
       const scopedAvailableProviders = actualAvailableProviders.filter(id => {
-        if (!hasPollingGroupLimit && !hasPollingProviderLimit) return true;
         const provider = providerById.get(id);
         if (!provider) return false;
+        if (!providerMatchesClientTag(provider, req.apiKeyInfo)) return false;
+        if (!hasPollingGroupLimit && !hasPollingProviderLimit) return true;
         const providerGroupId = provider.groupId || 'default';
         const groupMatch = hasPollingGroupLimit && allowedPollingGroups.includes(providerGroupId);
         const providerMatch = hasPollingProviderLimit && allowedPollingProviders.includes(provider.id);
@@ -4908,6 +5993,7 @@ app.post('/v1/responses', verifyProxyApiKey, async (req, res) => {
 
       const modelExists = settings.providers.some(provider => {
         if (provider.disabled) return false;
+        if (!providerMatchesClientTag(provider, req.apiKeyInfo)) return false;
         if (requestedProviderId && provider.id !== requestedProviderId) return false;
         const providerGroupId = provider.groupId || 'default';
         if (hasGroupLimit || hasProviderLimit) {
@@ -4932,15 +6018,15 @@ app.post('/v1/responses', verifyProxyApiKey, async (req, res) => {
     let selectedProvider = null;
     const isNewConversation = requestMessages.length === 1 && requestMessages[0].role === 'user';
 
-    if (isNewConversation && sessionIdentifier) {
-      const key = `${pureModelName}:${sessionIdentifier}`;
+    if (isNewConversation && sessionIdentifier && !usePolling) {
+      const key = `single:${pureModelName}:${sessionIdentifier}`;
       if (userSettings.conversationProviderMap && userSettings.conversationProviderMap[key]) {
         console.log(`[会话] 检测到新对话，删除旧的提供商绑定`);
         delete userSettings.conversationProviderMap[key];
       }
     }
 
-    if (sessionIdentifier && !isNewConversation) {
+    if (sessionIdentifier && !isNewConversation && !usePolling) {
       selectedProvider = getConversationProvider(
         sessionIdentifier,
         pureModelName,
@@ -4968,6 +6054,7 @@ app.post('/v1/responses', verifyProxyApiKey, async (req, res) => {
 
     const errors = [];
     const triedProviderIds = [];
+    const providerAttempts = [];
 
     let failoverProviders = [];
     if (selectedProvider) {
@@ -5014,6 +6101,7 @@ app.post('/v1/responses', verifyProxyApiKey, async (req, res) => {
 
     for (let attempt = 0; attempt < failoverProviders.length; attempt++) {
       const currentProvider = failoverProviders[attempt];
+      const attemptStartedAt = Date.now();
       triedProviderIds.push(currentProvider.id);
 
       if (attempt > 0) {
@@ -5035,6 +6123,13 @@ app.post('/v1/responses', verifyProxyApiKey, async (req, res) => {
       const providerModelId = await getProviderModelId(currentProvider, pureModelName, keyInfo);
       if (!providerModelId) {
         console.log(`[错误] 模型 ${pureModelName} 在提供商 ${currentProvider.name} 中未找到，尝试下一个...`);
+        recordProviderAttempt(providerAttempts, {
+          attempt: attempt + 1,
+          provider: currentProvider,
+          status: 'failed',
+          duration: Date.now() - attemptStartedAt,
+          error: 'Model not found in provider'
+        });
         errors.push({
           provider: currentProvider.name,
           error: `Model not found in provider`
@@ -5091,6 +6186,13 @@ app.post('/v1/responses', verifyProxyApiKey, async (req, res) => {
         backgroundProcessor.handleSuccess(currentProvider, pureModelName, userSettings, pollingConfig, sessionIdentifier, keyInfo);
 
         perfTracker.checkpoint('request_complete');
+        recordProviderAttempt(providerAttempts, {
+          attempt: attempt + 1,
+          provider: currentProvider,
+          status: 'success',
+          statusCode: response.status,
+          duration: Date.now() - attemptStartedAt
+        });
         setImmediate(() => {
           logApiRequest({
             traceId,
@@ -5101,18 +6203,11 @@ app.post('/v1/responses', verifyProxyApiKey, async (req, res) => {
             isPolling: usePolling,
             isNewConversation,
             request: { model: pureModelName, stream, messages: requestMessages },
-            providers: [{
-              attempt: attempt + 1,
-              providerId: currentProvider.id,
-              providerName: currentProvider.name,
-              status: 'success',
-              statusCode: response.status,
-              duration: perfTracker.getDuration('request_complete')
-            }],
+            providers: providerAttempts,
             result: {
               status: 'success',
               successfulProvider: currentProvider.id,
-              totalAttempts: 1,
+              totalAttempts: providerAttempts.length,
               totalDuration: perfTracker.getTotalDuration(),
               tokenUsage: jsonData?.usage || null,
               estimatedCost: null
@@ -5140,6 +6235,14 @@ app.post('/v1/responses', verifyProxyApiKey, async (req, res) => {
         const errorMessage = formatErrorForLog(errorDetails);
 
         backgroundProcessor.handleFailure(currentProvider, pureModelName, userSettings, errorMessage, keyInfo);
+        recordProviderAttempt(providerAttempts, {
+          attempt: attempt + 1,
+          provider: currentProvider,
+          status: 'failed',
+          statusCode: errorDetails.status,
+          duration: Date.now() - attemptStartedAt,
+          error: errorMessage
+        });
 
         errors.push({
           provider: currentProvider.name,
@@ -5169,18 +6272,11 @@ app.post('/v1/responses', verifyProxyApiKey, async (req, res) => {
         isPolling: usePolling,
         isNewConversation,
         request: { model: pureModelName, stream, messages: requestMessages },
-        providers: errors.map((e, idx) => ({
-          attempt: idx + 1,
-          providerId: `provider_${idx}`,
-          providerName: e.provider,
-          status: 'failed',
-          statusCode: e.status,
-          error: e.error
-        })),
+        providers: providerAttempts,
         result: {
           status: 'failed',
           successfulProvider: null,
-          totalAttempts: triedProviderIds.length,
+          totalAttempts: providerAttempts.length,
           totalDuration: perfTracker.getTotalDuration(),
           tokenUsage: null,
           estimatedCost: null
@@ -5348,9 +6444,10 @@ app.post('/v1/embeddings', verifyProxyApiKey, async (req, res) => {
       const providerById = new Map(settings.providers.map(p => [p.id, p]));
       const actualAvailableProviders = availableProviderIds.filter(id => !excludedSet.has(id));
       const scopedAvailableProviders = actualAvailableProviders.filter(id => {
-        if (!hasPollingGroupLimit && !hasPollingProviderLimit) return true;
         const provider = providerById.get(id);
         if (!provider) return false;
+        if (!providerMatchesClientTag(provider, req.apiKeyInfo)) return false;
+        if (!hasPollingGroupLimit && !hasPollingProviderLimit) return true;
         const providerGroupId = provider.groupId || 'default';
         const groupMatch = hasPollingGroupLimit && allowedPollingGroups.includes(providerGroupId);
         const providerMatch = hasPollingProviderLimit && allowedPollingProviders.includes(provider.id);
@@ -5376,6 +6473,7 @@ app.post('/v1/embeddings', verifyProxyApiKey, async (req, res) => {
 
       const modelExists = settings.providers.some(provider => {
         if (provider.disabled) return false;
+        if (!providerMatchesClientTag(provider, req.apiKeyInfo)) return false;
         if (requestedProviderId && provider.id !== requestedProviderId) return false;
         const providerGroupId = provider.groupId || 'default';
         if (hasGroupLimit || hasProviderLimit) {
@@ -5397,6 +6495,7 @@ app.post('/v1/embeddings', verifyProxyApiKey, async (req, res) => {
 
     const errors = [];
     const triedProviderIds = [];
+    const providerAttempts = [];
     const failoverProviders = getFailoverProviders(settings.providers, pureModelName, pollingConfig, userSettings, [], req.apiKeyInfo);
 
     if (failoverProviders.length === 0) {
@@ -5412,6 +6511,7 @@ app.post('/v1/embeddings', verifyProxyApiKey, async (req, res) => {
 
     for (let attempt = 0; attempt < failoverProviders.length; attempt++) {
       const selectedProvider = failoverProviders[attempt];
+      const attemptStartedAt = Date.now();
       triedProviderIds.push(selectedProvider.id);
 
       if (attempt > 0) {
@@ -5433,6 +6533,13 @@ app.post('/v1/embeddings', verifyProxyApiKey, async (req, res) => {
       const providerModelId = await getProviderModelId(selectedProvider, pureModelName, keyInfo);
       if (!providerModelId) {
         console.log(`[错误] 模型 ${pureModelName} 在提供商 ${selectedProvider.name} 中未找到，尝试下一个...`);
+        recordProviderAttempt(providerAttempts, {
+          attempt: attempt + 1,
+          provider: selectedProvider,
+          status: 'failed',
+          duration: Date.now() - attemptStartedAt,
+          error: 'Model not found in provider'
+        });
         errors.push({
           provider: selectedProvider.name,
           error: 'Model not found in provider'
@@ -5479,6 +6586,13 @@ app.post('/v1/embeddings', verifyProxyApiKey, async (req, res) => {
         backgroundProcessor.handleSuccess(selectedProvider, pureModelName, userSettings, pollingConfig, null, keyInfo);
 
         perfTracker.checkpoint('request_complete');
+        recordProviderAttempt(providerAttempts, {
+          attempt: attempt + 1,
+          provider: selectedProvider,
+          status: 'success',
+          statusCode: response.status,
+          duration: Date.now() - attemptStartedAt
+        });
         setImmediate(() => {
           logApiRequest({
             traceId,
@@ -5489,18 +6603,11 @@ app.post('/v1/embeddings', verifyProxyApiKey, async (req, res) => {
             isPolling: usePolling,
             isNewConversation: false,
             request: { model: pureModelName, inputType: Array.isArray(input) ? 'array' : typeof input },
-            providers: [{
-              attempt: attempt + 1,
-              providerId: selectedProvider.id,
-              providerName: selectedProvider.name,
-              status: 'success',
-              statusCode: response.status,
-              duration: perfTracker.getDuration('request_complete')
-            }],
+            providers: providerAttempts,
             result: {
               status: 'success',
               successfulProvider: selectedProvider.id,
-              totalAttempts: 1,
+              totalAttempts: providerAttempts.length,
               totalDuration: perfTracker.getTotalDuration(),
               tokenUsage: response.data?.usage || null,
               estimatedCost: null
@@ -5517,6 +6624,14 @@ app.post('/v1/embeddings', verifyProxyApiKey, async (req, res) => {
         const errorMessage = formatErrorForLog(errorDetails);
 
         backgroundProcessor.handleFailure(selectedProvider, pureModelName, userSettings, errorMessage, keyInfo);
+        recordProviderAttempt(providerAttempts, {
+          attempt: attempt + 1,
+          provider: selectedProvider,
+          status: 'failed',
+          statusCode: errorDetails.status,
+          duration: Date.now() - attemptStartedAt,
+          error: errorMessage
+        });
 
         errors.push({
           provider: selectedProvider.name,
@@ -5545,18 +6660,11 @@ app.post('/v1/embeddings', verifyProxyApiKey, async (req, res) => {
         isPolling: usePolling,
         isNewConversation: false,
         request: { model: pureModelName, inputType: Array.isArray(input) ? 'array' : typeof input },
-        providers: errors.map((e, idx) => ({
-          attempt: idx + 1,
-          providerId: `provider_${idx}`,
-          providerName: e.provider,
-          status: 'failed',
-          statusCode: e.status,
-          error: e.error
-        })),
+        providers: providerAttempts,
         result: {
           status: 'failed',
           successfulProvider: null,
-          totalAttempts: triedProviderIds.length,
+          totalAttempts: providerAttempts.length,
           totalDuration: perfTracker.getTotalDuration(),
           tokenUsage: null,
           estimatedCost: null
@@ -5766,9 +6874,10 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
       const providerById = new Map(settings.providers.map(p => [p.id, p]));
       const actualAvailableProviders = availableProviderIds.filter(id => !excludedSet.has(id));
       const scopedAvailableProviders = actualAvailableProviders.filter(id => {
-        if (!hasPollingGroupLimit && !hasPollingProviderLimit) return true;
         const provider = providerById.get(id);
         if (!provider) return false;
+        if (!providerMatchesClientTag(provider, req.apiKeyInfo)) return false;
+        if (!hasPollingGroupLimit && !hasPollingProviderLimit) return true;
         const providerGroupId = provider.groupId || 'default';
         const groupMatch = hasPollingGroupLimit && allowedPollingGroups.includes(providerGroupId);
         const providerMatch = hasPollingProviderLimit && allowedPollingProviders.includes(provider.id);
@@ -5795,6 +6904,7 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
 
       const modelExists = settings.providers.some(provider => {
         if (provider.disabled) return false;
+        if (!providerMatchesClientTag(provider, req.apiKeyInfo)) return false;
         if (requestedProviderId && provider.id !== requestedProviderId) return false;
         const providerGroupId = provider.groupId || 'default';
         if (hasGroupLimit || hasProviderLimit) {
@@ -5826,8 +6936,8 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
     const isNewConversation = messages.length === 1 && messages[0].role === 'user';
 
     // 如果是新对话，则必须忽略之前的绑定，以避免历史记录污染
-    if (isNewConversation && sessionIdentifier) {
-        const key = `${pureModelName}:${sessionIdentifier}`;
+    if (isNewConversation && sessionIdentifier && !usePolling) {
+        const key = `single:${pureModelName}:${sessionIdentifier}`;
         if (userSettings.conversationProviderMap && userSettings.conversationProviderMap[key]) {
             console.log(`[会话] 检测到新对话，删除旧的提供商绑定`);
             delete userSettings.conversationProviderMap[key];
@@ -5835,7 +6945,7 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
     }
 
     // 如果有会话标识符且不是新对话，则尝试获取绑定的提供商
-    if (sessionIdentifier && !isNewConversation) {
+    if (sessionIdentifier && !isNewConversation && !usePolling) {
       selectedProvider = getConversationProvider(
         sessionIdentifier,
         pureModelName,
@@ -5865,6 +6975,7 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
     // ==================== 自动故障转移逻辑 ====================
     const errors = []; // 收集所有失败的错误信息
     const triedProviderIds = []; // 记录已尝试的提供商ID
+    const providerAttempts = [];
     
     // 如果有已绑定的提供商，优先尝试它
     let failoverProviders = [];
@@ -5899,6 +7010,7 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
 
     for (let attempt = 0; attempt < failoverProviders.length; attempt++) {
       const selectedProvider = failoverProviders[attempt];
+      const attemptStartedAt = Date.now();
 
       triedProviderIds.push(selectedProvider.id);
 
@@ -5924,6 +7036,13 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
       const providerModelId = await getProviderModelId(selectedProvider, pureModelName, keyInfo);
       if (!providerModelId) {
         console.log(`[错误] 模型 ${pureModelName} 在提供商 ${selectedProvider.name} 中未找到，尝试下一个...`);
+        recordProviderAttempt(providerAttempts, {
+          attempt: attempt + 1,
+          provider: selectedProvider,
+          status: 'failed',
+          duration: Date.now() - attemptStartedAt,
+          error: 'Model not found in provider'
+        });
         errors.push({
           provider: selectedProvider.name,
           error: `Model not found in provider`
@@ -6034,6 +7153,13 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
 
           // 记录API请求日志（非阻塞）
           perfTracker.checkpoint('request_complete');
+          recordProviderAttempt(providerAttempts, {
+            attempt: attempt + 1,
+            provider: selectedProvider,
+            status: 'success',
+            statusCode: response.status,
+            duration: Date.now() - attemptStartedAt
+          });
           setImmediate(() => {
             logApiRequest({
               traceId,
@@ -6044,18 +7170,11 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
               isPolling: usePolling,
               isNewConversation,
               request: { model: pureModelName, stream: true, messages },
-              providers: [{
-                attempt: attempt + 1,
-                providerId: selectedProvider.id,
-                providerName: selectedProvider.name,
-                status: 'success',
-                statusCode: response.status,
-                duration: perfTracker.getDuration('request_complete')
-              }],
+              providers: providerAttempts,
               result: {
                 status: 'success',
                 successfulProvider: selectedProvider.id,
-                totalAttempts: 1,
+                totalAttempts: providerAttempts.length,
                 totalDuration: perfTracker.getTotalDuration(),
                 tokenUsage: streamResult?.tokenUsage || null,
                 estimatedCost: null
@@ -6073,10 +7192,19 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
           }
 
           // Use efficient error parser
-          const errorMessage = parseErrorResponse(error);
+          const errorDetails = parseErrorResponse(error);
+          const errorMessage = formatErrorForLog(errorDetails);
 
           // Handle failure in background (non-blocking)
           backgroundProcessor.handleFailure(selectedProvider, pureModelName, userSettings, errorMessage, keyInfo);
+          recordProviderAttempt(providerAttempts, {
+            attempt: attempt + 1,
+            provider: selectedProvider,
+            status: 'failed',
+            statusCode: errorDetails.status,
+            duration: Date.now() - attemptStartedAt,
+            error: errorMessage
+          });
 
           errors.push({
             provider: selectedProvider.name,
@@ -6146,6 +7274,13 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
 
           // 记录API请求日志（非阻塞）
           perfTracker.checkpoint('request_complete');
+          recordProviderAttempt(providerAttempts, {
+            attempt: attempt + 1,
+            provider: selectedProvider,
+            status: 'success',
+            statusCode: response.status,
+            duration: Date.now() - attemptStartedAt
+          });
           setImmediate(() => {
             logApiRequest({
               traceId,
@@ -6156,18 +7291,11 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
               isPolling: usePolling,
               isNewConversation,
               request: { model: pureModelName, stream, messages },
-              providers: [{
-                attempt: attempt + 1,
-                providerId: selectedProvider.id,
-                providerName: selectedProvider.name,
-                status: 'success',
-                statusCode: response.status,
-                duration: perfTracker.getDuration('request_complete')
-              }],
+              providers: providerAttempts,
               result: {
                 status: 'success',
                 successfulProvider: selectedProvider.id,
-                totalAttempts: 1,
+                totalAttempts: providerAttempts.length,
                 totalDuration: perfTracker.getTotalDuration(),
                 tokenUsage: response.data?.usage || null,
                 estimatedCost: null  // TODO: 添加成本计算
@@ -6182,10 +7310,19 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
           console.log(`[错误] 提供商 ${selectedProvider.name} 非流式请求失败: ${error.message}`);
 
           // Use efficient error parser
-          const errorMessage = parseErrorResponse(error);
+          const errorDetails = parseErrorResponse(error);
+          const errorMessage = formatErrorForLog(errorDetails);
 
           // Handle failure in background (non-blocking)
           backgroundProcessor.handleFailure(selectedProvider, pureModelName, userSettings, errorMessage, keyInfo);
+          recordProviderAttempt(providerAttempts, {
+            attempt: attempt + 1,
+            provider: selectedProvider,
+            status: 'failed',
+            statusCode: errorDetails.status,
+            duration: Date.now() - attemptStartedAt,
+            error: errorMessage
+          });
 
           errors.push({
             provider: selectedProvider.name,
@@ -6220,18 +7357,11 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
         isPolling: usePolling,
         isNewConversation,
         request: { model: pureModelName, stream, messages },
-        providers: errors.map((e, idx) => ({
-          attempt: idx + 1,
-          providerId: `provider_${idx}`,
-          providerName: e.provider,
-          status: 'failed',
-          statusCode: e.status,
-          error: e.error
-        })),
+        providers: providerAttempts,
         result: {
           status: 'failed',
           successfulProvider: null,
-          totalAttempts: triedProviderIds.length,
+          totalAttempts: providerAttempts.length,
           totalDuration: perfTracker.getTotalDuration(),
           tokenUsage: null,
           estimatedCost: null
@@ -6325,7 +7455,7 @@ app.get('/api/proxy-keys', async (req, res) => {
 // 创建新的API密钥
 app.post('/api/proxy-keys', async (req, res) => {
   try {
-    const { name, description } = req.body;
+    const { name, description, clientTag } = req.body;
     
     if (!name || name.trim() === '') {
       return res.status(400).json({ error: '密钥名称不能为空' });
@@ -6354,6 +7484,7 @@ app.post('/api/proxy-keys', async (req, res) => {
       allowedPollingGroups: [],
       allowedPollingProviders: [],
       usePolling: true,
+      clientTag: ['normal', 'codex', 'claude', 'openclaw'].includes(clientTag) ? clientTag : 'normal',
       rateLimit: {
         requestsPerMinute: 60,
         requestsPerHour: 1000
@@ -6798,7 +7929,7 @@ app.delete('/api/logs/all', async (req, res) => {
 app.options('/v1/*', (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-API-Key, Anthropic-Version, Anthropic-Beta');
   res.setHeader('Access-Control-Max-Age', '86400');
   res.status(204).end();
 });
@@ -6820,6 +7951,10 @@ initDataDir().then(async () => {
   } catch (error) {
     console.error('[SQLite] 数据迁移失败:', error);
   }
+
+  ensureDefaultAdminUser();
+  cleanupExpiredSessions();
+  setInterval(cleanupExpiredSessions, 60 * 60 * 1000);
 
   app.listen(PORT, () => {
     console.log(`Server running on http://localhost:${PORT}`);

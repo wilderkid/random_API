@@ -278,6 +278,11 @@ const logLevels = [
 // 日志类型定义
 const logTypes = [
   { value: 'API_CALL', label: 'API调用' },
+  { value: 'API_REQUEST', label: 'API请求' },
+  { value: 'PROVIDER_SWITCH', label: '提供商切换' },
+  { value: 'SESSION_BIND', label: '会话绑定' },
+  { value: 'TOKEN_USAGE', label: 'Token使用' },
+  { value: 'COST_TRACKING', label: '成本追踪' },
   { value: 'SYSTEM', label: '系统' },
   { value: 'USER_ACTION', label: '用户操作' },
   { value: 'AUTH', label: '认证' },
