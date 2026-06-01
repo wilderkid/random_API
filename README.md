@@ -1,117 +1,213 @@
-# 会话结构化总结（Gemini Relay 生图卡住问题）
+# Equal Ask
 
-## 1. 主要请求与意图
-- 主要问题：Gemini relay 生图响应在前端不显示图片，界面持续停留在“正在生成图片”。
-- 目标：基于用户提供的 SSE 原始文本，定位前端“卡住”的根因，并总结已做的修复与下一步分析方向。
+Equal Ask 是一个自用的 AI API 中转与管理系统，用来统一管理多个上游 Provider，并对外提供 OpenAI / Anthropic 兼容接口。它的核心目标是把多个低 RPM 的上游模型组织起来，通过模型级轮询提升整体可用 RPM，同时保留尽量透明的请求转发能力。
 
-## 2. 关键技术概念
-- 前端：Vue 3、SSE 流式解析、Markdown 渲染（`marked`）、内容净化（`DOMPurify`）。
-- 后端：Node/Express、SSE 代理转发、图片生成接口与流式处理。
-- 数据形态：`data:image/*;base64,...` 数据 URL、Markdown 图片语法 `![alt](url)`、SSE 终止标记 `data: [DONE]`。
-- UI 状态：流式响应 `streaming` 状态、图片消息 `messageType: 'image-response'`。
+项目适合直接部署在个人服务器上，通过 `IP + 端口` 访问后台和对外 API，不依赖域名。
 
-## 3. 读取/修改的文件与代码位置
-- 前端逻辑：[`frontend/src/views/Chat.vue`](frontend/src/views/Chat.vue:3212)
-  - SSE 流解析、图片检测、Markdown 图片提取、渲染与 DOMPurify 配置。
-  - 关键逻辑位置：
-    - DOMPurify 放行 data:image：[`frontend/src/views/Chat.vue`](frontend/src/views/Chat.vue:2267)
-    - 流式增量解析与图片检测：[`frontend/src/views/Chat.vue`](frontend/src/views/Chat.vue:3212)
-    - `normalizeDataImageUrls`：[`frontend/src/views/Chat.vue`](frontend/src/views/Chat.vue:4007)
-    - `filterLargeImages` 绕过 data URL 尺寸检测：[`frontend/src/views/Chat.vue`](frontend/src/views/Chat.vue:4111)
-- 后端逻辑：[`backend/server.js`](backend/server.js:4157)
-  - 上游流结束时补发 `[DONE]`：[`backend/server.js`](backend/server.js:4157)
+## 核心能力
 
-## 4. 已做的代码变更与片段（精确变更）
-### 4.1 前端：归一化 data:image 并绕过尺寸检测
-- 目的：解决 data URL 在流式拼接中出现换行/空格导致 DOMPurify 拦截、以及 data URL 图片尺寸无法可靠加载导致过滤失败。
-- 关键新增逻辑：
-  - 在流结束后规范化内容：
-    ```js
-    assistantMsg.content = normalizeDataImageUrls(assistantMsg.content)
-    ```
-    位置：[`frontend/src/views/Chat.vue`](frontend/src/views/Chat.vue:3291)
-  - 新增归一化函数：
-    ```js
-    function normalizeDataImageUrls(content) {
-      if (!content || !content.includes('data:image')) return content
-      return content.replace(
-        /data:image\/(?:png|jpe?g|gif|webp);base64,[A-Za-z0-9+/=\s]+/gi,
-        (match) => match.replace(/\s+/g, '')
-      )
-    }
-    ```
-    位置：[`frontend/src/views/Chat.vue`](frontend/src/views/Chat.vue:4007)
-  - data URL 绕过尺寸检测：
-    ```js
-    if (img.url && img.url.startsWith('data:image/')) {
-      return { ...img, url: normalizeDataImageUrls(img.url), isLarge: true }
-    }
-    ```
-    位置：[`frontend/src/views/Chat.vue`](frontend/src/views/Chat.vue:4113)
+- Provider 管理：维护多个上游 API Provider、分组、模型列表、密钥和自定义端点。
+- 模型轮询：同一模型可在多个 Provider 之间按顺序轮询，降低单个上游 RPM 限制带来的影响。
+- API Key 管理：为外部客户端创建独立代理密钥，支持权限范围、轮询开关和限速配置。
+- 客户端标签：Provider 和代理密钥都可以标记用途，例如普通、Codex、Claude Code、OpenClaw，用于更明确地筛选可用上游。
+- OpenAI 兼容接口：提供 `/v1/chat/completions`、`/v1/responses`、`/v1/embeddings`、`/v1/models`。
+- Anthropic 兼容接口：提供 `/v1/messages`、`/v1/messages/count_tokens`、`/v1/models`。
+- 后台鉴权：管理页面需要登录，外部 `/v1/*` 接口使用代理 API Key。
+- 日志与统计：记录请求链路、Provider 尝试情况、成功失败状态、模型分布和调用统计。
+- 健康检查：提供 `/api/health` 和 `/v1/health` 便于部署探活。
 
-### 4.2 后端：流结束补发 `[DONE]`
-- 目的：避免上游不发送 `[DONE]` 导致前端一直 `streaming`。
-- 关键逻辑：
-  ```js
-  let sawDone = false;
-  upstreamResponse.data.on('data', (chunk) => {
-    if (chunk && chunk.toString('utf8').includes('[DONE]')) {
-      sawDone = true;
-    }
-  });
-  upstreamResponse.data.on('end', () => {
-    if (!sawDone) {
-      res.write('data: [DONE]\n\n');
-    }
-    res.end();
-  });
-  ```
-  位置：[`backend/server.js`](backend/server.js:4157)
+## 项目结构
 
-## 5. 报错与修复记录
-- 无法本地运行 `curl`：需要用户在本机 PowerShell 执行。
-- PowerShell `curl` 实为 `Invoke-WebRequest`，最初报错：
-  - `Invoke-WebRequest : 无法绑定参数“Headers”`（header 类型不匹配）。
-- 解决方案：改用 `Invoke-WebRequest -UseBasicParsing -OutFile`，再 `Get-Content -Raw` 获取 SSE 原文。
+```text
+equal_ask/
+  backend/      Node.js + Express 后端服务
+  frontend/     Vue 3 + Vite 管理后台
+  data/         SQLite 数据库、日志和历史数据
+  scripts/      兼容性检查和辅助脚本
+  document/     项目文档
+```
 
-## 6. 问题定位过程（已验证与推断）
-1. 已确认 DOMPurify 允许 data URL：`ALLOWED_URI_REGEXP` 已放行 `data:image/*;base64,`，位置见 [`frontend/src/views/Chat.vue`](frontend/src/views/Chat.vue:2267)。
-2. 用户提供的 SSE 中含 Markdown 图片：`![image](data:image/jpeg;base64,...)`。
-3. SSE 末尾包含 `data: [DONE]` 且 `finish_reason: "stop"`，说明上游已完成。
-4. 已新增：
-   - `normalizeDataImageUrls` 去除 base64 中换行/空白。
-   - data URL 绕过尺寸检测，避免 `filterLargeImages` 误判。
-   - 后端补发 `[DONE]` 兜底。
-5. 仍然症状：前端 UI 依旧显示“正在生成图片”，说明剩余问题可能在前端流式结束后的状态处理或渲染逻辑上。
+## 快速启动
 
-## 7. 用户消息（按时间顺序，非工具输出）
-1. “## Conversation Summary …”（用户要求生成结构化总结，含所有细节和直引）
-2. “控制台输出： … 而前台页面依旧显示，正在生成图片，现在的问题是根本不知道问题出在哪”
-3. “请重启后端并在浏览器重试生图，然后粘贴浏览器 Network 中该请求的 Response（原始 SSE 文本）”
-4. “我提供模型名与请求参数：modelId=1767581306384::gemini-3-pro-image-1k-9-16，size=1024x1024，quality=standard，其它默认；请用 curl 复现。”
-5. “PS … Invoke-WebRequest error …”
-6. “这个命令根本无法执行，因为换行的问题”
-7. “PS … Get-Content .\sse.txt -Raw … data: … data: [DONE]”
+安装依赖：
 
-## 8. 仍待完成事项（Pending）
-- 核查前端在收到 `[DONE]` 后是否确实将 `assistantMsg.streaming = false` 并触发渲染更新，是否存在被覆盖的状态提示或渲染缓存问题。
-- 进一步审查 Markdown 图片提取后，`messageType` / `generatedImages` 是否与 UI 渲染分支一致（例如生成容器是否被隐藏或被流式状态遮挡）。
+```bash
+cd backend
+npm install
 
-## 9. 当前工作状态
-- 已完成 data URL 归一化、后端 `[DONE]` 兜底、data URL 绕过尺寸检测。用户提供了完整 SSE 文本，包含 `data:image` Markdown 与 `[DONE]`。
-- 仍出现“正在生成图片”停滞现象，当前正在分析前端流式结束后的状态与渲染路径。
+cd ../frontend
+npm install
+```
 
-## 10. 可选下一步（含直接引用）
-- 建议重点检查流结束后 UI 状态切换与渲染分支，特别是：
-  - `assistantMsg.streaming` 是否在遇到大体积 data URL 时被异常覆盖；
-  - Markdown 图片提取后 `messageType='image-response'` 是否触发正确的渲染容器；
-  - `renderedCache` 是否导致显示依旧停留在状态文本。
-- 引用（用户）：
-  - “而前台页面依旧显示，正在生成图片，现在的问题是根本不知道问题出在哪”
-  - “PS … Get-Content .\sse.txt -Raw … data: … data: [DONE]”
+构建前端：
 
----
+```bash
+cd frontend
+npm run build
+```
 
-## 参考链接
-- 前端关键文件：[`frontend/src/views/Chat.vue`](frontend/src/views/Chat.vue:3212)
-- 后端关键文件：[`backend/server.js`](backend/server.js:4157)
+启动后端：
+
+```bash
+cd backend
+npm start
+```
+
+默认服务地址：
+
+```text
+http://localhost:3000
+```
+
+生产环境中可以直接通过：
+
+```text
+http://服务器IP:3000
+```
+
+访问后台管理页面和 `/v1/*` 兼容接口。
+
+## 首次登录
+
+后端启动时会检查管理员用户。如果数据库中还没有用户，会自动创建默认管理员。
+
+建议首次部署时设置环境变量：
+
+```bash
+ADMIN_USERNAME=admin
+ADMIN_PASSWORD=your-strong-password
+```
+
+如果没有设置 `ADMIN_PASSWORD`，服务会在启动日志中输出一次性生成的初始密码。登录后可以在后台的密码管理中修改。
+
+## 基本配置流程
+
+1. 登录后台。
+2. 在 API 管理中添加 Provider，填写上游 base URL、API Key、协议类型、模型列表和用途标签。
+3. 在轮询配置中刷新并确认可轮询模型池。
+4. 在 API Key 管理中创建对外代理密钥，选择用途标签和可访问范围。
+5. 在外部客户端中使用代理密钥调用本系统的 `/v1/*` 接口。
+
+## Provider 与协议说明
+
+Provider 的协议和用途标签决定它会被哪些客户端使用：
+
+- 普通 OpenAI 兼容 Provider：用于 `/v1/chat/completions`、`/v1/responses` 等 OpenAI 风格调用。
+- Claude / Anthropic Provider：用于 `/v1/messages` 和 Claude Code 等 Anthropic 风格调用。
+- Codex Provider：用于 Codex 或其他 OpenAI 兼容客户端。
+- OpenClaw Provider：用于标记 OpenClaw 相关上游。
+
+如果上游明确支持 Claude Code 或 Anthropic 协议，需要确保 Provider 至少满足以下条件之一：
+
+- `apiType` 设置为 `anthropic`
+- 勾选 Claude 用途标签
+- 自定义 chat endpoint 指向 `/v1/messages`
+
+如果上游只支持 OpenAI 协议，即使模型名称相同，也不能直接作为 Claude Code 的纯透传上游使用。
+
+## 对外 API
+
+OpenAI 兼容客户端：
+
+```text
+Base URL: http://服务器IP:3000/v1
+Authorization: Bearer <代理 API Key>
+```
+
+常用接口：
+
+```text
+GET  /v1/models
+POST /v1/chat/completions
+POST /v1/responses
+POST /v1/embeddings
+GET  /v1/health
+```
+
+Claude / Anthropic 兼容客户端：
+
+```text
+Base URL: http://服务器IP:3000
+x-api-key: <代理 API Key>
+anthropic-version: 2023-06-01
+```
+
+常用接口：
+
+```text
+GET  /v1/models
+POST /v1/messages
+POST /v1/messages/count_tokens
+GET  /v1/health
+```
+
+## 轮询策略
+
+系统以模型为单位维护轮询状态。假设 5 个 Provider 都提供同一个模型 `A`，外部请求模型 `A` 时，系统会按顺序在这 5 个 Provider 之间轮流选择，而不是固定使用某一个 Provider。
+
+轮询会结合以下条件过滤 Provider：
+
+- Provider 是否启用
+- 模型是否可见
+- API Key 权限范围
+- Provider 分组和轮询范围
+- 客户端用途标签
+- 模型失败计数和禁用状态
+
+后台提供手动重置某个模型轮询位置的功能。
+
+## 健康检查
+
+管理侧探活：
+
+```text
+GET /api/health
+```
+
+外部 API 探活：
+
+```text
+GET /v1/health
+```
+
+`/v1/health` 需要携带代理 API Key。
+
+## 兼容性检查
+
+项目提供 Anthropic 兼容性检查脚本：
+
+```bash
+EQUAL_ASK_BASE_URL=http://服务器IP:3000 \
+EQUAL_ASK_API_KEY=你的代理密钥 \
+node scripts/check-anthropic-compat.js
+```
+
+可选指定模型：
+
+```bash
+EQUAL_ASK_MODEL=claude-sonnet-4-5
+```
+
+该脚本会检查：
+
+- `/v1/models`
+- `/v1/models/:model`
+- `/v1/messages/count_tokens`
+- `/v1/messages`
+
+## 数据与日志
+
+运行数据默认保存在 `data/` 目录：
+
+- `data/app.db`：SQLite 数据库
+- `data/logs/`：请求日志
+- 旧 JSON 配置会在启动时迁移到 SQLite
+
+部署时建议定期备份 `data/` 目录。
+
+## 注意事项
+
+- 本系统负责中转、鉴权、轮询和日志，不会凭空让上游支持不存在的协议。
+- Claude Code 是否可用取决于上游是否真正支持 Anthropic `/v1/messages` 协议。
+- Codex 是否可用取决于上游是否真正支持 OpenAI 兼容接口和相关工具调用能力。
+- 直接暴露公网 IP + 端口时，建议使用强密码、限制代理密钥权限，并只开放必要端口。
