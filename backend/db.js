@@ -65,6 +65,8 @@ function createSchema(db) {
       custom_endpoints_models TEXT DEFAULT '',
       custom_endpoints_images TEXT DEFAULT '',
       client_tags_json TEXT DEFAULT '{"normal":true,"codex":false,"claude":false,"openclaw":false}',
+      key_polling_enabled INTEGER DEFAULT 0,
+      rpm INTEGER DEFAULT 0,
       created_at TEXT DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (group_id) REFERENCES provider_groups(id) ON DELETE SET DEFAULT
@@ -280,6 +282,22 @@ function ensureProviderClientTagsColumn(db) {
   }
 }
 
+function ensureProvidersKeyPollingColumn(db) {
+  try {
+    db.prepare('SELECT key_polling_enabled FROM providers LIMIT 1').get();
+  } catch (error) {
+    db.prepare('ALTER TABLE providers ADD COLUMN key_polling_enabled INTEGER DEFAULT 0').run();
+  }
+}
+
+function ensureProvidersRpmColumn(db) {
+  try {
+    db.prepare('SELECT rpm FROM providers LIMIT 1').get();
+  } catch (error) {
+    db.prepare('ALTER TABLE providers ADD COLUMN rpm INTEGER DEFAULT 0').run();
+  }
+}
+
 function ensureProxyKeysClientTagColumn(db) {
   try {
     db.prepare('SELECT client_tag FROM proxy_keys LIMIT 1').get();
@@ -300,6 +318,8 @@ function initializeDatabase() {
   ensureProxyKeysAllowedPollingColumns(db);
   ensureProxyKeysAllowedProvidersColumn(db);
   ensureProviderClientTagsColumn(db);
+  ensureProvidersKeyPollingColumn(db);
+  ensureProvidersRpmColumn(db);
   ensureProxyKeysClientTagColumn(db);
 
   dbInstance = db;

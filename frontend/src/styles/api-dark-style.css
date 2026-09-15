@@ -6,32 +6,35 @@
 /* ==================== 根变量 ==================== */
 .api-settings-container.api-style-dark,
 .api-settings-container.api-style-dark * {
-  --ad-bg: #1e1e1e;
-  --ad-surface: #252526;
-  --ad-surface-hover: #2d2d30;
-  --ad-surface-active: #37373d;
-  --ad-border: #3e3e42;
-  --ad-border-hover: #4e4e52;
-  --ad-text-primary: #cccccc;
-  --ad-text-secondary: #969696;
-  --ad-text-tertiary: #6e6e6e;
-  --ad-primary: #007acc;
-  --ad-primary-hover: #0098ff;
-  --ad-primary-fade: rgba(0, 122, 204, 0.15);
-  --ad-success: #4ec9b0;
-  --ad-success-hover: #3db89f;
-  --ad-success-fade: rgba(78, 201, 176, 0.15);
-  --ad-warning: #dcdcaa;
-  --ad-warning-hover: #c5c5a3;
+  --ad-bg: #15241c;
+  --ad-surface: #1b2a22;
+  --ad-surface-hover: #24362c;
+  --ad-surface-active: #2c4336;
+  --ad-border: #355544;
+  --ad-border-hover: #4a6d58;
+  --ad-text-primary: #e3f4ea;
+  --ad-text-secondary: #a8cbb6;
+  --ad-text-tertiary: #7aa38c;
+  --ad-primary: #39845b;
+  --ad-primary-hover: #4aa572;
+  --ad-primary-fade: rgba(57, 132, 91, 0.22);
+  --ad-pink: #fd9891;
+  --ad-pink-hover: #f57d75;
+  --ad-pink-fade: rgba(253, 152, 145, 0.18);
+  --ad-success: #6ecf97;
+  --ad-success-hover: #58b982;
+  --ad-success-fade: rgba(110, 207, 151, 0.16);
+  --ad-warning: #e0c56a;
+  --ad-warning-hover: #d4b85a;
   --ad-danger: #f48771;
   --ad-danger-hover: #d97460;
   --ad-danger-fade: rgba(244, 135, 113, 0.15);
-  --ad-info: #75beff;
-  --ad-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
-  --ad-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
-  --ad-shadow-lg: 0 4px 16px rgba(0, 0, 0, 0.5);
-  --ad-glow-sm: 0 0 8px rgba(0, 122, 204, 0.3);
-  --ad-glow: 0 0 16px rgba(0, 122, 204, 0.4);
+  --ad-info: #fd9891;
+  --ad-shadow-sm: 0 1px 2px rgba(21, 36, 28, 0.35);
+  --ad-shadow: 0 2px 8px rgba(21, 36, 28, 0.4);
+  --ad-shadow-lg: 0 4px 16px rgba(21, 36, 28, 0.5);
+  --ad-glow-sm: 0 0 8px rgba(57, 132, 91, 0.28);
+  --ad-glow: 0 0 16px rgba(57, 132, 91, 0.35);
   --ad-radius-sm: 4px;
   --ad-radius: 8px;
   --ad-radius-lg: 12px;
@@ -118,28 +121,30 @@
 }
 
 .api-settings-container.api-style-dark .btn-add-provider {
-  background: linear-gradient(135deg, var(--ad-primary) 0%, #0066cc 100%);
+  background: linear-gradient(135deg, var(--ad-primary) 0%, #2f6f4c 100%);
   box-shadow: var(--ad-glow-sm);
 }
 
 .api-settings-container.api-style-dark .btn-add-provider:hover {
-  background: linear-gradient(135deg, var(--ad-primary-hover) 0%, #0077dd 100%);
+  background: linear-gradient(135deg, var(--ad-primary-hover) 0%, #4aa572 100%);
   box-shadow: var(--ad-glow);
   transform: translateY(-1px);
 }
 
 .api-settings-container.api-style-dark .btn-import {
-  background: linear-gradient(135deg, var(--ad-info) 0%, #5aa5df 100%);
+  background: linear-gradient(135deg, var(--ad-pink) 0%, var(--ad-pink-hover) 100%);
+  color: #15241c;
 }
 
 .api-settings-container.api-style-dark .btn-import:hover {
-  background: linear-gradient(135deg, #85c8ff 0%, #6ab5ee 100%);
+  background: linear-gradient(135deg, #ffb4ae 0%, var(--ad-pink-hover) 100%);
+  color: #15241c;
   transform: translateY(-1px);
 }
 
 .api-settings-container.api-style-dark .btn-export {
   background: linear-gradient(135deg, var(--ad-warning) 0%, #c5c5a3 100%);
-  color: #1e1e1e;
+  color: #15241c;
 }
 
 .api-settings-container.api-style-dark .btn-export:hover {
@@ -148,11 +153,11 @@
 }
 
 .api-settings-container.api-style-dark .btn-manage-groups {
-  background: linear-gradient(135deg, #6c757d 0%, #5a6268 100%);
+  background: linear-gradient(135deg, #4a6d58 0%, #355544 100%);
 }
 
 .api-settings-container.api-style-dark .btn-manage-groups:hover {
-  background: linear-gradient(135deg, #7c858d 0%, #6a7278 100%);
+  background: linear-gradient(135deg, #5b846c 0%, #39845b 100%);
   transform: translateY(-1px);
 }
 
@@ -225,7 +230,7 @@
   background: var(--ad-surface-hover);
   color: var(--ad-text-primary);
   border-color: var(--ad-border);
-  box-shadow: 0 0 12px rgba(0, 122, 204, 0.1);
+  box-shadow: 0 0 12px rgba(57, 132, 91, 0.1);
 }
 
 .api-settings-container.api-style-dark .group-expand-icon {
@@ -247,7 +252,7 @@
   font-size: 11px;
   font-weight: 600;
   border: 1px solid var(--ad-primary-fade);
-  box-shadow: 0 0 8px rgba(0, 122, 204, 0.3);
+  box-shadow: 0 0 8px rgba(57, 132, 91, 0.3);
 }
 
 /* 提供商项 - 卡片式设计 */
@@ -277,19 +282,19 @@
 }
 
 .api-settings-container.api-style-dark .provider-item:hover {
-  border-color: var(--ad-primary);
-  box-shadow: 0 0 16px rgba(0, 122, 204, 0.2);
+  border-color: var(--ad-pink);
+  box-shadow: 0 0 16px rgba(253, 152, 145, 0.22);
   transform: translateX(2px);
 }
 
 .api-settings-container.api-style-dark .provider-item.active::before {
-  background: var(--ad-primary);
-  box-shadow: 0 0 8px var(--ad-primary);
+  background: var(--ad-pink);
+  box-shadow: 0 0 8px var(--ad-pink);
 }
 
 .api-settings-container.api-style-dark .provider-item.active {
   background: var(--ad-surface-active);
-  border-color: var(--ad-primary);
+  border-color: var(--ad-pink);
 }
 
 .api-settings-container.api-style-dark .provider-item.no-models {
@@ -330,7 +335,7 @@
   background: var(--ad-primary);
   color: white;
   border-color: var(--ad-primary);
-  box-shadow: 0 0 12px rgba(0, 122, 204, 0.5);
+  box-shadow: 0 0 12px rgba(57, 132, 91, 0.5);
 }
 
 .api-settings-container.api-style-dark .provider-item.no-models .provider-item-icon {
@@ -340,7 +345,7 @@
 
 .api-settings-container.api-style-dark .provider-item.no-models.active .provider-item-icon {
   background: var(--ad-danger);
-  color: #1e1e1e;
+  color: #15241c;
   box-shadow: 0 0 12px rgba(244, 135, 113, 0.5);
 }
 
@@ -442,7 +447,7 @@
   font-size: 24px;
   font-weight: 600;
   color: var(--ad-text-primary);
-  text-shadow: 0 0 20px rgba(0, 122, 204, 0.3);
+  text-shadow: 0 0 20px rgba(57, 132, 91, 0.3);
 }
 
 /* 头部操作按钮 */
@@ -562,14 +567,14 @@
 }
 
 .api-settings-container.api-style-dark .btn-test {
-  background: linear-gradient(135deg, var(--ad-success) 0%, #3db89f 100%);
-  color: #1e1e1e;
+  background: linear-gradient(135deg, var(--ad-success) 0%, #58b982 100%);
+  color: #15241c;
   border-color: transparent;
 }
 
 .api-settings-container.api-style-dark .btn-test:hover {
-  background: linear-gradient(135deg, var(--ad-success-hover) 0%, #2ca78f 100%);
-  box-shadow: 0 0 12px rgba(78, 201, 176, 0.4);
+  background: linear-gradient(135deg, var(--ad-success-hover) 0%, #3d9a6a 100%);
+  box-shadow: 0 0 12px rgba(110, 207, 151, 0.35);
 }
 
 .api-settings-container.api-style-dark .btn-test:disabled {
@@ -634,7 +639,7 @@
   border-radius: 12px;
   font-size: 12px;
   font-weight: 600;
-  box-shadow: 0 0 8px rgba(0, 122, 204, 0.4);
+  box-shadow: 0 0 8px rgba(57, 132, 91, 0.4);
 }
 
 .api-settings-container.api-style-dark .search-input-small {
@@ -695,8 +700,8 @@
 }
 
 .api-settings-container.api-style-dark .added-model-card:hover {
-  border-color: var(--ad-primary);
-  box-shadow: 0 0 12px rgba(0, 122, 204, 0.3);
+  border-color: var(--ad-pink);
+  box-shadow: 0 0 12px rgba(253, 152, 145, 0.28);
 }
 
 .api-settings-container.api-style-dark .model-icon {
@@ -794,7 +799,7 @@
 .api-settings-container.api-style-dark .model-row:hover {
   background: var(--ad-surface-hover);
   border-color: var(--ad-border);
-  box-shadow: 0 0 12px rgba(0, 122, 204, 0.15);
+  box-shadow: 0 0 12px rgba(253, 152, 145, 0.16);
 }
 
 .api-settings-container.api-style-dark .model-actions {
@@ -818,15 +823,15 @@
 }
 
 .api-settings-container.api-style-dark .btn-toggle-model {
-  background: linear-gradient(135deg, var(--ad-primary) 0%, #0066cc 100%);
+  background: linear-gradient(135deg, var(--ad-primary) 0%, #2f6f4c 100%);
   color: white;
   border-color: transparent;
   font-weight: 600;
 }
 
 .api-settings-container.api-style-dark .btn-toggle-model:hover {
-  background: linear-gradient(135deg, var(--ad-primary-hover) 0%, #0077dd 100%);
-  box-shadow: 0 0 12px rgba(0, 122, 204, 0.4);
+  background: linear-gradient(135deg, var(--ad-primary-hover) 0%, #4aa572 100%);
+  box-shadow: 0 0 12px rgba(57, 132, 91, 0.4);
 }
 
 .api-settings-container.api-style-dark .icon-btn:hover {
@@ -938,7 +943,7 @@
   padding: 10px 20px;
   border: none;
   border-radius: var(--ad-radius-sm);
-  background: linear-gradient(135deg, var(--ad-primary) 0%, #0066cc 100%);
+  background: linear-gradient(135deg, var(--ad-primary) 0%, #2f6f4c 100%);
   color: white;
   cursor: pointer;
   transition: var(--ad-transition);
@@ -948,7 +953,7 @@
 }
 
 .api-settings-container.api-style-dark .btn-save:hover {
-  background: linear-gradient(135deg, var(--ad-primary-hover) 0%, #0077dd 100%);
+  background: linear-gradient(135deg, var(--ad-primary-hover) 0%, #4aa572 100%);
   box-shadow: var(--ad-glow);
   transform: translateY(-1px);
 }
@@ -1001,4 +1006,120 @@
   .api-settings-container.api-style-dark .models-config {
     padding: 16px;
   }
+}
+
+/* ==================== 选择器 / 徽章 / 拖拽 / 批量 ==================== */
+.api-settings-container.api-style-dark .sidebar-tools-toggle {
+  border-color: var(--ad-border);
+  background: var(--ad-bg);
+  color: var(--ad-text-primary);
+}
+
+.api-settings-container.api-style-dark .api-style-select-trigger {
+  background: var(--ad-bg);
+  border-color: var(--ad-border);
+  color: var(--ad-text-primary);
+}
+
+.api-settings-container.api-style-dark .api-style-select-trigger:hover {
+  background: var(--ad-surface-hover);
+  border-color: var(--ad-pink);
+}
+
+.api-settings-container.api-style-dark .selected-api-style,
+.api-settings-container.api-style-dark .dropdown-arrow,
+.api-settings-container.api-style-dark .api-style-option-name,
+.api-settings-container.api-style-dark .api-style-option-desc {
+  color: var(--ad-text-secondary);
+}
+
+.api-settings-container.api-style-dark .api-style-dropdown {
+  background: var(--ad-surface);
+  border-color: var(--ad-border);
+  box-shadow: var(--ad-shadow-lg);
+}
+
+.api-settings-container.api-style-dark .api-style-search-input {
+  background: var(--ad-bg);
+  color: var(--ad-text-primary);
+  border-bottom-color: var(--ad-border);
+}
+
+.api-settings-container.api-style-dark .api-style-option {
+  border-bottom-color: var(--ad-border);
+  color: var(--ad-text-primary);
+}
+
+.api-settings-container.api-style-dark .api-style-option:hover {
+  background: var(--ad-surface-hover);
+}
+
+.api-settings-container.api-style-dark .api-style-option.active {
+  background: var(--ad-pink-fade);
+  color: var(--ad-pink);
+}
+
+.api-settings-container.api-style-dark .rpm-badge {
+  background: var(--ad-pink);
+  color: #15241c;
+}
+
+.api-settings-container.api-style-dark .provider-item.drag-over {
+  border-color: var(--ad-pink);
+  background: var(--ad-surface-active);
+  box-shadow: 0 0 0 1px var(--ad-pink-fade);
+}
+
+.api-settings-container.api-style-dark .provider-drag-handle,
+.api-settings-container.api-style-dark .provider-move-btn {
+  background: var(--ad-bg);
+  color: var(--ad-text-secondary);
+  border-color: var(--ad-border);
+}
+
+.api-settings-container.api-style-dark .provider-drag-handle:hover,
+.api-settings-container.api-style-dark .provider-move-btn:hover {
+  background: var(--ad-pink-fade);
+  border-color: var(--ad-pink);
+  color: var(--ad-text-primary);
+}
+
+.api-settings-container.api-style-dark .added-model-card.batch-selected,
+.api-settings-container.api-style-dark .btn-model-batch-select.active {
+  background: var(--ad-pink-fade);
+  border-color: var(--ad-pink);
+  color: var(--ad-text-primary);
+}
+
+.api-settings-container.api-style-dark .btn-fetch-provider-models {
+  background: var(--ad-primary);
+  color: #fff;
+}
+
+.api-settings-container.api-style-dark .btn-fetch-provider-models:hover:not(:disabled) {
+  background: var(--ad-primary-hover);
+}
+
+.api-settings-container.api-style-dark .btn-batch-select,
+.api-settings-container.api-style-dark .btn-model-batch-action,
+.api-settings-container.api-style-dark .btn-icon,
+.api-settings-container.api-style-dark .btn-toggle {
+  background: var(--ad-surface);
+  color: var(--ad-text-secondary);
+  border-color: var(--ad-border);
+}
+
+.api-settings-container.api-style-dark .details-header h2,
+.api-settings-container.api-style-dark .config-section label,
+.api-settings-container.api-style-dark .hint,
+.api-settings-container.api-style-dark .modal-content h3,
+.api-settings-container.api-style-dark .modal-content label {
+  color: var(--ad-text-primary);
+}
+
+.api-settings-container.api-style-dark .modal-content,
+.api-settings-container.api-style-dark .models-config,
+.api-settings-container.api-style-dark .config-section {
+  background: var(--ad-surface);
+  color: var(--ad-text-primary);
 }

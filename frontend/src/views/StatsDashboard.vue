@@ -706,9 +706,9 @@ onMounted(() => {
 h1 {
   font-size: 2.15rem;
   font-weight: 800;
-  letter-spacing: -0.04em;
+  letter-spacing: 0;
   line-height: 1.05;
-  color: #0f172a;
+  color: var(--ink);
   margin-bottom: 24px;
   text-wrap: balance;
 }
@@ -716,8 +716,8 @@ h1 {
 h2 {
   font-size: 1.25rem;
   font-weight: 700;
-  letter-spacing: -0.02em;
-  color: #0f172a;
+  letter-spacing: 0;
+  color: var(--ink);
   margin-bottom: 16px;
 }
 
@@ -732,7 +732,7 @@ h2 {
   border-radius: 22px;
   background: rgba(255,255,255,0.96);
   border: 1px solid rgba(226, 232, 240, 0.92);
-  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.05);
+  box-shadow: 0 8px 20px rgba(23, 28, 25, 0.05);
 }
 
 .time-range-btn {
@@ -740,7 +740,7 @@ h2 {
   border: 1px solid rgba(203, 213, 225, 0.9);
   border-radius: 999px;
   background: rgba(255,255,255,0.9);
-  color: #64748b;
+  color: var(--muted);
   font-size: 14px;
   font-weight: 600;
   cursor: pointer;
@@ -748,16 +748,16 @@ h2 {
 }
 
 .time-range-btn:hover {
-  border-color: #0891b2;
-  color: #0f172a;
+  border-color: var(--accent);
+  color: var(--ink);
   transform: translateY(-1px);
 }
 
 .time-range-btn.active {
-  background: #0891b2;
+  background: var(--accent);
   color: white;
   border-color: transparent;
-  box-shadow: 0 12px 24px rgba(8, 145, 178, 0.2);
+  box-shadow: 0 12px 24px rgba(57, 132, 91, 0.2);
 }
 
 .custom-range {
@@ -780,7 +780,7 @@ h2 {
 
 .apply-btn {
   padding: 8px 16px;
-  background: #0891b2;
+  background: var(--accent);
   color: white;
   border: none;
   border-radius: 6px;
@@ -789,12 +789,12 @@ h2 {
 }
 
 .apply-btn:hover {
-  background: #0e7490;
+  background: var(--accent-strong);
 }
 
 .refresh-btn {
   padding: 9px 16px;
-  background: #0891b2;
+  background: var(--accent);
   color: white;
   border: none;
   border-radius: 999px;
@@ -802,7 +802,7 @@ h2 {
   font-size: 14px;
   font-weight: 700;
   transition: background-color 0.18s ease, opacity 0.18s ease;
-  box-shadow: 0 6px 14px rgba(8, 145, 178, 0.14);
+  box-shadow: 0 6px 14px rgba(57, 132, 91, 0.14);
 }
 
 .refresh-btn:hover:not(:disabled) {
@@ -848,7 +848,7 @@ h2 {
   border-radius: 26px;
   padding: 26px;
   border: 1px solid rgba(226, 232, 240, 0.95);
-  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.05);
+  box-shadow: 0 10px 24px rgba(23, 28, 25, 0.05);
 }
 
 .cards-grid {
@@ -863,7 +863,7 @@ h2 {
   padding: 22px;
   border: 1px solid rgba(226, 232, 240, 0.95);
   transition: border-color 0.18s ease, background-color 0.18s ease;
-  box-shadow: inset 0 1px 0 rgba(255,255,255,0.7), 0 6px 14px rgba(15, 23, 42, 0.04);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.7), 0 6px 14px rgba(23, 28, 25, 0.04);
 }
 
 .stat-card:hover {
@@ -882,7 +882,7 @@ h2 {
 }
 
 .stat-card.info {
-  background: #e3f2fd;
+  background: var(--accent-soft);
   border-color: #bbdefb;
 }
 
@@ -895,8 +895,8 @@ h2 {
 .card-value {
   font-size: 30px;
   font-weight: 800;
-  letter-spacing: -0.04em;
-  color: #0f172a;
+  letter-spacing: 0;
+  color: var(--ink);
   margin-bottom: 4px;
 }
 
@@ -944,7 +944,7 @@ h2 {
   border-radius: 26px;
   padding: 24px;
   border: 1px solid rgba(226, 232, 240, 0.95);
-  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.04);
+  box-shadow: 0 8px 18px rgba(23, 28, 25, 0.04);
 }
 
 .section-heading {
@@ -971,10 +971,10 @@ h2 {
   min-width: 220px;
   height: 38px;
   padding: 0 12px;
-  border: 1px solid #cbd5e1;
+  border: 1px solid var(--line);
   border-radius: 10px;
   background: #fff;
-  color: #0f172a;
+  color: var(--ink);
   font-size: 14px;
 }
 
@@ -982,13 +982,13 @@ h2 {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  color: #475569;
+  color: var(--muted);
   font-size: 14px;
   white-space: nowrap;
 }
 
 .section-hint {
-  color: #64748b;
+  color: var(--muted);
   font-size: 13px;
 }
 
@@ -1032,7 +1032,7 @@ h2 {
 
 .model-name-cell {
   font-weight: 700;
-  color: #0f172a;
+  color: var(--ink);
   word-break: break-all;
 }
 
@@ -1051,7 +1051,7 @@ h2 {
 
 .empty-cell {
   text-align: center;
-  color: #64748b;
+  color: var(--muted);
   padding: 28px 16px;
 }
 
@@ -1082,8 +1082,8 @@ h2 {
 }
 
 .balance-badge.single {
-  background: #e2e8f0;
-  color: #334155;
+  background: var(--line);
+  color: var(--ink-soft);
 }
 
 .provider-distribution-list {
@@ -1101,12 +1101,12 @@ h2 {
   justify-content: space-between;
   gap: 12px;
   margin-bottom: 5px;
-  color: #475569;
+  color: var(--muted);
   font-size: 13px;
 }
 
 .provider-name-inline {
-  color: #0f172a;
+  color: var(--ink);
   font-weight: 700;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1117,7 +1117,7 @@ h2 {
   height: 7px;
   overflow: hidden;
   border-radius: 999px;
-  background: #e2e8f0;
+  background: var(--line);
 }
 
 .distribution-bar span {
@@ -1125,7 +1125,7 @@ h2 {
   height: 100%;
   min-width: 3px;
   border-radius: inherit;
-  background: #0891b2;
+  background: var(--accent);
 }
 
 .attempt-chain {

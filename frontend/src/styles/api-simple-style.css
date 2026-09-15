@@ -6,26 +6,29 @@
 /* ==================== 根变量 ==================== */
 .api-settings-container.api-style-simple,
 .api-settings-container.api-style-simple * {
-  --as-bg: #f7f7f8;
+  --as-bg: #f3faf6;
   --as-surface: #ffffff;
-  --as-surface-hover: #f1f3f5;
-  --as-border: #e9ecef;
-  --as-border-hover: #dee2e6;
-  --as-text-primary: #212529;
-  --as-text-secondary: #6c757d;
-  --as-text-tertiary: #adb5bd;
-  --as-primary: #007bff;
-  --as-primary-hover: #0056b3;
-  --as-success: #28a745;
-  --as-success-hover: #1e7e34;
-  --as-warning: #ffc107;
-  --as-warning-hover: #e0a800;
-  --as-danger: #dc3545;
-  --as-danger-hover: #a71d2a;
-  --as-info: #17a2b8;
-  --as-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
-  --as-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
-  --as-shadow-lg: 0 4px 16px rgba(0, 0, 0, 0.12);
+  --as-surface-hover: #eaf6ef;
+  --as-border: #d4eadc;
+  --as-border-hover: #b9d8c5;
+  --as-text-primary: #24553c;
+  --as-text-secondary: #6b8f7a;
+  --as-text-tertiary: #8aae98;
+  --as-primary: #39845b;
+  --as-primary-hover: #2f6f4c;
+  --as-pink: #fd9891;
+  --as-pink-hover: #f57d75;
+  --as-pink-soft: #ffe8e6;
+  --as-success: #39845b;
+  --as-success-hover: #2f6f4c;
+  --as-warning: #d89000;
+  --as-warning-hover: #c07e00;
+  --as-danger: #e23d3d;
+  --as-danger-hover: #c83232;
+  --as-info: #fd9891;
+  --as-shadow-sm: 0 1px 2px rgba(36, 85, 60, 0.05);
+  --as-shadow: 0 2px 8px rgba(36, 85, 60, 0.08);
+  --as-shadow-lg: 0 4px 16px rgba(36, 85, 60, 0.12);
   --as-radius-sm: 4px;
   --as-radius: 8px;
   --as-radius-lg: 12px;
@@ -74,7 +77,7 @@
 .api-settings-container.api-style-simple .search-input:focus {
   outline: none;
   border-color: var(--as-primary);
-  box-shadow: 0 0 0 3px rgba(0, 123, 255, 0.1);
+  box-shadow: 0 0 0 3px rgba(57, 132, 91, 0.16);
 }
 
 .api-settings-container.api-style-simple .search-input::placeholder {
@@ -116,29 +119,33 @@
 }
 
 .api-settings-container.api-style-simple .btn-import {
-  background: var(--as-info);
+  background: var(--as-pink);
+  color: #24553c;
 }
 
 .api-settings-container.api-style-simple .btn-import:hover {
-  background: #138496;
+  background: var(--as-pink-hover);
+  color: #24553c;
   transform: translateY(-1px);
 }
 
 .api-settings-container.api-style-simple .btn-export {
-  background: var(--as-warning);
+  background: #e3f4ea;
+  color: var(--as-primary);
 }
 
 .api-settings-container.api-style-simple .btn-export:hover {
-  background: var(--as-warning-hover);
+  background: #d4eadc;
+  color: var(--as-primary-hover);
   transform: translateY(-1px);
 }
 
 .api-settings-container.api-style-simple .btn-manage-groups {
-  background: #6c757d;
+  background: #6b8f7a;
 }
 
 .api-settings-container.api-style-simple .btn-manage-groups:hover {
-  background: #495057;
+  background: #24553c;
   transform: translateY(-1px);
 }
 
@@ -251,13 +258,14 @@
 }
 
 .api-settings-container.api-style-simple .provider-item.active {
-  border-left: 3px solid var(--as-primary);
-  background: linear-gradient(90deg, #f0f7ff 0%, var(--as-surface) 100%);
+  border-left: 3px solid var(--as-pink);
+  background: linear-gradient(90deg, var(--as-pink-soft) 0%, var(--as-surface) 100%);
+  color: var(--as-text-primary);
 }
 
 .api-settings-container.api-style-simple .provider-item.no-models {
   border-left: 3px solid var(--as-danger);
-  background: linear-gradient(90deg, #fff5f5 0%, var(--as-surface) 100%);
+  background: linear-gradient(90deg, var(--as-pink-soft) 0%, var(--as-surface) 100%);
 }
 
 .api-settings-container.api-style-simple .provider-item.no-models.active {
@@ -311,7 +319,7 @@
 
 .api-settings-container.api-style-simple .model-count-badge.zero-models {
   color: var(--as-danger);
-  background: #fff5f5;
+  background: var(--as-pink-soft);
 }
 
 .api-settings-container.api-style-simple .provider-item.active .model-count-badge {
@@ -327,7 +335,7 @@
 }
 
 .api-settings-container.api-style-simple .provider-item-status.active {
-  background: rgba(40, 167, 69, 0.1);
+  background: rgba(57, 132, 91, 0.12);
   color: var(--as-success);
 }
 
@@ -468,7 +476,7 @@
 .api-settings-container.api-style-simple .input-field:focus {
   outline: none;
   border-color: var(--as-primary);
-  box-shadow: 0 0 0 3px rgba(0, 123, 255, 0.1);
+  box-shadow: 0 0 0 3px rgba(57, 132, 91, 0.16);
 }
 
 .api-settings-container.api-style-simple .input-field[readonly] {
@@ -915,4 +923,98 @@
   .api-settings-container.api-style-simple .models-config {
     padding: 16px;
   }
+}
+
+/* ==================== 选择器 / 徽章 / 拖拽 / 批量 ==================== */
+.api-settings-container.api-style-simple .sidebar-tools-toggle {
+  border-color: var(--as-border);
+  background: var(--as-bg);
+  color: var(--as-text-primary);
+}
+
+.api-settings-container.api-style-simple .api-style-select-trigger {
+  background: var(--as-bg);
+  border-color: var(--as-border);
+  color: var(--as-text-primary);
+}
+
+.api-settings-container.api-style-simple .api-style-select-trigger:hover {
+  background: var(--as-surface-hover);
+  border-color: var(--as-pink);
+}
+
+.api-settings-container.api-style-simple .selected-api-style,
+.api-settings-container.api-style-simple .dropdown-arrow {
+  color: var(--as-text-secondary);
+}
+
+.api-settings-container.api-style-simple .api-style-dropdown {
+  background: var(--as-surface);
+  border-color: var(--as-border);
+  box-shadow: var(--as-shadow-lg);
+}
+
+.api-settings-container.api-style-simple .api-style-search-input {
+  background: var(--as-surface);
+  color: var(--as-text-primary);
+  border-bottom-color: var(--as-border);
+}
+
+.api-settings-container.api-style-simple .api-style-option {
+  border-bottom-color: var(--as-border);
+  color: var(--as-text-primary);
+}
+
+.api-settings-container.api-style-simple .api-style-option:hover {
+  background: var(--as-surface-hover);
+}
+
+.api-settings-container.api-style-simple .api-style-option.active {
+  background: var(--as-pink-soft);
+  color: var(--as-text-primary);
+}
+
+.api-settings-container.api-style-simple .rpm-badge {
+  background: var(--as-pink);
+  color: #24553c;
+}
+
+.api-settings-container.api-style-simple .provider-item.drag-over {
+  border-color: var(--as-primary);
+  background: #e3f4ea;
+  box-shadow: 0 0 0 1px rgba(57, 132, 91, 0.24);
+}
+
+.api-settings-container.api-style-simple .provider-drag-handle,
+.api-settings-container.api-style-simple .provider-move-btn {
+  background: var(--as-surface);
+  color: var(--as-text-secondary);
+  border-color: var(--as-border);
+}
+
+.api-settings-container.api-style-simple .provider-drag-handle:hover,
+.api-settings-container.api-style-simple .provider-move-btn:hover {
+  background: var(--as-pink-soft);
+  border-color: var(--as-pink);
+  color: var(--as-text-primary);
+}
+
+.api-settings-container.api-style-simple .added-model-card.batch-selected,
+.api-settings-container.api-style-simple .btn-model-batch-select.active {
+  background: var(--as-pink-soft);
+  border-color: var(--as-pink);
+  color: var(--as-text-primary);
+}
+
+.api-settings-container.api-style-simple .btn-fetch-provider-models {
+  background: var(--as-primary);
+  color: #fff;
+}
+
+.api-settings-container.api-style-simple .btn-fetch-provider-models:hover:not(:disabled) {
+  background: var(--as-primary-hover);
+}
+
+.api-settings-container.api-style-simple .btn-refresh-all {
+  color: var(--as-primary);
 }

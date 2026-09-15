@@ -45,14 +45,6 @@
               <input v-model.number="settings.defaultParams.top_p" type="number" step="0.1" min="0" max="1" class="input-field">
             </label>
           </section>
-          
-          <section class="settings-section">
-            <h3>全局调用频率</h3>
-            <label>
-              请求频率限制 (次/分钟):
-              <input v-model.number="settings.globalFrequency" type="number" class="input-field">
-            </label>
-          </section>
 
           <button @click="saveSettings" class="btn-save">保存设置</button>
           <div v-if="saveMessage" class="save-message">{{ saveMessage }}</div>
@@ -526,7 +518,6 @@ const MODEL_TYPE_TABS = [
 
 const settings = ref({
   defaultParams: { temperature: 0.7, max_tokens: 2000, top_p: 1 },
-  globalFrequency: 10,
   defaultModel: '',
   defaultPromptId: '',
   defaultStyle: '',
@@ -941,7 +932,16 @@ function removeQuickTranslation(index) {
 }
 
 async function saveSettings() {
-  await axios.put('/api/settings', settings.value)
+  await axios.put('/api/settings', {
+    defaultParams: settings.value.defaultParams,
+    defaultModel: settings.value.defaultModel,
+    defaultPromptId: settings.value.defaultPromptId,
+    defaultStyle: settings.value.defaultStyle,
+    translateDefaultModel: settings.value.translateDefaultModel,
+    translateDefaultPromptId: settings.value.translateDefaultPromptId,
+    translatePollingEnabled: settings.value.translatePollingEnabled,
+    quickTranslations: settings.value.quickTranslations
+  })
   saveMessage.value = '设置已保存'
   setTimeout(() => saveMessage.value = '', 2000)
 }
@@ -1055,7 +1055,7 @@ onMounted(async () => {
 }
 
 .settings-item.active {
-  background-color: #e3f2fd;
+  background-color: var(--accent-soft);
 }
 
 .settings-item-icon {
@@ -1150,7 +1150,7 @@ onMounted(async () => {
 
 .input-field:focus {
   outline: none;
-  border-color: #1976d2;
+  border-color: var(--accent);
   box-shadow: 0 0 0 2px rgba(25, 118, 210, 0.2);
 }
 
@@ -1161,7 +1161,7 @@ onMounted(async () => {
 }
 
 .btn-save {
-  background-color: #1976d2;
+  background-color: var(--accent);
   color: white;
   border: none;
   padding: 12px 24px;
@@ -1204,7 +1204,7 @@ onMounted(async () => {
 
 /* 迁移通知样式 */
 .migration-notice {
-  background-color: #e3f2fd;
+  background-color: var(--accent-soft);
   border: 1px solid #90caf9;
   border-radius: 8px;
   padding: 16px;
@@ -1213,13 +1213,13 @@ onMounted(async () => {
 
 .notice-text {
   font-weight: 600;
-  color: #1976d2;
+  color: var(--accent);
   margin: 0 0 8px 0;
   font-size: 14px;
 }
 
 .endpoint-info {
-  background-color: #f8f9fa;
+  background-color: var(--bg-soft);
   border-radius: 8px;
   padding: 16px;
   margin-top: 12px;
@@ -1295,7 +1295,7 @@ onMounted(async () => {
 .prompt-preview-box {
   margin-top: 20px;
   padding: 16px;
-  background: #f8f9fa;
+  background: var(--bg-soft);
   border-radius: 10px;
   border: 2px solid #e0e0e0;
 }
@@ -1303,7 +1303,7 @@ onMounted(async () => {
 .style-preview-box {
   margin-top: 20px;
   padding: 16px;
-  background: #f8f9fa;
+  background: var(--bg-soft);
   border-radius: 10px;
   border: 2px solid #e0e0e0;
 }
@@ -1327,7 +1327,7 @@ onMounted(async () => {
   gap: 5px;
   margin-bottom: 10px;
   padding-bottom: 10px;
-  border-bottom: 1px solid #dee2e6;
+  border-bottom: 1px solid var(--line);
 }
 
 .preview-icon {
@@ -1359,7 +1359,7 @@ onMounted(async () => {
   gap: 5px;
   margin-bottom: 10px;
   padding-bottom: 10px;
-  border-bottom: 1px solid #dee2e6;
+  border-bottom: 1px solid var(--line);
 }
 
 .prompt-preview-header strong {
@@ -1403,7 +1403,7 @@ onMounted(async () => {
 
 .btn-add {
   padding: 0.5rem 1rem;
-  background: #0891b2;
+  background: var(--accent);
   color: white;
   border: none;
   border-radius: 8px;
@@ -1412,7 +1412,7 @@ onMounted(async () => {
 }
 
 .btn-add:hover {
-  background: #0e7490;
+  background: var(--accent-strong);
 }
 
 .btn-delete-small {
@@ -1483,8 +1483,8 @@ onMounted(async () => {
   padding: 10px 14px;
   border: 1px solid #d0d7de;
   border-radius: 999px;
-  background: #f8fafc;
-  color: #334155;
+  background: var(--bg-soft);
+  color: var(--ink-soft);
   cursor: pointer;
   transition: all 0.2s;
   font-size: 13px;
@@ -1497,9 +1497,9 @@ onMounted(async () => {
 }
 
 .model-type-tab.active {
-  background: #1976d2;
+  background: var(--accent);
   color: #fff;
-  border-color: #1976d2;
+  border-color: var(--accent);
   box-shadow: 0 6px 16px rgba(25, 118, 210, 0.2);
 }
 
@@ -1523,7 +1523,7 @@ onMounted(async () => {
 
 .type-category {
   background: white;
-  border: 1px solid #dee2e6;
+  border: 1px solid var(--line);
   border-radius: 12px;
   padding: 20px;
   transition: all 0.2s;
@@ -1611,14 +1611,14 @@ onMounted(async () => {
   justify-content: space-between;
   align-items: center;
   padding: 8px 12px;
-  background: #f8f9fa;
-  border: 1px solid #e9ecef;
+  background: var(--bg-soft);
+  border: 1px solid var(--line);
   border-radius: 6px;
   transition: all 0.2s;
 }
 
 .category-model-item:hover {
-  background: #e9ecef;
+  background: var(--line);
 }
 
 .model-name {
@@ -1647,10 +1647,10 @@ onMounted(async () => {
 
 .model-type-empty {
   padding: 14px;
-  border: 1px dashed #cbd5e1;
+  border: 1px dashed var(--line);
   border-radius: 8px;
-  background: #f8fafc;
-  color: #64748b;
+  background: var(--bg-soft);
+  color: var(--muted);
   font-size: 13px;
   text-align: center;
 }
@@ -1661,7 +1661,7 @@ onMounted(async () => {
   gap: 10px;
   margin-top: 12px;
   padding-top: 12px;
-  border-top: 2px dashed #dee2e6;
+  border-top: 2px dashed var(--line);
   align-items: start;
 }
 

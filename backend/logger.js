@@ -32,6 +32,7 @@ const LogType = {
 
 // 实时日志监听器
 const logListeners = new Set();
+let logWriteChain = Promise.resolve();
 
 // 确保日志目录存在
 async function ensureLogsDir() {
@@ -163,7 +164,7 @@ function createLogEntry({
 
 // 写入日志（JSON格式）
 async function writeLog(logEntry) {
-  try {
+  const task = logWriteChain.then(async () => {
     await ensureLogsDir();
     const logFileName = getLogFileName();
     const logFilePath = path.join(LOGS_DIR, logFileName);
@@ -172,11 +173,16 @@ async function writeLog(logEntry) {
     const logLine = JSON.stringify(safeLogEntry) + '\n';
 
     await fs.appendFile(logFilePath, logLine, 'utf8');
-
-    // 通知实时监听器
     notifyListeners(safeLogEntry);
-
     return safeLogEntry;
+  });
+
+  logWriteChain = task.catch(error => {
+    // Keep the write queue alive after a failed append.
+  });
+
+  try {
+    return await task;
   } catch (error) {
     console.error('Error writing log:', error);
   }

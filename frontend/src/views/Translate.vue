@@ -257,7 +257,7 @@ async function loadModels() {
       if (provider.disabled) continue;
       const addedModels = provider.models || [];
       addedModels.forEach(m => {
-        if (m.visible) {
+        if (m.visible !== false) {
           models.push({
             value: `${provider.id}::${m.id}`,
             label: `${provider.name} - ${m.id}`
@@ -338,22 +338,47 @@ async function translate() {
       }
     ];
 
-    // 发送翻译请求
-    const response = await fetch('/api/chat', {
+    const requestBody = {
+      messages,
+      model: selectedModel.value,
+      params: { temperature: 0.3, max_tokens: 4000, top_p: 1 },
+      polling: translatePollingEnabled.value,
+      systemPrompt,
+      translateContext
+    };
+
+    let response = await fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        messages,
-        model: selectedModel.value,
-        params: { temperature: 0.3, max_tokens: 4000, top_p: 1 },
-        polling: translatePollingEnabled.value,
-        systemPrompt,
-        translateContext
-      })
+      body: JSON.stringify(requestBody)
     });
+
+    for (let retry = 0; retry < 3 && response.headers.get('content-type')?.includes('application/json'); retry++) {
+      const data = await response.json();
+      if (!data.delayed) {
+        const message = typeof data.error === 'string'
+          ? data.error
+          : (data.error?.message || data.message || '翻译失败');
+        throw new Error(message);
+      }
+      const waitMs = Math.max(1000, Number(data.delayTime || 1) * 1000);
+      await new Promise(resolve => setTimeout(resolve, waitMs));
+      response = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestBody)
+      });
+    }
 
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+    if (response.headers.get('content-type')?.includes('application/json')) {
+      const data = await response.json();
+      const message = typeof data.error === 'string'
+        ? data.error
+        : (data.error?.message || data.message || '供应商达到频率限制，请稍后重试');
+      throw new Error(message);
     }
 
     // 处理流式响应
@@ -363,9 +388,16 @@ async function translate() {
 
     while (true) {
       const { done, value } = await reader.read();
-      if (done) break;
-
-      buffer += decoder.decode(value, { stream: true });
+      if (done) {
+        buffer += decoder.decode();
+        if (buffer.trim()) {
+          if (!buffer.endsWith('\n')) buffer += '\n';
+        } else {
+          break;
+        }
+      } else {
+        buffer += decoder.decode(value, { stream: true });
+      }
       const lines = buffer.split('\n');
       buffer = lines.pop() || '';
 
@@ -377,7 +409,10 @@ async function translate() {
           try {
             const parsed = JSON.parse(data);
             if (parsed.error) {
-              throw new Error(parsed.error);
+              const message = typeof parsed.error === 'string'
+                ? parsed.error
+                : (parsed.error.message || '翻译失败');
+              throw new Error(message);
             }
 
             const content = parsed.choices?.[0]?.delta?.content || '';
@@ -385,10 +420,15 @@ async function translate() {
               outputText.value += content;
             }
           } catch (e) {
-            console.error('解析响应失败:', e);
+            if (e instanceof SyntaxError) {
+              console.error('解析响应失败:', e);
+              continue;
+            }
+            throw e;
           }
         }
       }
+      if (done) break;
     }
   } catch (error) {
     console.error('翻译失败:', error);
@@ -429,7 +469,7 @@ onMounted(() => {
   border-radius: 22px;
   padding: 1.5rem;
   border: 1px solid rgba(226, 232, 240, 0.95);
-  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.06);
+  box-shadow: 0 12px 28px rgba(23, 28, 25, 0.06);
 }
 
 .language-selector {
@@ -447,7 +487,7 @@ onMounted(() => {
   display: block;
   font-size: 14.5px;
   font-weight: 600;
-  color: #334155;
+  color: var(--ink-soft);
   margin-bottom: 0.5rem;
 }
 
@@ -462,15 +502,15 @@ onMounted(() => {
   border-radius: 16px;
   cursor: pointer;
   font-size: 20px;
-  color: #475569;
+  color: var(--muted);
   transition: transform 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
-  box-shadow: 0 6px 14px rgba(15, 23, 42, 0.05);
+  box-shadow: 0 6px 14px rgba(23, 28, 25, 0.05);
 }
 
 .btn-swap:hover {
-  color: #0f172a;
+  color: var(--ink);
   transform: translateY(-1px);
-  box-shadow: 0 8px 18px rgba(8, 145, 178, 0.08);
+  box-shadow: 0 8px 18px rgba(57, 132, 91, 0.08);
 }
 
 .translate-area {
@@ -489,7 +529,7 @@ onMounted(() => {
   border-radius: 18px;
   background: rgba(255,255,255,0.96);
   border: 1px solid rgba(226, 232, 240, 0.92);
-  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.04);
+  box-shadow: 0 8px 20px rgba(23, 28, 25, 0.04);
 }
 
 .section-header {
@@ -507,12 +547,12 @@ onMounted(() => {
 .section-title {
   font-size: 14.5px;
   font-weight: 600;
-  color: #334155;
+  color: var(--ink-soft);
 }
 
 .char-count {
   font-size: 12.5px;
-  color: #94a3b8;
+  color: var(--muted);
 }
 
 .text-input {
@@ -525,7 +565,7 @@ onMounted(() => {
   resize: vertical;
   min-height: 420px;
   background: #ffffff;
-  color: #334155;
+  color: var(--ink-soft);
   outline: none;
   box-sizing: border-box;
   flex: 1;
@@ -534,8 +574,8 @@ onMounted(() => {
 }
 
 .text-input:focus {
-  border-color: #0891b2;
-  box-shadow: 0 0 0 3px rgba(8, 145, 178, 0.1);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(57, 132, 91, 0.1);
 }
 
 .text-output {
@@ -545,8 +585,8 @@ onMounted(() => {
   border-radius: 16px;
   font-size: 14.5px;
   min-height: 420px;
-  background: #f8fafc;
-  color: #334155;
+  background: var(--bg-soft);
+  color: var(--ink-soft);
   white-space: pre-wrap;
   word-wrap: break-word;
   box-sizing: border-box;
@@ -563,8 +603,8 @@ onMounted(() => {
   border-radius: 16px;
   font-size: 14.5px;
   min-height: 420px;
-  background: #f8fafc;
-  color: #94a3b8;
+  background: var(--bg-soft);
+  color: var(--muted);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -574,18 +614,18 @@ onMounted(() => {
 
 .btn-copy-small {
   padding: 0.25rem 0.75rem;
-  background: #f1f5f9;
-  border: 1px solid #e2e8f0;
+  background: var(--bg-soft);
+  border: 1px solid var(--line);
   border-radius: 6px;
   cursor: pointer;
   font-size: 12px;
-  color: #64748b;
+  color: var(--muted);
   transition: all 0.2s;
 }
 
 .btn-copy-small:hover {
-  background: #e2e8f0;
-  color: #0891b2;
+  background: var(--line);
+  color: var(--accent);
 }
 
 .btn-clear-small {
@@ -624,7 +664,7 @@ onMounted(() => {
   display: block;
   font-size: 14.5px;
   font-weight: 600;
-  color: #334155;
+  color: var(--ink-soft);
   margin-bottom: 0.5rem;
 }
 
@@ -634,26 +674,26 @@ onMounted(() => {
 
 .btn-translate {
   padding: 0.82rem 2rem;
-  background: #0891b2;
+  background: var(--accent);
   color: white;
   border: none;
   border-radius: 999px;
   cursor: pointer;
   font-size: 16px;
   font-weight: 700;
-  letter-spacing: -0.01em;
+  letter-spacing: 0;
   transition: transform 0.18s ease, box-shadow 0.18s ease, opacity 0.18s ease, background-color 0.18s ease;
-  box-shadow: 0 8px 18px rgba(8, 145, 178, 0.18);
+  box-shadow: 0 8px 18px rgba(57, 132, 91, 0.18);
 }
 
 .btn-translate:hover:not(:disabled) {
-  background: #0e7490;
+  background: var(--accent-strong);
   transform: translateY(-1px);
-  box-shadow: 0 10px 22px rgba(8, 145, 178, 0.22);
+  box-shadow: 0 10px 22px rgba(57, 132, 91, 0.22);
 }
 
 .btn-translate:disabled {
-  background: #cbd5e1;
+  background: var(--line);
   cursor: not-allowed;
 }
 
@@ -665,7 +705,7 @@ onMounted(() => {
   display: block;
   font-size: 14.5px;
   font-weight: 600;
-  color: #334155;
+  color: var(--ink-soft);
   margin-bottom: 0.5rem;
 }
 
@@ -683,20 +723,20 @@ onMounted(() => {
 
 .btn-quick {
   padding: 0.5rem 1rem;
-  background: #f1f5f9;
-  border: 1px solid #e2e8f0;
+  background: var(--bg-soft);
+  border: 1px solid var(--line);
   border-radius: 8px;
   cursor: pointer;
   font-size: 14.5px;
-  color: #334155;
+  color: var(--ink-soft);
   font-weight: 500;
   transition: all 0.2s;
 }
 
 .btn-quick:hover {
-  background: #e2e8f0;
-  border-color: #0891b2;
-  color: #0891b2;
+  background: var(--line);
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 @media (max-width: 768px) {

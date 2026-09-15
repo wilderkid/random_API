@@ -1,13 +1,17 @@
 <template>
   <div v-if="authLoading" class="auth-loading">
-    <div class="auth-loading-text">正在检查登录状态...</div>
+    <div class="auth-pulse"></div>
+    <div class="auth-loading-text">正在检查登录状态</div>
   </div>
 
   <div v-else-if="!authenticated" class="login-page">
     <form class="login-panel" @submit.prevent="login">
-      <div class="login-brand">Random_API</div>
-      <h1>登录</h1>
-      <p>请输入管理员账号以继续访问控制台。</p>
+      <div class="login-brand">
+        <span class="brand-mark"></span>
+        Random_API
+      </div>
+      <h1>登录控制台</h1>
+      <p>用管理员账号进入聊天、翻译和模型中转。</p>
 
       <label>
         <span>用户名</span>
@@ -22,7 +26,7 @@
       <div v-if="loginError" class="login-error">{{ loginError }}</div>
 
       <button type="submit" :disabled="loginSubmitting">
-        {{ loginSubmitting ? '登录中...' : '登录' }}
+        {{ loginSubmitting ? '登录中...' : '进入' }}
       </button>
     </form>
   </div>
@@ -30,8 +34,11 @@
   <div v-else class="app">
     <nav class="navbar">
       <div class="nav-brand">
-        <span>Random_API</span>
-        <span v-if="currentUser" class="nav-user">{{ currentUser.displayName || currentUser.username }}</span>
+        <span class="brand-mark"></span>
+        <div class="brand-copy">
+          <strong>Random_API</strong>
+          <span v-if="currentUser" class="nav-user">{{ currentUser.displayName || currentUser.username }}</span>
+        </div>
       </div>
       <button
         class="nav-menu-toggle"
@@ -45,26 +52,44 @@
         <span></span>
       </button>
       <div :class="['nav-links', { 'is-open': mobileMenuOpen }]" @click="mobileMenuOpen = false">
-        <router-link to="/">聊天</router-link>
-        <router-link to="/translate">翻译</router-link>
-        <router-link to="/settings/apis">API 管理</router-link>
-        <router-link to="/settings/polling">轮询配置</router-link>
-        <router-link to="/settings/proxy-keys">代理密钥</router-link>
-        <router-link to="/settings/defaults">用户设置</router-link>
-        <router-link to="/prompts">提示词库</router-link>
-        <router-link to="/logs">日志</router-link>
-        <router-link to="/stats">统计</router-link>
-        <button class="nav-logout" type="button" @click="logout">退出</button>
+        <router-link to="/"><PhChatTeardrop :size="18" weight="bold" />聊天</router-link>
+        <router-link to="/translate"><PhTranslate :size="18" weight="bold" />翻译</router-link>
+        <router-link to="/settings/apis"><PhPlugs :size="18" weight="bold" />API 管理</router-link>
+        <router-link to="/settings/polling"><PhArrowsClockwise :size="18" weight="bold" />轮询配置</router-link>
+        <router-link to="/settings/proxy-keys"><PhKey :size="18" weight="bold" />代理密钥</router-link>
+        <router-link to="/settings/defaults"><PhGearSix :size="18" weight="bold" />用户设置</router-link>
+        <router-link to="/prompts"><PhBookOpenText :size="18" weight="bold" />提示词库</router-link>
+        <router-link to="/logs"><PhScroll :size="18" weight="bold" />日志</router-link>
+        <router-link to="/stats"><PhChartLine :size="18" weight="bold" />统计</router-link>
+        <button class="nav-logout" type="button" @click="logout">
+          <PhSignOut :size="18" weight="bold" />退出
+        </button>
       </div>
     </nav>
     <main class="main-content">
-      <router-view />
+      <router-view v-slot="{ Component, route }">
+        <transition name="page" mode="out-in">
+          <component :is="Component" :key="route.path" />
+        </transition>
+      </router-view>
     </main>
   </div>
 </template>
 
 <script setup>
 import { onMounted, ref } from 'vue'
+import {
+  PhArrowsClockwise,
+  PhBookOpenText,
+  PhChartLine,
+  PhChatTeardrop,
+  PhGearSix,
+  PhKey,
+  PhPlugs,
+  PhScroll,
+  PhSignOut,
+  PhTranslate
+} from '@phosphor-icons/vue'
 
 const mobileMenuOpen = ref(false)
 const authLoading = ref(true)
@@ -146,74 +171,106 @@ onMounted(checkAuth)
   align-items: center;
   justify-content: center;
   padding: 1rem;
+  background: var(--bg);
+  color: var(--ink);
+}
+
+.auth-pulse {
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  background: var(--accent);
+  margin-bottom: 12px;
+  animation: pulse 1s var(--ease) infinite;
+}
+
+@keyframes pulse {
+  50% { transform: scale(0.7); opacity: 0.6; }
+}
+
+.auth-loading {
+  flex-direction: column;
 }
 
 .auth-loading-text {
-  color: #475569;
-  font-size: 0.95rem;
+  color: var(--muted);
+  font-size: 0.88rem;
 }
 
 .login-panel {
-  width: min(100%, 380px);
-  background: rgba(255, 255, 255, 0.96);
-  border: 1px solid rgba(203, 213, 225, 0.9);
+  width: min(100%, 360px);
+  background: var(--surface);
+  border: 1px solid transparent;
   border-radius: 8px;
-  box-shadow: 0 16px 36px rgba(15, 23, 42, 0.1);
-  padding: 1.35rem;
+  box-shadow: var(--shadow);
+  padding: 22px;
   display: flex;
   flex-direction: column;
-  gap: 0.9rem;
+  gap: 0.85rem;
+  color: var(--ink);
 }
 
 .login-brand {
-  color: #0891b2;
-  font-size: 0.92rem;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink);
+  font-size: 0.84rem;
   font-weight: 700;
 }
 
+.brand-mark {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  background: var(--accent);
+  display: inline-block;
+}
+
 .login-panel h1 {
-  font-size: 1.45rem;
-  color: #0f172a;
+  font-size: 1.35rem;
+  color: var(--ink);
+  letter-spacing: 0;
 }
 
 .login-panel p {
-  color: #64748b;
-  font-size: 0.92rem;
+  color: var(--muted);
+  font-size: 0.88rem;
   line-height: 1.5;
 }
 
 .login-panel label {
   display: flex;
   flex-direction: column;
-  gap: 0.4rem;
-  color: #334155;
-  font-size: 0.9rem;
+  gap: 0.35rem;
+  color: var(--ink-soft);
+  font-size: 0.82rem;
   font-weight: 600;
 }
 
 .login-panel input {
-  height: 42px;
-  border: 1px solid #cbd5e1;
+  height: 38px;
+  border: 1px solid var(--line);
   border-radius: 6px;
-  padding: 0 0.75rem;
+  padding: 0 0.7rem;
   font: inherit;
-  color: #0f172a;
-  background: #fff;
+  color: var(--ink);
+  background: var(--surface);
   outline: none;
 }
 
 .login-panel input:focus {
-  border-color: #0891b2;
-  box-shadow: 0 0 0 3px rgba(8, 145, 178, 0.12);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(57, 132, 91, 0.16);
 }
 
 .login-error {
-  color: #b91c1c;
-  background: #fef2f2;
-  border: 1px solid #fecaca;
+  color: var(--bad);
+  background: #fff1f1;
+  border: 1px solid #ffd0d0;
   border-radius: 6px;
-  padding: 0.65rem 0.75rem;
-  font-size: 0.88rem;
+  padding: 0.55rem 0.7rem;
+  font-size: 0.84rem;
 }
 
 .login-panel button,
@@ -225,9 +282,9 @@ onMounted(checkAuth)
 }
 
 .login-panel button {
-  height: 42px;
+  height: 38px;
   border-radius: 6px;
-  background: #0891b2;
+  background: var(--accent);
   color: #fff;
 }
 
@@ -238,26 +295,46 @@ onMounted(checkAuth)
 
 .nav-brand {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 0.6rem;
 }
 
+.brand-copy {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.brand-copy strong {
+  font-size: 0.92rem;
+  color: var(--nav-text);
+  font-weight: 750;
+}
+
 .nav-user {
-  color: #64748b;
-  font-size: 0.78rem;
+  color: var(--nav-dim);
+  font-size: 0.72rem;
   font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .nav-logout {
-  color: #5b6b80;
-  background: rgba(226, 232, 240, 0.6);
-  padding: 0.48rem 0.86rem;
-  border-radius: 999px;
-  font-size: 0.9rem;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--nav-dim);
+  background: transparent;
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 13px;
+  width: 100%;
+  text-align: left;
 }
 
 .nav-logout:hover {
-  color: #0f172a;
-  background: rgba(226, 232, 240, 0.9);
+  color: var(--ink);
+  background: var(--accent-soft);
 }
 </style>

@@ -1,0 +1,121 @@
+/* Equal Ask visual system: mint green + peach pink, fresh and compact */
+:root {
+  --bg: #f3faf6;
+  --bg-soft: #eaf6ef;
+  --surface: #ffffff;
+  --ink: #24553c;
+  --ink-soft: #2d6849;
+  --muted: #6b8f7a;
+  --line: #d4eadc;
+  --line-strong: #b9d8c5;
+  --accent: #39845b;
+  --accent-strong: #2f6f4c;
+  --accent-soft: #e3f4ea;
+  --accent-ink: #ffffff;
+  --pink: #fd9891;
+  --pink-strong: #f57d75;
+  --pink-soft: #ffe8e6;
+  --good: #39845b;
+  --warn: #d89000;
+  --bad: #e23d3d;
+  --shadow: 0 8px 24px rgba(36, 85, 60, 0.08);
+  --shadow-soft: 0 2px 8px rgba(36, 85, 60, 0.05);
+  --radius: 8px;
+  --radius-sm: 6px;
+  --radius-pill: 999px;
+  --nav: #ffffff;
+  --nav-text: #24553c;
+  --nav-dim: #6b8f7a;
+  --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+  --control-h: 34px;
+  --font: "Plus Jakarta Sans Variable", "Plus Jakarta Sans", "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body, #app {
+  min-height: 100dvh;
+}
+
+html {
+  color-scheme: light;
+}
+
+body {
+  font-family: var(--font);
+  background: var(--bg);
+  color: var(--ink);
+  min-height: 100dvh;
+  letter-spacing: 0;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  font-variant-numeric: tabular-nums;
+}
+
+button, input, select, textarea {
+  font-family: inherit;
+}
+
+::selection {
+  background: var(--pink);
+  color: var(--ink);
+}
+
+::-moz-selection {
+  background: var(--pink);
+  color: var(--ink);
+}
+
+button,
+.btn-new,
+.btn-send,
+.btn-save,
+.btn-test,
+.btn-create,
+.btn-add,
+.apply-btn,
+.refresh-btn,
+.time-range-btn,
+.btn-quick {
+  transition: transform 0.16s var(--ease), background-color 0.16s var(--ease), box-shadow 0.16s var(--ease), border-color 0.16s var(--ease), color 0.16s var(--ease);
+}
+
+button:active:not(:disabled),
+.btn-new:active,
+.btn-send:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+.input-field,
+.search-input,
+.input-box,
+select,
+input[type="text"],
+input[type="number"],
+input[type="password"],
+input[type="date"],
+textarea {
+  outline: none;
+}
+
+.input-field:focus,
+.search-input:focus,
+.input-box:focus,
+input:focus,
+select:focus,
+textarea:focus {
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 3px rgba(57, 132, 91, 0.16);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
+}

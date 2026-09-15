@@ -10,6 +10,8 @@ import Logs from './views/Logs.vue'
 import PromptLibrary from './views/PromptLibrary.vue'
 import Translate from './views/Translate.vue'
 import StatsDashboard from './views/StatsDashboard.vue'
+import '@fontsource-variable/plus-jakarta-sans'
+import './theme.css'
 import './style.css'
 
 const router = createRouter({

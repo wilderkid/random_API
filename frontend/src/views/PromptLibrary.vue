@@ -510,7 +510,7 @@ export default {
   padding: 1rem;
   display: flex;
   flex-direction: column;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--line);
 }
 
 .sidebar-header {
@@ -520,21 +520,21 @@ export default {
 .search-input {
   width: 100%;
   padding: 0.5rem;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--line);
   border-radius: 8px;
   font-size: 14px;
   margin-bottom: 0.5rem;
   background: white;
-  color: #334155;
+  color: var(--ink-soft);
   outline: none;
 }
 
 .search-input:focus {
-  border-color: #0891b2;
+  border-color: var(--accent);
 }
 
 .search-input::placeholder {
-  color: #94a3b8;
+  color: var(--muted);
 }
 
 .button-group {
@@ -555,21 +555,21 @@ export default {
 }
 
 .btn-add {
-  background: #0891b2;
+  background: var(--accent);
   color: white;
 }
 
 .btn-add:hover {
-  background: #0e7490;
+  background: var(--accent-strong);
 }
 
 .btn-manage-groups {
-  background: #f1f5f9;
-  color: #334155;
+  background: var(--bg-soft);
+  color: var(--ink-soft);
 }
 
 .btn-manage-groups:hover {
-  background: #e2e8f0;
+  background: var(--line);
 }
 
 .filter-section {
@@ -579,7 +579,7 @@ export default {
 .filter-section label {
   display: block;
   font-size: 12px;
-  color: #64748b;
+  color: var(--muted);
   margin-bottom: 0.25rem;
   font-weight: 500;
 }
@@ -587,16 +587,16 @@ export default {
 .filter-select {
   width: 100%;
   padding: 0.5rem;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--line);
   border-radius: 8px;
   font-size: 14px;
   background: white;
-  color: #334155;
+  color: var(--ink-soft);
   outline: none;
 }
 
 .filter-select:focus {
-  border-color: #0891b2;
+  border-color: var(--accent);
 }
 
 .tags-filter {
@@ -607,29 +607,29 @@ export default {
 
 .tag-chip {
   padding: 0.25rem 0.75rem;
-  background: #f1f5f9;
-  border: 1px solid #e2e8f0;
+  background: var(--bg-soft);
+  border: 1px solid var(--line);
   border-radius: 6px;
   font-size: 12px;
   cursor: pointer;
   transition: all 0.2s;
-  color: #334155;
+  color: var(--ink-soft);
 }
 
 .tag-chip.active {
-  background: #0891b2;
+  background: var(--accent);
   color: white;
-  border-color: #0891b2;
+  border-color: var(--accent);
 }
 
 .tag-chip:hover {
-  background: #e2e8f0;
-  border-color: #cbd5e1;
+  background: var(--line);
+  border-color: var(--line);
 }
 
 .tag-chip.active:hover {
-  background: #0e7490;
-  border-color: #0e7490;
+  background: var(--accent-strong);
+  border-color: var(--accent-strong);
 }
 
 .prompts-list {
@@ -646,30 +646,30 @@ export default {
   align-items: center;
   gap: 0.5rem;
   padding: 0.5rem;
-  background: #f8fafc;
+  background: var(--bg-soft);
   border-radius: 8px;
   cursor: pointer;
   transition: all 0.2s;
 }
 
 .group-header:hover {
-  background: #f1f5f9;
+  background: var(--bg-soft);
 }
 
 .group-expand-icon {
   font-size: 12px;
-  color: #64748b;
+  color: var(--muted);
 }
 
 .group-name {
   flex: 1;
   font-weight: 600;
-  color: #334155;
+  color: var(--ink-soft);
   font-size: 14px;
 }
 
 .group-count {
-  background: #0891b2;
+  background: var(--accent);
   color: white;
   padding: 0.125rem 0.5rem;
   border-radius: 12px;
@@ -688,16 +688,16 @@ export default {
   border-radius: 8px;
   cursor: pointer;
   transition: all 0.2s;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--line);
 }
 
 .prompt-item:hover {
-  border-color: #0891b2;
-  background: #f8fafc;
+  border-color: var(--accent);
+  background: var(--bg-soft);
 }
 
 .prompt-item.active {
-  border-color: #0891b2;
+  border-color: var(--accent);
   background: #ecfeff;
 }
 
@@ -710,7 +710,7 @@ export default {
 
 .prompt-item-name {
   font-weight: 600;
-  color: #334155;
+  color: var(--ink-soft);
   font-size: 14px;
 }
 
@@ -721,15 +721,15 @@ export default {
 
 .tag-mini {
   padding: 0.125rem 0.5rem;
-  background: #f1f5f9;
+  background: var(--bg-soft);
   border-radius: 6px;
   font-size: 10px;
-  color: #64748b;
+  color: var(--muted);
 }
 
 .prompt-item-desc {
   font-size: 12px;
-  color: #64748b;
+  color: var(--muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -738,13 +738,13 @@ export default {
 .empty-state {
   text-align: center;
   padding: 2rem 1rem;
-  color: #94a3b8;
+  color: var(--muted);
 }
 
 .btn-add-empty {
   margin-top: 0.5rem;
   padding: 0.5rem 1rem;
-  background: #0891b2;
+  background: var(--accent);
   color: white;
   border: none;
   border-radius: 8px;
@@ -753,7 +753,7 @@ export default {
 }
 
 .btn-add-empty:hover {
-  background: #0e7490;
+  background: var(--accent-strong);
 }
 
 .prompt-details-panel {
@@ -762,7 +762,7 @@ export default {
   border-radius: 12px;
   padding: 1.5rem;
   overflow-y: auto;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--line);
 }
 
 .details-header {
@@ -771,12 +771,12 @@ export default {
   align-items: center;
   margin-bottom: 1.5rem;
   padding-bottom: 1rem;
-  border-bottom: 1px solid #e2e8f0;
+  border-bottom: 1px solid var(--line);
 }
 
 .details-header h2 {
   font-size: 1.5rem;
-  color: #334155;
+  color: var(--ink-soft);
   margin: 0;
   font-weight: 600;
 }
@@ -797,12 +797,12 @@ export default {
 }
 
 .btn-edit {
-  background: #0891b2;
+  background: var(--accent);
   color: white;
 }
 
 .btn-edit:hover {
-  background: #0e7490;
+  background: var(--accent-strong);
 }
 
 .btn-save {
@@ -815,12 +815,12 @@ export default {
 }
 
 .btn-cancel {
-  background: #f1f5f9;
-  color: #334155;
+  background: var(--bg-soft);
+  color: var(--ink-soft);
 }
 
 .btn-cancel:hover {
-  background: #e2e8f0;
+  background: var(--line);
 }
 
 .btn-delete-prompt {
@@ -839,7 +839,7 @@ export default {
 .config-section label {
   display: block;
   font-weight: 600;
-  color: #334155;
+  color: var(--ink-soft);
   margin-bottom: 0.5rem;
   font-size: 14px;
 }
@@ -847,31 +847,31 @@ export default {
 .char-count {
   float: right;
   font-weight: normal;
-  color: #94a3b8;
+  color: var(--muted);
   font-size: 12px;
 }
 
 .input-field, .textarea-field {
   width: 100%;
   padding: 0.5rem;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--line);
   border-radius: 8px;
   font-size: 14px;
   transition: all 0.2s;
   font-family: inherit;
   background: white;
-  color: #334155;
+  color: var(--ink-soft);
 }
 
 .input-field:focus, .textarea-field:focus {
   outline: none;
-  border-color: #0891b2;
+  border-color: var(--accent);
 }
 
 .input-field:read-only, .textarea-field:read-only {
-  background: #f8fafc;
+  background: var(--bg-soft);
   cursor: not-allowed;
-  color: #64748b;
+  color: var(--muted);
 }
 
 .textarea-field {
@@ -880,7 +880,7 @@ export default {
 }
 
 .tags-input-container {
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--line);
   border-radius: 8px;
   padding: 0.75rem;
   background: white;
@@ -895,7 +895,7 @@ export default {
 
 .tag-chip {
   padding: 0.25rem 0.75rem;
-  background: #0891b2;
+  background: var(--accent);
   color: white;
   border-radius: 6px;
   font-size: 12px;
@@ -929,7 +929,7 @@ export default {
 
 .btn-add-tag {
   padding: 0.5rem 1rem;
-  background: #0891b2;
+  background: var(--accent);
   color: white;
   border: none;
   border-radius: 8px;
@@ -938,13 +938,13 @@ export default {
 }
 
 .btn-add-tag:hover {
-  background: #0e7490;
+  background: var(--accent-strong);
 }
 
 .meta-info {
   margin-top: 1.5rem;
   padding-top: 1rem;
-  border-top: 1px solid #e2e8f0;
+  border-top: 1px solid var(--line);
 }
 
 .meta-item {
@@ -953,11 +953,11 @@ export default {
 }
 
 .meta-label {
-  color: #64748b;
+  color: var(--muted);
 }
 
 .meta-value {
-  color: #334155;
+  color: var(--ink-soft);
 }
 
 .empty-details {
@@ -965,7 +965,7 @@ export default {
   align-items: center;
   justify-content: center;
   height: 100%;
-  color: #94a3b8;
+  color: var(--muted);
   font-size: 16px;
 }
 
@@ -990,7 +990,7 @@ export default {
   max-width: 600px;
   max-height: 80vh;
   overflow-y: auto;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--line);
 }
 
 .modal-header {
@@ -999,13 +999,13 @@ export default {
   align-items: center;
   margin-bottom: 1rem;
   padding-bottom: 1rem;
-  border-bottom: 1px solid #e2e8f0;
+  border-bottom: 1px solid var(--line);
 }
 
 .modal-header h3 {
   margin: 0;
   font-size: 1.25rem;
-  color: #334155;
+  color: var(--ink-soft);
   font-weight: 600;
 }
 
@@ -1014,13 +1014,13 @@ export default {
   border: none;
   font-size: 24px;
   cursor: pointer;
-  color: #94a3b8;
+  color: var(--muted);
   padding: 0;
   line-height: 1;
 }
 
 .btn-close:hover {
-  color: #64748b;
+  color: var(--muted);
 }
 
 .group-list {

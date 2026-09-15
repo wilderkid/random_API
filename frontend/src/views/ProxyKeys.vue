@@ -259,23 +259,6 @@
               </div>
             </div>
             
-            <!-- 速率限制 -->
-            <div class="config-section">
-              <h4>速率限制</h4>
-              <div class="rate-limit-grid">
-                <div class="form-group">
-                  <label>每分钟请求数</label>
-                  <input v-model.number="selectedKey.rateLimit.requestsPerMinute" 
-                         type="number" min="1" max="1000">
-                </div>
-                <div class="form-group">
-                  <label>每小时请求数</label>
-                  <input v-model.number="selectedKey.rateLimit.requestsPerHour" 
-                         type="number" min="1" max="10000">
-                </div>
-              </div>
-            </div>
-            
             <!-- 使用统计 -->
             <div class="config-section">
               <h4>使用统计</h4>
@@ -364,7 +347,11 @@ function normalizeClientTag(tag) {
 
 const proxyOrigin = computed(() => {
   if (typeof window === 'undefined') return 'http://127.0.0.1:3000'
-  return window.location.origin
+  const origin = window.location.origin
+  if (origin.includes(':5173')) {
+    return origin.replace(':5173', ':3000')
+  }
+  return origin
 })
 
 const openaiConfigSnippet = computed(() => {
@@ -955,7 +942,7 @@ onMounted(async () => {
 }
 
 .btn-create {
-  background-color: #007bff;
+  background-color: var(--accent);
   color: white;
   border: none;
   padding: 8px 16px;
@@ -965,7 +952,7 @@ onMounted(async () => {
 }
 
 .btn-create:hover {
-  background-color: #0056b3;
+  background-color: var(--accent-strong);
 }
 
 .keys-list {
@@ -980,18 +967,18 @@ onMounted(async () => {
   align-items: center;
   padding: 15px;
   margin-bottom: 8px;
-  background-color: #f8f9fa;
+  background-color: var(--bg-soft);
   border-radius: 8px;
   cursor: pointer;
   transition: all 0.2s;
 }
 
 .key-item:hover {
-  background-color: #e9ecef;
+  background-color: var(--line);
 }
 
 .key-item.active {
-  background-color: #e3f2fd;
+  background-color: var(--accent-soft);
   border: 1px solid #2196f3;
 }
 
@@ -1055,7 +1042,7 @@ onMounted(async () => {
 }
 
 .btn-action:hover {
-  background-color: #e9ecef;
+  background-color: var(--line);
 }
 
 .btn-action.btn-danger:hover {
@@ -1098,7 +1085,7 @@ onMounted(async () => {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  background-color: #f8f9fa;
+  background-color: var(--bg-soft);
 }
 
 .config-header h3 {
@@ -1151,7 +1138,7 @@ onMounted(async () => {
 .config-section {
   margin-bottom: 32px;
   padding-bottom: 24px;
-  border-bottom: 1px solid #e9ecef;
+  border-bottom: 1px solid var(--line);
 }
 
 .config-section:last-child {
@@ -1191,7 +1178,7 @@ onMounted(async () => {
 
 .form-group input:focus, .form-group textarea:focus, .form-group select:focus {
   outline: none;
-  border-color: #007bff;
+  border-color: var(--accent);
   box-shadow: 0 0 0 2px rgba(0, 123, 255, 0.25);
 }
 
@@ -1222,7 +1209,7 @@ onMounted(async () => {
 .key-input {
   flex: 1;
   font-family: monospace;
-  background-color: #f8f9fa;
+  background-color: var(--bg-soft);
 }
 
 .btn-copy {
@@ -1248,7 +1235,7 @@ onMounted(async () => {
 .snippet-card {
   border: 1px solid #e0e0e0;
   border-radius: 6px;
-  background: #f8f9fa;
+  background: var(--bg-soft);
   overflow: hidden;
 }
 
@@ -1299,7 +1286,7 @@ onMounted(async () => {
 
 .search-input-small:focus {
   outline: none;
-  border-color: #007bff;
+  border-color: var(--accent);
   box-shadow: 0 0 0 2px rgba(0, 123, 255, 0.25);
 }
 
@@ -1358,7 +1345,7 @@ onMounted(async () => {
   text-align: center;
   color: #999;
   font-size: 14px;
-  background-color: #f8f9fa;
+  background-color: var(--bg-soft);
   border-radius: 4px;
 }
 
@@ -1396,7 +1383,7 @@ onMounted(async () => {
 .stat-item {
   text-align: center;
   padding: 16px;
-  background-color: #f8f9fa;
+  background-color: var(--bg-soft);
   border-radius: 8px;
 }
 
@@ -1491,12 +1478,12 @@ onMounted(async () => {
 }
 
 .btn-confirm {
-  background-color: #007bff;
+  background-color: var(--accent);
   color: white;
 }
 
 .btn-confirm:hover:not(:disabled) {
-  background-color: #0056b3;
+  background-color: var(--accent-strong);
 }
 
 .btn-confirm:disabled {

@@ -3,7 +3,7 @@
     <aside :class="['sidebar', { 'mobile-open': mobileSidebarOpen }]">
       <div class="sidebar-header">
         <input v-model="searchQuery" placeholder="搜索对话..." class="search-input">
-        <button @click="createNewConversation" class="btn-new">新建对话</button>
+        <button @click="createNewConversation" class="btn-new" :disabled="isSending">新建对话</button>
       </div>
       <div class="conversation-list">
         <div v-for="conv in filteredConversations" :key="conv.id"
@@ -104,8 +104,8 @@
         </div>
       </div>
       
-      <div class="messages" ref="messagesContainer" @scroll="handleMessagesScroll">
-        <div v-for="(msg, i) in messages" :key="i" :class="['message', msg.role, { 'error': msg.error, 'streaming': msg.streaming, 'editing': editingMessageIndex === i }]">
+      <div class="messages" ref="messagesContainer" @scroll="handleMessagesScroll" @click="handleGeneratedImageClick">
+        <div v-for="(msg, i) in messages" :key="msg.id || i" :class="['message', msg.role, { 'error': msg.error, 'streaming': msg.streaming, 'editing': editingMessageIndex === i }]">
           <div v-if="msg.images && msg.images.length > 0" class="message-images">
             <img v-for="(img, idx) in msg.images" :key="idx"
                  :src="img.dataUrl"
@@ -181,9 +181,9 @@
         </button>
 
         <div :class="['mobile-tools-panel', { 'is-open': mobileToolsOpen }]">
-          <div v-if="uploadedImages.length > 0 || currentModelType === 'image'" class="image-mode-hint">
+          <div v-if="uploadedImages.length > 0 || isImageChatModel" class="image-mode-hint">
             <span class="hint-icon">🖼️</span>
-            <span v-if="currentModelType === 'image'">当前是生图模型：将根据输入文本生成图片，上传图片通常不会参与生成。</span>
+            <span v-if="isImageChatModel">当前是生图模型：将根据输入文本生成图片，上传图片通常不会参与生成。</span>
             <span v-else>当前已附带图片：这些图片将作为多模态输入发送给模型进行识别或分析。</span>
           </div>
           
@@ -202,7 +202,6 @@
               <span>轮询模式</span>
               <span v-if="!canEnablePolling" class="polling-disabled-hint">（当前模型无重复提供商）</span>
             </label>
-            <input v-model.number="frequency" type="number" placeholder="频率限制" class="input-freq">
           </div>
           
           <!-- 图片预览区域 -->
@@ -249,7 +248,7 @@
         <h3>参数配置</h3>
 
         <!-- 文本模型参数 -->
-        <div v-if="currentModelType === 'text'" class="text-params">
+        <div v-if="!isImageChatModel" class="text-params">
           <label>系统提示词:
             <SearchableSelect
               v-model="selectedPromptId"
@@ -272,7 +271,7 @@
         </div>
 
         <!-- 生图模型参数 -->
-        <div v-if="currentModelType === 'image'" class="image-params">
+        <div v-if="isImageChatModel" class="image-params">
           <label>图片尺寸:
             <SearchableSelect
               v-model="imageParams.size"
@@ -448,7 +447,7 @@
   flex: 1;
   min-width: 0;
   font-size: 0.76rem;
-  color: #64748b;
+  color: var(--muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -456,7 +455,7 @@
 
 .conversation-time {
   font-size: 0.72rem;
-  color: #94a3b8;
+  color: var(--muted);
   flex-shrink: 0;
 }
 
@@ -525,12 +524,12 @@
   cursor: pointer;
   transition: all 0.22s ease;
   user-select: none;
-  box-shadow: 0 10px 20px rgba(15, 23, 42, 0.05);
+  box-shadow: 0 10px 20px rgba(23, 28, 25, 0.05);
 }
 
 .style-select-trigger:hover {
-  border-color: #0891b2;
-  box-shadow: 0 0 0 4px rgba(8, 145, 178, 0.1), 0 16px 30px rgba(8, 145, 178, 0.1);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 4px rgba(57, 132, 91, 0.1), 0 16px 30px rgba(57, 132, 91, 0.1);
   transform: translateY(-1px);
 }
 
@@ -559,7 +558,7 @@
   backdrop-filter: blur(18px);
   border: 1px solid rgba(226, 232, 240, 0.95);
   border-radius: 18px;
-  box-shadow: 0 26px 54px rgba(15, 23, 42, 0.16);
+  box-shadow: 0 26px 54px rgba(23, 28, 25, 0.16);
   z-index: 1000;
   max-height: 400px;
   overflow-y: auto;
@@ -569,14 +568,14 @@
   width: 100%;
   padding: 8px 10px;
   border: none;
-  border-bottom: 1px solid #dee2e6;
+  border-bottom: 1px solid var(--line);
   outline: none;
   font-size: 13px;
   border-radius: 6px 6px 0 0;
 }
 
 .style-search-input:focus {
-  border-bottom-color: #0891b2;
+  border-bottom-color: var(--accent);
 }
 
 .style-options {
@@ -593,7 +592,7 @@
   padding: 10px 14px;
   cursor: pointer;
   transition: background-color 0.15s;
-  border-bottom: 1px solid #f8f9fa;
+  border-bottom: 1px solid var(--bg-soft);
 }
 
 .style-option:last-child {
@@ -601,12 +600,12 @@
 }
 
 .style-option:hover {
-  background-color: #f8f9fa;
+  background-color: var(--bg-soft);
 }
 
 .style-option.active {
-  background-color: #e0f2fe;
-  color: #0891b2;
+  background-color: var(--accent-soft);
+  color: var(--accent);
   font-weight: 500;
 }
 
@@ -662,12 +661,12 @@
   cursor: pointer;
   transition: all 0.22s ease;
   user-select: none;
-  box-shadow: 0 10px 20px rgba(15, 23, 42, 0.05);
+  box-shadow: 0 10px 20px rgba(23, 28, 25, 0.05);
 }
 
 .model-select-trigger:hover {
-  border-color: #0891b2;
-  box-shadow: 0 0 0 4px rgba(8, 145, 178, 0.1), 0 16px 30px rgba(8, 145, 178, 0.1);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 4px rgba(57, 132, 91, 0.1), 0 16px 30px rgba(57, 132, 91, 0.1);
   transform: translateY(-1px);
 }
 
@@ -696,7 +695,7 @@
   backdrop-filter: blur(18px);
   border: 1px solid rgba(226, 232, 240, 0.95);
   border-radius: 18px;
-  box-shadow: 0 26px 54px rgba(15, 23, 42, 0.16);
+  box-shadow: 0 26px 54px rgba(23, 28, 25, 0.16);
   z-index: 1000;
   max-height: 400px;
   display: flex;
@@ -706,14 +705,14 @@
 .model-search-input {
   padding: 8px 10px;
   border: none;
-  border-bottom: 1px solid #dee2e6;
+  border-bottom: 1px solid var(--line);
   outline: none;
   font-size: 13px;
   border-radius: 6px 6px 0 0;
 }
 
 .model-search-input:focus {
-  border-bottom-color: #007bff;
+  border-bottom-color: var(--accent);
 }
 
 .model-options {
@@ -726,7 +725,7 @@
   cursor: pointer;
   transition: all 0.16s ease;
   font-size: 13px;
-  color: #334155;
+  color: var(--ink-soft);
   border-bottom: 1px solid rgba(241, 245, 249, 0.95);
 }
 
@@ -740,7 +739,7 @@
 
 .model-option.active {
   background: linear-gradient(90deg, rgba(224, 242, 254, 0.95) 0%, rgba(240, 249, 255, 0.95) 100%);
-  color: #0f766e;
+  color: var(--accent-strong);
   font-weight: 600;
 }
 
@@ -756,7 +755,7 @@
   display: flex;
   gap: 10px;
   padding: 10px;
-  background-color: #f8f9fa;
+  background-color: var(--bg-soft);
   border-radius: 6px;
   margin-bottom: 10px;
   flex-wrap: wrap;
@@ -775,7 +774,7 @@
   height: 90px;
   object-fit: cover;
   border-radius: 6px;
-  border: 2px solid #dee2e6;
+  border: 2px solid var(--line);
 }
 
 .btn-remove-image {
@@ -822,7 +821,7 @@
   max-width: 140px;
   max-height: 140px;
   border-radius: 6px;
-  border: 1px solid #dee2e6;
+  border: 1px solid var(--line);
   cursor: pointer;
   transition: transform 0.2s, box-shadow 0.2s;
   object-fit: cover;
@@ -884,9 +883,9 @@
 }
 
 .btn-tool-primary {
-  background: rgba(8, 145, 178, 0.12);
-  border-color: rgba(8, 145, 178, 0.3);
-  color: #0f766e;
+  background: rgba(57, 132, 91, 0.12);
+  border-color: rgba(57, 132, 91, 0.3);
+  color: var(--accent-strong);
 }
 
 .code-block-wrapper {
@@ -895,7 +894,7 @@
   border: 1px solid rgba(203, 213, 225, 0.95);
   border-radius: 14px;
   overflow: hidden;
-  background: #f8fafc;
+  background: var(--bg-soft);
 }
 
 .code-block-toolbar {
@@ -911,7 +910,7 @@
 .code-block-lang {
   font-size: 0.75rem;
   font-weight: 700;
-  color: #64748b;
+  color: var(--muted);
   text-transform: lowercase;
 }
 
@@ -929,7 +928,7 @@
 
 .code-copy-btn:hover {
   background: #ffffff;
-  color: #0f172a;
+  color: var(--ink);
 }
 
 .btn-stop {
@@ -956,14 +955,14 @@
   bottom: 9.5rem;
   z-index: 10;
   padding: 0.65rem 1rem;
-  background: rgba(15, 23, 42, 0.94);
+  background: rgba(23, 28, 25, 0.94);
   color: #fff;
   border: none;
   border-radius: 999px;
   cursor: pointer;
   font-size: 0.85rem;
   font-weight: 700;
-  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.18);
+  box-shadow: 0 12px 28px rgba(23, 28, 25, 0.18);
   transition: all 0.2s ease;
 }
 
@@ -1044,8 +1043,8 @@
   gap: 3px;
   margin-top: 6px;
   padding: 3px 6px;
-  background-color: #f8f9fa;
-  border: 1px solid #dee2e6;
+  background-color: var(--bg-soft);
+  border: 1px solid var(--line);
   border-radius: 4px;
   cursor: pointer;
   font-size: 11px;
@@ -1054,7 +1053,7 @@
 }
 
 .error-details-btn:hover {
-  background-color: #e9ecef;
+  background-color: var(--line);
   border-color: #adb5bd;
   color: #495057;
 }
@@ -1080,8 +1079,8 @@
   justify-content: space-between;
   align-items: center;
   padding: 20px;
-  border-bottom: 1px solid #dee2e6;
-  background-color: #f8f9fa;
+  border-bottom: 1px solid var(--line);
+  background-color: var(--bg-soft);
 }
 
 .error-modal-header h3 {
@@ -1098,7 +1097,7 @@
 .error-section {
   margin-bottom: 24px;
   padding-bottom: 16px;
-  border-bottom: 1px solid #e9ecef;
+  border-bottom: 1px solid var(--line);
 }
 
 .error-section:last-child {
@@ -1141,8 +1140,8 @@
 }
 
 .error-response, .error-stack {
-  background-color: #f8f9fa;
-  border: 1px solid #dee2e6;
+  background-color: var(--bg-soft);
+  border: 1px solid var(--line);
   border-radius: 4px;
   padding: 12px;
   font-family: monospace;
@@ -1168,13 +1167,13 @@
   justify-content: flex-end;
   gap: 12px;
   padding: 20px;
-  border-top: 1px solid #dee2e6;
-  background-color: #f8f9fa;
+  border-top: 1px solid var(--line);
+  background-color: var(--bg-soft);
 }
 
 .btn-copy, .btn-close-modal {
   padding: 8px 16px;
-  border: 1px solid #dee2e6;
+  border: 1px solid var(--line);
   border-radius: 4px;
   background-color: #fff;
   color: #495057;
@@ -1183,19 +1182,19 @@
 }
 
 .btn-copy:hover, .btn-close-modal:hover {
-  background-color: #e9ecef;
+  background-color: var(--line);
   border-color: #adb5bd;
 }
 
 .btn-copy {
-  background-color: #007bff;
+  background-color: var(--accent);
   color: white;
-  border-color: #007bff;
+  border-color: var(--accent);
 }
 
 .btn-copy:hover {
-  background-color: #0056b3;
-  border-color: #0056b3;
+  background-color: var(--accent-strong);
+  border-color: var(--accent-strong);
 }
 
 /* 轮询开关禁用状态样式 */
@@ -1220,7 +1219,7 @@
   flex-direction: column;
   gap: 6px;
   padding: 10px;
-  background-color: #f8f9fa;
+  background-color: var(--bg-soft);
   border-radius: 6px;
   margin-bottom: 10px;
 }
@@ -1231,7 +1230,7 @@
   gap: 6px;
   padding: 6px 10px;
   background-color: white;
-  border: 1px solid #dee2e6;
+  border: 1px solid var(--line);
   border-radius: 6px;
 }
 
@@ -1286,7 +1285,7 @@
   align-items: center;
   gap: 5px;
   padding: 5px 8px;
-  background-color: #e9ecef;
+  background-color: var(--line);
   border-radius: 4px;
   font-size: 12px;
 }
@@ -1316,7 +1315,7 @@
 .prompt-preview {
   margin-top: 15px;
   padding: 15px;
-  background: #f8f9fa;
+  background: var(--bg-soft);
   border-radius: 10px;
   border: 2px solid #e0e0e0;
 }
@@ -1327,7 +1326,7 @@
   gap: 5px;
   margin-bottom: 10px;
   padding-bottom: 10px;
-  border-bottom: 1px solid #dee2e6;
+  border-bottom: 1px solid var(--line);
 }
 
 .prompt-preview-header strong {
@@ -1370,7 +1369,7 @@
 .image-params select,
 .image-params input {
   padding: 8px 12px;
-  border: 1px solid #dee2e6;
+  border: 1px solid var(--line);
   border-radius: 4px;
   font-size: 14px;
   background: white;
@@ -1380,20 +1379,20 @@
 .image-params select:focus,
 .image-params input:focus {
   outline: none;
-  border-color: #007bff;
+  border-color: var(--accent);
   box-shadow: 0 0 0 3px rgba(0, 123, 255, 0.1);
 }
 
 .param-hint {
   padding: 8px 12px;
   background: #e7f3ff;
-  border-left: 3px solid #007bff;
+  border-left: 3px solid var(--accent);
   border-radius: 4px;
   margin-top: 8px;
 }
 
 .param-hint small {
-  color: #0056b3;
+  color: var(--accent-strong);
   font-size: 12px;
 }
 
@@ -1434,7 +1433,7 @@
   gap: 6px;
   margin-top: 6px;
   padding-top: 6px;
-  border-top: 1px solid #e9ecef;
+  border-top: 1px solid var(--line);
   opacity: 0;
   transition: opacity 0.2s ease;
 }
@@ -1448,8 +1447,8 @@
   align-items: center;
   gap: 3px;
   padding: 3px 8px;
-  background-color: #f8f9fa;
-  border: 1px solid #dee2e6;
+  background-color: var(--bg-soft);
+  border: 1px solid var(--line);
   border-radius: 4px;
   cursor: pointer;
   font-size: 11px;
@@ -1458,7 +1457,7 @@
 }
 
 .action-btn:hover {
-  background-color: #e9ecef;
+  background-color: var(--line);
   border-color: #adb5bd;
   color: #495057;
 }
@@ -1670,7 +1669,7 @@
     display: block;
     position: fixed;
     inset: 0;
-    background: rgba(15, 23, 42, 0.28);
+    background: rgba(23, 28, 25, 0.28);
     z-index: 70;
   }
 
@@ -1732,7 +1731,7 @@
     backdrop-filter: blur(14px);
     border: 1px solid rgba(226, 232, 240, 0.92);
     border-radius: 16px;
-    box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
+    box-shadow: 0 10px 24px rgba(23, 28, 25, 0.08);
   }
 
   .mobile-panel-toggle,
@@ -1936,7 +1935,7 @@
   max-width: 200px;
   max-height: 200px;
   border-radius: 8px;
-  border: 2px solid #dee2e6;
+  border: 2px solid var(--line);
   cursor: pointer;
   transition: transform 0.2s, box-shadow 0.2s;
   object-fit: cover;
@@ -1947,7 +1946,7 @@
 .message-content img:not(.generated-image-preview):hover {
   transform: scale(1.05);
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
-  border-color: #007bff;
+  border-color: var(--accent);
 }
 
 /* ==================== 生成图片容器样式（非scoped，用于v-html） ==================== */
@@ -1956,9 +1955,9 @@
 .image-text-content {
   margin-bottom: 10px;
   padding: 10px;
-  background: #f8f9fa;
+  background: var(--bg-soft);
   border-radius: 6px;
-  border-left: 3px solid #0891b2;
+  border-left: 3px solid var(--accent);
   font-size: 12px;
   color: #495057;
   line-height: 1.5;
@@ -1982,7 +1981,7 @@
 }
 
 .generated-image-item {
-  border: 1px solid #dee2e6;
+  border: 1px solid var(--line);
   border-radius: 6px;
   overflow: hidden;
   background: white;
@@ -2058,7 +2057,7 @@
   display: flex;
   gap: 6px;
   justify-content: center;
-  background: #f8f9fa;
+  background: var(--bg-soft);
 }
 
 .btn-view {
@@ -2078,7 +2077,7 @@
 
 .btn-download {
   padding: 5px 10px;
-  background: #007bff;
+  background: var(--accent);
   color: white;
   border: none;
   border-radius: 4px;
@@ -2090,7 +2089,7 @@
 }
 
 .btn-download:hover {
-  background: #0056b3;
+  background: var(--accent-strong);
 }
 
 /* 修订后的提示词 */
@@ -2099,8 +2098,8 @@
   margin: 0;
   font-size: 10px;
   color: #6c757d;
-  background: #f8f9fa;
-  border-top: 1px solid #dee2e6;
+  background: var(--bg-soft);
+  border-top: 1px solid var(--line);
   line-height: 1.3;
   max-height: 50px;
   overflow-y: auto;
@@ -2109,8 +2108,8 @@
 /* 图片元数据 */
 .image-metadata {
   padding: 6px 8px;
-  background: #f8f9fa;
-  border-top: 1px solid #dee2e6;
+  background: var(--bg-soft);
+  border-top: 1px solid var(--line);
   font-size: 10px;
   color: #6c757d;
 }
@@ -2243,7 +2242,7 @@
 
 .viewer-download {
   padding: 8px 16px;
-  background: #007bff;
+  background: var(--accent);
   color: #fff;
   text-decoration: none;
   border-radius: 6px;
@@ -2252,7 +2251,7 @@
 }
 
 .viewer-download:hover {
-  background: #0056b3;
+  background: var(--accent-strong);
   color: #fff;
 }
 </style>
@@ -2291,7 +2290,6 @@ const modelOptionsContainer = ref(null)
 const modelOptionRefs = new Map()
 const pollingEnabled = ref(false)
 const userSettings = ref({})
-const frequency = ref(10)
 const showParams = ref(false)
 const mobileSidebarOpen = ref(false)
 const mobileToolsOpen = ref(false)
@@ -2367,6 +2365,20 @@ function debounce(func, wait) {
 
 // 性能优化：优化数据结构，使用 Map 提高查找效率
 const conversationMap = new Map()
+
+function upsertConversationListItem(conv) {
+  if (!conv?.id) return
+  const list = conversations.value.slice()
+  const idx = list.findIndex(item => item.id === conv.id)
+  const item = { ...conv }
+  if (idx === -1) {
+    list.unshift(item)
+  } else {
+    list.splice(idx, 1)
+    list.unshift(item)
+  }
+  conversations.value = list
+}
 
 // 性能优化：优化计算属性，添加缓存
 let searchCache = new Map()
@@ -2463,6 +2475,36 @@ const imageStyleOptions = computed(() => [
   { label: '自然', value: 'natural' }
 ])
 
+function normalizeModelName(modelId) {
+  if (!modelId || typeof modelId !== 'string') return ''
+  let normalized = modelId.toLowerCase().trim()
+  if (normalized.includes('/')) {
+    normalized = normalized.split('/').pop()
+  }
+  normalized = normalized.replace(/[-_]?20\d{6}[-_]?/g, '')
+  normalized = normalized.replace(/[-_]?20\d{2}-\d{2}-\d{2}[-_]?/g, '')
+  normalized = normalized.replace(/[-_]+/g, '-')
+  normalized = normalized.replace(/^-+|-+$/g, '')
+  return normalized
+}
+
+function getPollingExcludedProviderIds(modelName, excluded) {
+  const excludedSet = new Set()
+  if (Array.isArray(excluded)) {
+    excluded.forEach(item => {
+      if (item && item.modelName === modelName && item.providerId) {
+        excludedSet.add(item.providerId)
+      }
+    })
+  } else if (excluded && typeof excluded === 'object') {
+    const providerIds = excluded[modelName]
+    if (Array.isArray(providerIds)) {
+      providerIds.forEach(id => excludedSet.add(id))
+    }
+  }
+  return excludedSet
+}
+
 // 计算当前模型是否可以启用轮询
 const canEnablePolling = computed(() => {
   // 基本检查：需要有当前模型
@@ -2489,42 +2531,31 @@ const canEnablePolling = computed(() => {
     
     return provider.models.some(m => {
       if (m.visible === false) return false // 跳过不可见的模型
-      const extractedName = m.id.includes('/') ? m.id.split('/').pop() : m.id
-      return extractedName === modelName
+      return extractModelName(m.id) === modelName
     })
   })
   
   // 检查是否在可用池中且未被排除
-  const pollingConfig = userSettings.value?.pollingConfig || { available: {}, excluded: {} }
+  const pollingConfig = userSettings.value?.pollingConfig || { available: {}, excluded: [] }
   const availablePool = pollingConfig.available || {}
-  const excludedPool = pollingConfig.excluded || {}
-  
-  // 检查是否在排除池中
-  const isExcluded = !!excludedPool[modelName]
+  const excludedIds = getPollingExcludedProviderIds(modelName, pollingConfig.excluded)
   
   // 检查是否在可用池中（如果可用池有配置的话）
   const isInAvailablePool = modelName in availablePool
-  const availableProviderCount = availablePool[modelName]?.length || 0
+  const poolProviderCount = (availablePool[modelName] || []).filter(id => !excludedIds.has(id)).length
+  const actualProviderCount = providersWithModel.filter(provider => !excludedIds.has(provider.id)).length
   
   // 轮询的核心条件：
   // 1. 模型在可用池中配置了至少2个提供商，或者
   // 2. 实际有至少2个提供商支持该模型（当可用池未配置时）
   // 3. 模型不能在排除池中
-  const hasMultipleProvidersInPool = isInAvailablePool && availableProviderCount >= 2
-  const hasMultipleProvidersActual = providersWithModel.length >= 2
-  
-  // 如果可用池有配置，优先使用可用池的判断；否则使用实际提供商数量
-  const hasMultipleProviders = isInAvailablePool ? hasMultipleProvidersInPool : hasMultipleProvidersActual
-  const notExcluded = !isExcluded
-  
-  const canEnable = hasMultipleProviders && notExcluded
+  const canEnable = (isInAvailablePool ? poolProviderCount : actualProviderCount) >= 2
   
   console.log(`轮询检查 - 模型: ${modelName}`)
   console.log(`  - 实际支持该模型的提供商: ${providersWithModel.map(p => p.name).join(', ')} (${providersWithModel.length}个)`)
   console.log(`  - 是否在可用池中: ${isInAvailablePool}`)
-  console.log(`  - 可用池中的提供商数量: ${availableProviderCount}`)
-  console.log(`  - 是否有多个提供商: ${hasMultipleProviders}`)
-  console.log(`  - 是否被排除: ${isExcluded}`)
+  console.log(`  - 可用池中的提供商数量: ${poolProviderCount}`)
+  console.log(`  - 排除后实际提供商数量: ${actualProviderCount}`)
   console.log(`  - 可启用轮询: ${canEnable}`)
   
   return canEnable
@@ -2533,29 +2564,25 @@ const canEnablePolling = computed(() => {
 // 提取模型名称的辅助函数
 function extractModelName(modelId) {
   if (!modelId) return ''
-  
-  // 如果是轮询模式的格式 (providerId::modelId)，提取modelId部分
   if (modelId.includes('::')) {
-    const [, actualModelId] = modelId.split('::')
-    return actualModelId.includes('/') ? actualModelId.split('/').pop() : actualModelId
+    return normalizeModelName(modelId.slice(modelId.indexOf('::') + 2))
   }
-  
-  // 普通格式
-  return modelId.includes('/') ? modelId.split('/').pop() : modelId
+  return normalizeModelName(modelId)
 }
 
 // 检测模型类型（文本或图像生成）
 function getModelTypeFromValue(modelValue) {
   if (!modelValue) return 'text'
 
-  // 从提供商配置中读取
-  const provider = providers.value.find(p => modelValue.startsWith(p.id))
-  if (provider) {
-    const modelId = modelValue.split('::')[1]
-    const modelConfig = provider.models?.find(m => m.id === modelId)
-    if (modelConfig?.type) {
-      return modelConfig.type
-    }
+  const mapped = userSettings.value?.modelTypes?.[modelValue]
+  if (mapped) return mapped
+
+  if (modelValue.includes('::')) {
+    const providerId = modelValue.slice(0, modelValue.indexOf('::'))
+    const modelId = modelValue.slice(providerId.length + 2)
+    const provider = providers.value.find(p => p.id === providerId)
+    const modelConfig = provider?.models?.find(m => m.id === modelId)
+    if (modelConfig?.type) return modelConfig.type
   }
 
   // 从模型ID推断
@@ -2570,6 +2597,12 @@ function getModelTypeFromValue(modelValue) {
 // 计算当前模型类型
 const currentModelType = computed(() => {
   return getModelTypeFromValue(currentModel.value)
+})
+
+const isImageChatModel = computed(() => {
+  return currentModelType.value === 'image'
+    || currentModelType.value === 'image-generation'
+    || currentModelType.value === 'image-edit'
 })
 
 async function loadConversations() {
@@ -2604,7 +2637,7 @@ async function loadProviders() {
       if (provider.disabled) continue
       const addedModels = provider.models || []
       addedModels.forEach(m => {
-        if (m.visible) {
+        if (m.visible !== false) {
           models.push({
             value: `${provider.id}::${m.id}`,
             label: `${provider.name} - ${m.id}`
@@ -2644,7 +2677,6 @@ async function loadProviders() {
 async function loadSettings() {
   try {
     const res = await axios.get('/api/settings')
-    frequency.value = res.data.globalFrequency || 10
     params.value = res.data.defaultParams || { temperature: 0.7, max_tokens: 2000, top_p: 1 }
     userSettings.value = res.data
 
@@ -2832,49 +2864,81 @@ function formatConversationTime(conv) {
   return date.toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' })
 }
 
+function conversationRequestError(error) {
+  return error.response?.data?.error || error.message || "未知错误"
+}
+
 async function createConversation() {
-  const res = await axios.post('/api/conversations', { model: currentModel.value })
-  conversations.value.push(res.data)
-  // 更新 Map 缓存
-  conversationMap.set(res.data.id, res.data)
-  currentConv.value = res.data
-  // 清空搜索缓存
-  searchCache.clear()
-  return res.data
+  try {
+    const res = await axios.post("/api/conversations", { model: currentModel.value })
+    upsertConversationListItem(res.data)
+    conversationMap.set(res.data.id, res.data)
+    currentConv.value = res.data
+    searchCache.clear()
+    return res.data
+  } catch (error) {
+    console.error("Error creating conversation:", error)
+    alert("创建对话失败: " + conversationRequestError(error))
+    return null
+  }
 }
 
 async function createNewConversation() {
-  await createConversation()
+  if (isSending.value) {
+    alert('当前有消息正在发送，请稍后再试')
+    return
+  }
+  const conv = await createConversation()
+  if (!conv) return
   messages.value = []
   mobileSidebarOpen.value = false
 }
 
 async function selectConversation(id) {
-  // 性能优化：优先从缓存获取
-  let conversation = conversationMap.get(id)
-  if (!conversation) {
-    const res = await axios.get(`/api/conversations/${id}`)
-    conversation = res.data
-    conversationMap.set(id, conversation)
+  if (currentConv.value?.id === id) {
+    mobileSidebarOpen.value = false
+    return
   }
-  
-  currentConv.value = conversation
-  messages.value = conversation.messages || []
-  currentModel.value = conversation.model || currentModel.value
-  mobileSidebarOpen.value = false
+  if (isSending.value) {
+    alert("当前有消息正在发送，请稍后再试")
+    return
+  }
+  try {
+    let conversation = conversationMap.get(id)
+    if (!conversation) {
+      const res = await axios.get("/api/conversations/" + id)
+      conversation = res.data
+      conversationMap.set(id, conversation)
+    }
+
+    currentConv.value = conversation
+    messages.value = conversation.messages || []
+    currentModel.value = conversation.model || currentModel.value
+    mobileSidebarOpen.value = false
+  } catch (error) {
+    console.error("Error loading conversation:", error)
+    alert("加载对话失败: " + conversationRequestError(error))
+  }
 }
 
 async function deleteConversation(id) {
-  await axios.delete(`/api/conversations/${id}`)
-  conversations.value = conversations.value.filter(c => c.id !== id)
-  // 从 Map 缓存中删除
-  conversationMap.delete(id)
-  // 清空搜索缓存
-  searchCache.clear()
-  
-  if (currentConv.value?.id === id) {
-    currentConv.value = null
-    messages.value = []
+  if (isSending.value && currentConv.value?.id === id) {
+    alert("当前有消息正在发送，请稍后再试")
+    return
+  }
+  try {
+    await axios.delete("/api/conversations/" + id)
+    conversations.value = conversations.value.filter(c => c.id !== id)
+    conversationMap.delete(id)
+    searchCache.clear()
+
+    if (currentConv.value?.id === id) {
+      currentConv.value = null
+      messages.value = []
+    }
+  } catch (error) {
+    console.error("Error deleting conversation:", error)
+    alert("删除对话失败: " + conversationRequestError(error))
   }
 }
 
@@ -2884,8 +2948,22 @@ let currentAbortController = null
 // 发送锁，防止并发发送
 let isSending = ref(false)
 
+function createChatMessage(fields) {
+  const id = (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function')
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(16).slice(2)}`
+  return { id, ...fields }
+}
+
+function releaseSendLockIfIdle() {
+  if (rateLimitInfo.value.isLimited || delayedSendTimer) return
+  currentAbortController = null
+  isSending.value = false
+}
+
 async function sendMessage() {
-  if (!inputText.value.trim() || !currentModel.value || isSending.value) return
+  if (!currentModel.value || isSending.value) return
+  if (!inputText.value.trim() && uploadedImages.value.length === 0 && uploadedFiles.value.length === 0) return
 
   // 设置发送锁
   isSending.value = true
@@ -2893,14 +2971,15 @@ async function sendMessage() {
   try {
     // 如果没有当前对话，自动创建一个
     if (!currentConv.value) {
-      await createConversation()
+      const conv = await createConversation()
+      if (!conv) return
     }
 
     // 构建用户消息，包含文本和图片
-    const userMsg = {
+    const userMsg = createChatMessage({
       role: 'user',
       content: inputText.value
-    }
+    })
 
     // 如果有上传的图片，添加到消息中
     if (uploadedImages.value.length > 0) {
@@ -2941,11 +3020,11 @@ async function sendMessage() {
 
     throttledScrollToBottom()
 
-    const assistantMsg = { role: 'assistant', content: '', streaming: true }
+    const assistantMsg = createChatMessage({ role: 'assistant', content: '', streaming: true })
     messages.value.push(assistantMsg)
 
     // 根据模型类型选择参数
-    const requestParams = currentModelType.value === 'image' ? imageParams.value : params.value
+    const requestParams = isImageChatModel.value ? imageParams.value : params.value
 
     currentAbortController = new AbortController()
     const response = await fetch('/api/chat', {
@@ -2982,46 +3061,8 @@ async function sendMessage() {
       throw new Error(errorMessage)
     }
 
-    // 检查是否需要延迟
-    if (response.headers.get('content-type')?.includes('application/json')) {
-      const data = await response.json()
-      if (data.delayed) {
-        // 显示延迟提示
-        rateLimitInfo.value.isLimited = true
-        rateLimitInfo.value.waitTime = data.delayTime
-        rateLimitInfo.value.message = data.message
-
-        // 更新助手消息显示延迟信息
-        assistantMsg.content = `⏳ ${data.message}`
-        assistantMsg.streaming = false
-
-        // 开始倒计时
-        const startCountdown = () => {
-          if (delayedSendTimer) clearInterval(delayedSendTimer)
-
-          delayedSendTimer = setInterval(() => {
-            rateLimitInfo.value.waitTime--
-            assistantMsg.content = `⏳ 模型调用频率限制，还需等待 ${rateLimitInfo.value.waitTime} 秒...`
-
-            if (rateLimitInfo.value.waitTime <= 0) {
-              clearInterval(delayedSendTimer)
-              rateLimitInfo.value.isLimited = false
-              rateLimitInfo.value.message = ''
-
-              // 重新发送请求
-              executeDelayedRequest(assistantMsg)
-            }
-          }, 1000)
-        }
-
-        startCountdown()
-        return
-      }
-    }
-
-    // 处理流式响应
-    await processStreamResponse(response, assistantMsg)
-
+    await processStreamResponse(response, assistantMsg, sentImages)
+    
   } catch (e) {
     console.error('Chat error:', e)
 
@@ -3069,17 +3110,47 @@ async function sendMessage() {
       })
     }
   } finally {
-    // 释放发送锁
-    currentAbortController = null
-    isSending.value = false
+    releaseSendLockIfIdle()
   }
 
   // 保存对话
   await saveConversation()
 }
 
-// 延迟请求执行函数
-async function executeDelayedRequest(assistantMsg) {
+async function persistConversationRecord(conv) {
+  if (!conv?.id) return null
+  try {
+    const { data } = await axios.put("/api/conversations/" + conv.id, conv)
+    if (data?.updatedAt) conv.updatedAt = data.updatedAt
+    if (data?.createdAt) conv.createdAt = data.createdAt
+    conversationMap.set(conv.id, conv)
+    upsertConversationListItem(conv)
+    searchCache.clear()
+    return conv
+  } catch (error) {
+    console.error("Error saving conversation:", error)
+    alert("保存对话失败: " + conversationRequestError(error))
+    return null
+  }
+}
+
+async function persistConversationState(convId) {
+  if (!convId || currentConv.value?.id === convId) {
+    await saveConversation()
+    return
+  }
+  const conv = conversationMap.get(convId)
+  if (!conv) return
+  await persistConversationRecord(conv)
+}
+
+async function executeDelayedRequest(assistantMsg, sentImages = [], context = {}) {
+  const convId = context.convId || currentConv.value?.id
+  const requestMessages = context.requestMessages || messages.value.slice(0, -1)
+  if (convId && !conversationMap.has(convId) && currentConv.value?.id !== convId) {
+    releaseSendLockIfIdle()
+    return
+  }
   try {
     currentAbortController = new AbortController()
     const response = await fetch('/api/chat', {
@@ -3087,10 +3158,14 @@ async function executeDelayedRequest(assistantMsg) {
       headers: { 'Content-Type': 'application/json' },
       signal: currentAbortController.signal,
       body: JSON.stringify({
-        messages: messages.value.slice(0, -1),
-        model: currentModel.value,
-        params: params.value,
-        polling: pollingEnabled.value
+        messages: requestMessages,
+        model: context.model || currentModel.value,
+        params: context.params || (isImageChatModel.value ? imageParams.value : params.value),
+        polling: context.polling !== undefined ? context.polling : pollingEnabled.value,
+        images: sentImages.length > 0 ? sentImages : undefined,
+        systemPrompt: context.systemPrompt !== undefined
+          ? context.systemPrompt
+          : (selectedPrompt.value ? selectedPrompt.value.content : undefined)
       })
     })
     
@@ -3114,14 +3189,7 @@ async function executeDelayedRequest(assistantMsg) {
       throw new Error(errorMessage)
     }
     
-    // 重置助手消息，清除倒计时信息
-    assistantMsg.content = ''
-    assistantMsg.streaming = true
-    assistantMsg.rendered = undefined // 清除之前的渲染缓存
-    assistantMsg.error = false // 清除错误状态
-    
-    // 处理流式响应
-    await processStreamResponse(response, assistantMsg)
+    await processStreamResponse(response, assistantMsg, sentImages, context)
     
   } catch (e) {
     console.error('Delayed chat error:', e)
@@ -3161,23 +3229,75 @@ async function executeDelayedRequest(assistantMsg) {
     assistantMsg.error = true
     assistantMsg.errorDetails = errorDetails
 
-    // 强制触发响应式更新，确保错误消息显示
-    messages.value = [...messages.value]
-    nextTick(() => {
-      throttledScrollToBottom()
-    })
+    if (!convId || currentConv.value?.id === convId) {
+      messages.value = [...messages.value]
+      nextTick(() => {
+        throttledScrollToBottom()
+      })
+    }
   } finally {
-    // 释放发送锁
-    currentAbortController = null
-    isSending.value = false
+    releaseSendLockIfIdle()
   }
 
   // 保存对话
-  await saveConversation()
+  await persistConversationState(convId)
+}
+
+function getImagesFromMessages(list) {
+  const lastUser = [...(list || [])].reverse().find(msg => msg.role === 'user' && Array.isArray(msg.images) && msg.images.length > 0)
+  return lastUser?.images || []
+}
+
+function beginRpmDelay(assistantMsg, sentImages, data, delayContext = null) {
+  const context = delayContext || {
+    convId: currentConv.value?.id,
+    requestMessages: messages.value.slice(0, -1),
+    model: currentModel.value,
+    params: isImageChatModel.value ? { ...imageParams.value } : { ...params.value },
+    polling: pollingEnabled.value,
+    systemPrompt: selectedPrompt.value ? selectedPrompt.value.content : undefined
+  }
+  rateLimitInfo.value.isLimited = true
+  rateLimitInfo.value.waitTime = data.delayTime
+  rateLimitInfo.value.message = data.message
+  assistantMsg.content = `⏳ ${data.message}`
+  assistantMsg.streaming = false
+  if (delayedSendTimer) clearInterval(delayedSendTimer)
+  delayedSendTimer = setInterval(() => {
+    rateLimitInfo.value.waitTime--
+    assistantMsg.content = `⏳ 模型调用频率限制，还需等待 ${rateLimitInfo.value.waitTime} 秒...`
+    if (rateLimitInfo.value.waitTime <= 0) {
+      clearInterval(delayedSendTimer)
+      delayedSendTimer = null
+      rateLimitInfo.value.isLimited = false
+      rateLimitInfo.value.message = ''
+      isSending.value = true
+      executeDelayedRequest(assistantMsg, sentImages, context)
+    }
+  }, 1000)
 }
 
 // 处理流式响应
-async function processStreamResponse(response, assistantMsg) {
+async function processStreamResponse(response, assistantMsg, sentImages = [], delayContext = null) {
+  if (response.headers.get('content-type')?.includes('application/json')) {
+    const data = await response.json()
+    if (data.delayed) {
+      beginRpmDelay(assistantMsg, sentImages, data, delayContext)
+      return true
+    }
+    if (data.error) {
+      throw new Error(typeof data.error === 'string' ? data.error : (data.error.message || '请求失败'))
+    }
+    throw new Error(data.message || '服务器返回了非流式 JSON 响应')
+  }
+
+  if (typeof assistantMsg.content === 'string' && assistantMsg.content.startsWith('⏳')) {
+    assistantMsg.content = ''
+    assistantMsg.streaming = true
+    assistantMsg.rendered = undefined
+    assistantMsg.error = false
+  }
+
   const reader = response.body.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
@@ -3185,9 +3305,16 @@ async function processStreamResponse(response, assistantMsg) {
   try {
     while (true) {
       const { done, value } = await reader.read()
-      if (done) break
-
-      buffer += decoder.decode(value, { stream: true })
+      if (done) {
+        buffer += decoder.decode()
+        if (buffer.trim()) {
+          if (!buffer.endsWith('\n')) buffer += '\n'
+        } else {
+          break
+        }
+      } else {
+        buffer += decoder.decode(value, { stream: true })
+      }
 
       let eolIndex
       while ((eolIndex = buffer.indexOf('\n')) >= 0) {
@@ -3208,7 +3335,10 @@ async function processStreamResponse(response, assistantMsg) {
           const json = JSON.parse(data)
 
           if (json.error) {
-            throw new Error(json.error.message || json.error)
+            const message = typeof json.error === 'string'
+              ? json.error
+              : (json.error.message || '请求失败')
+            throw new Error(message)
           }
 
           // 处理生图响应
@@ -3278,11 +3408,15 @@ async function processStreamResponse(response, assistantMsg) {
             })
           }
         } catch (e) {
-          console.warn('Could not parse JSON from stream data:', data, e)
+          if (e instanceof SyntaxError) {
+            console.warn('Could not parse JSON from stream data:', data, e)
+            continue
+          }
+          throw e
         }
       }
 
-      if (!assistantMsg.streaming) break
+      if (done || !assistantMsg.streaming) break
     }
 
     assistantMsg.streaming = false
@@ -3382,24 +3516,17 @@ function stopGeneration() {
 
   rateLimitInfo.value.isLimited = false
   rateLimitInfo.value.message = ''
+  isSending.value = false
 }
 
 // 保存对话
 async function saveConversation() {
+  if (!currentConv.value) return
   currentConv.value.messages = messages.value
   currentConv.value.model = currentModel.value
-  await axios.put(`/api/conversations/${currentConv.value.id}`, currentConv.value)
-  
-  // 性能优化：使用 Map 更新，避免数组查找
-  conversationMap.set(currentConv.value.id, currentConv.value)
-  const idx = conversations.value.findIndex(c => c.id === currentConv.value.id)
-  if (idx !== -1) conversations.value[idx] = { ...currentConv.value }
-  
-  // 清空搜索缓存，因为对话内容可能影响搜索结果
-  searchCache.clear()
+  await persistConversationRecord(currentConv.value)
 }
 
-// 性能优化：优化滚动函数，减少不必要的滚动
 let lastScrollHeight = 0
 let isScrolling = false
 const autoScrollThreshold = 120
@@ -3454,6 +3581,22 @@ const throttledScrollToBottom = (() => {
   }
 })()
 
+function escapeHtmlAttr(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+}
+
+function safeMediaUrl(url) {
+  const value = String(url || '')
+  if (/^(?:https?:|data:image\/(?:png|jpe?g|gif|webp);base64,)/i.test(value)) {
+    return value
+  }
+  return ''
+}
+
 // 性能优化：优化 Markdown 渲染缓存
 function getRenderedContent(msg, index) {
   // 生图响应特殊渲染
@@ -3472,8 +3615,8 @@ function getRenderedContent(msg, index) {
       // 使用data属性存储图片URL，通过事件委托处理点击
       html += `
         <div class="generated-image-item">
-          <div class="image-preview-wrapper" data-image-url="${DOMPurify.sanitize(img.url)}" style="cursor: pointer;">
-            <img src="${img.url}" alt="${img.alt || 'Generated Image ' + (idx + 1)}"
+          <div class="image-preview-wrapper" data-image-url="${escapeHtmlAttr(safeMediaUrl(img.url))}" style="cursor: pointer;">
+            <img src="${escapeHtmlAttr(safeMediaUrl(img.url))}" alt="${escapeHtmlAttr(img.alt || 'Generated Image ' + (idx + 1))}"
                  class="generated-image-preview" loading="lazy">
             <div class="image-preview-overlay">
               <span class="preview-icon">🔍</span>
@@ -3481,12 +3624,12 @@ function getRenderedContent(msg, index) {
             </div>
           </div>
           <div class="image-actions">
-            <button class="btn-view" data-image-url="${DOMPurify.sanitize(img.url)}">👁️ 查看</button>
-            <a href="${img.url}" download="image-${idx + 1}.png"
+            <button class="btn-view" data-image-url="${escapeHtmlAttr(safeMediaUrl(img.url))}">👁️ 查看</button>
+            <a href="${escapeHtmlAttr(safeMediaUrl(img.url))}" download="image-${idx + 1}.png"
                class="btn-download">📥 下载</a>
           </div>
           ${img.revisedPrompt ?
-            `<p class="revised-prompt">提示词: ${DOMPurify.sanitize(img.revisedPrompt)}</p>` : ''}
+            `<p class="revised-prompt">提示词: ${escapeHtmlAttr(img.revisedPrompt)}</p>` : ''}
         </div>
       `
     })
@@ -3496,9 +3639,9 @@ function getRenderedContent(msg, index) {
     // 添加元数据显示
     if (msg.metadata) {
       html += `<div class="image-metadata">
-        <small>模型: ${msg.metadata.model || '未知'} |
-        尺寸: ${msg.metadata.parameters?.size || '未知'} |
-        质量: ${msg.metadata.parameters?.quality || '标准'}</small>
+        <small>模型: ${escapeHtmlAttr(msg.metadata.model || '未知')} |
+        尺寸: ${escapeHtmlAttr(msg.metadata.parameters?.size || '未知')} |
+        质量: ${escapeHtmlAttr(msg.metadata.parameters?.quality || '标准')}</small>
       </div>`
     }
 
@@ -3713,6 +3856,11 @@ async function saveEditedMessage() {
     return
   }
 
+  if (isSending.value) {
+    alert('当前有消息正在发送，请稍后再试')
+    return
+  }
+
   if (!currentConv.value) {
     alert('没有找到当前对话')
     return
@@ -3732,10 +3880,10 @@ async function saveEditedMessage() {
 
   await saveConversation()
 
-  const assistantMsg = { role: 'assistant', content: '', streaming: true }
+  const assistantMsg = createChatMessage({ role: 'assistant', content: '', streaming: true })
   messages.value.push(assistantMsg)
 
-  const requestParams = currentModelType.value === 'image' ? imageParams.value : params.value
+  const requestParams = isImageChatModel.value ? imageParams.value : params.value
   currentAbortController = new AbortController()
   isSending.value = true
 
@@ -3749,6 +3897,7 @@ async function saveEditedMessage() {
         model: currentModel.value,
         params: requestParams,
         polling: pollingEnabled.value,
+        images: getImagesFromMessages(messages.value.slice(0, -1)),
         systemPrompt: selectedPrompt.value ? selectedPrompt.value.content : undefined
       })
     })
@@ -3758,7 +3907,7 @@ async function saveEditedMessage() {
       throw new Error(errorText || `HTTP ${response.status}: ${response.statusText}`)
     }
 
-    await processStreamResponse(response, assistantMsg)
+    await processStreamResponse(response, assistantMsg, getImagesFromMessages(messages.value.slice(0, -1)))
   } catch (e) {
     assistantMsg.content = `❌ ${e.message || '编辑后重发失败'}`
     assistantMsg.streaming = false
@@ -3766,8 +3915,7 @@ async function saveEditedMessage() {
     assistantMsg.errorDetails = createErrorDetails(e, currentModel.value)
     messages.value = [...messages.value]
   } finally {
-    currentAbortController = null
-    isSending.value = false
+    releaseSendLockIfIdle()
   }
 
   await saveConversation()
@@ -3776,6 +3924,11 @@ async function saveEditedMessage() {
 // 删除消息
 async function deleteMessage(index) {
   if (index < 0 || index >= messages.value.length) return
+
+  if (isSending.value) {
+    alert('当前有消息正在发送，请稍后再试')
+    return
+  }
 
   const msg = messages.value[index]
   const confirmText = msg.role === 'user' ? '确定要删除这条用户消息吗？' : '确定要删除这条AI回复吗？'
@@ -3806,46 +3959,42 @@ async function regenerateResponse(index) {
     return
   }
 
-  // 设置发送锁
+  if (!currentConv.value) {
+    alert('没有找到当前对话')
+    return
+  }
+
+  const historyMessages = messages.value.slice(0, index)
+  if (historyMessages.length === 0) {
+    alert('没有找到可用的历史消息')
+    return
+  }
+
   isSending.value = true
 
   try {
-    // 如果没有当前对话，无法重新生成
-    if (!currentConv.value) {
-      alert('没有找到当前对话')
-      return
-    }
-
-    // 删除当前AI回复
     messages.value.splice(index, 1)
-
-    // 获取之前的消息历史（用于重新生成）
-    const historyMessages = messages.value.slice(0, index)
-
-    // 如果历史消息为空或最后一条不是用户消息，无法重新生成
-    if (historyMessages.length === 0) {
-      alert('没有找到可用的历史消息')
-      isSending.value = false
-      return
-    }
 
     throttledScrollToBottom()
 
     // 创建新的助手消息
-    const assistantMsg = { role: 'assistant', content: '', streaming: true }
+    const assistantMsg = createChatMessage({ role: 'assistant', content: '', streaming: true })
     messages.value.push(assistantMsg)
 
     // 根据模型类型选择参数
-    const requestParams = currentModelType.value === 'image' ? imageParams.value : params.value
+    const requestParams = isImageChatModel.value ? imageParams.value : params.value
 
+    currentAbortController = new AbortController()
     const response = await fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      signal: currentAbortController.signal,
       body: JSON.stringify({
         messages: historyMessages,
         model: currentModel.value,
         params: requestParams,
         polling: pollingEnabled.value,
+        images: getImagesFromMessages(historyMessages),
         systemPrompt: selectedPrompt.value ? selectedPrompt.value.content : undefined
       })
     })
@@ -3870,7 +4019,7 @@ async function regenerateResponse(index) {
     }
 
     // 处理流式响应
-    await processStreamResponse(response, assistantMsg)
+    await processStreamResponse(response, assistantMsg, getImagesFromMessages(historyMessages))
 
   } catch (e) {
     console.error('Regenerate error:', e)
@@ -3896,8 +4045,7 @@ async function regenerateResponse(index) {
       })
     }
   } finally {
-    // 释放发送锁
-    isSending.value = false
+    releaseSendLockIfIdle()
   }
 
   // 保存对话
@@ -3979,17 +4127,18 @@ function enhanceCodeBlocks(html) {
 
   return html.replace(/<pre><code(?: class="language-([^"]+)")?>([\s\S]*?)<\/code><\/pre>/g, (match, language = '', codeContent = '') => {
     const decoded = codeContent
-      .replace(/&/g, '&')
-      .replace(/</g, '<')
-      .replace(/>/g, '>')
-      .replace(/"/g, '"')
-      .replace(/'/g, "'")
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'")
+      .replace(/&#x27;/gi, "'")
+      .replace(/&amp;/g, '&')
 
     if (!decoded.includes('\n')) {
       return match
     }
 
-    const langLabel = language ? `<span class="code-block-lang">${language}</span>` : '<span class="code-block-lang">code</span>'
+    const langLabel = language ? `<span class="code-block-lang">${escapeHtmlAttr(language)}</span>` : '<span class="code-block-lang">code</span>'
     const safeCode = encodeURIComponent(decoded)
 
     return `
@@ -4013,7 +4162,12 @@ function normalizeDataImageUrls(content) {
 }
 
 function copyCodeBlock(encodedCode) {
-  const code = decodeURIComponent(encodedCode)
+  let code = encodedCode
+  try {
+    code = decodeURIComponent(encodedCode)
+  } catch {
+    code = encodedCode
+  }
   navigator.clipboard.writeText(code).then(() => {
     console.log('代码块已复制到剪贴板')
   }).catch(err => {
@@ -4328,24 +4482,16 @@ onMounted(() => {
   // 添加点击外部关闭下拉框的事件监听
   document.addEventListener('click', handleClickOutside)
 
-  // 添加消息容器的点击事件监听（用于处理生成图片的点击）
-  if (messagesContainer.value) {
-    messagesContainer.value.addEventListener('click', handleGeneratedImageClick)
-  }
-
   // 注册全局图片查看器函数（保留以防其他地方使用）
   window.openImageViewer = openImageViewer
 })
 
 onUnmounted(() => {
+  stopGeneration()
+
   // 清理事件监听器
   document.removeEventListener('click', handleClickOutside)
   document.removeEventListener('keydown', handleViewerKeydown)
-
-  // 清理消息容器的点击事件监听
-  if (messagesContainer.value) {
-    messagesContainer.value.removeEventListener('click', handleGeneratedImageClick)
-  }
 
   // 清理全局函数
   delete window.openImageViewer

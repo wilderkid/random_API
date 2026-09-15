@@ -32,9 +32,11 @@ const DEFAULT_USER_SETTINGS = {
   keyPollingState: {},
   modelFailCounts: {},
   keyFailCounts: {},
+  pollingMaxRounds: 2,
   proxyApiKey: '',
   proxyApiKeys: {},
   conversationProviderMap: {},
+  disabledModels: {},
   modelTypes: {}
 };
 
@@ -116,6 +118,12 @@ function normalizeProxyClientTag(tag) {
   return VALID_CLIENT_TAGS.includes(tag) ? tag : 'normal';
 }
 
+function normalizeProviderRpm(value) {
+  const rpm = Number(value);
+  if (!Number.isFinite(rpm) || rpm <= 0) return 0;
+  return Math.min(100000, Math.floor(rpm));
+}
+
 function normalizeProviderKeys(provider) {
   if (!provider) return [];
 
@@ -126,8 +134,8 @@ function normalizeProviderKeys(provider) {
       name: key.name || `Key ${index + 1}`,
       apiKey: key.apiKey || key.api_key || '',
       enabled: key.enabled !== false,
-      weight: Number.isFinite(key.weight) ? key.weight : 1,
-      priority: Number.isFinite(key.priority) ? key.priority : 0,
+      weight: Number.isFinite(Number(key.weight)) ? Number(key.weight) : 1,
+      priority: Number.isFinite(Number(key.priority)) ? Number(key.priority) : 0,
       failCount: key.failCount || 0,
       lastUsedAt: key.lastUsedAt || key.last_used_at || null,
       createdAt: key.createdAt || key.created_at || provider.createdAt || provider.created_at || nowIso()
@@ -200,8 +208,10 @@ function buildUserSettingsFromDb(db) {
     keyPollingState: getSetting(db, 'keyPollingState', DEFAULT_USER_SETTINGS.keyPollingState),
     modelFailCounts: getSetting(db, 'modelFailCounts', DEFAULT_USER_SETTINGS.modelFailCounts),
     keyFailCounts: getSetting(db, 'keyFailCounts', DEFAULT_USER_SETTINGS.keyFailCounts),
+    pollingMaxRounds: getSetting(db, 'pollingMaxRounds', getSetting(db, 'pollingMaxRetries', DEFAULT_USER_SETTINGS.pollingMaxRounds)),
     proxyApiKey: getSetting(db, 'proxyApiKey', DEFAULT_USER_SETTINGS.proxyApiKey),
     conversationProviderMap: getSetting(db, 'conversationProviderMap', DEFAULT_USER_SETTINGS.conversationProviderMap),
+    disabledModels: getSetting(db, 'disabledModels', {}),
     modelTypes: getSetting(db, 'modelTypes', DEFAULT_USER_SETTINGS.modelTypes || {})
   };
 
@@ -273,12 +283,14 @@ function replaceProviders(db, providers) {
     INSERT INTO providers (
       id, name, base_url, api_key, group_id, api_type, model_type,
       sort_order, disabled, fail_count, exclude_auto_refresh,
-      custom_endpoints_chat, custom_endpoints_models, custom_endpoints_images, client_tags_json,
+      custom_endpoints_chat, custom_endpoints_models, custom_endpoints_images, client_tags_json, key_polling_enabled,
+      rpm,
       created_at, updated_at
     ) VALUES (
       @id, @name, @base_url, @api_key, @group_id, @api_type, @model_type,
       @sort_order, @disabled, @fail_count, @exclude_auto_refresh,
-      @custom_endpoints_chat, @custom_endpoints_models, @custom_endpoints_images, @client_tags_json,
+      @custom_endpoints_chat, @custom_endpoints_models, @custom_endpoints_images, @client_tags_json, @key_polling_enabled,
+      @rpm,
       @created_at, CURRENT_TIMESTAMP
     )
     ON CONFLICT(id) DO UPDATE SET
@@ -296,6 +308,8 @@ function replaceProviders(db, providers) {
       custom_endpoints_models = excluded.custom_endpoints_models,
       custom_endpoints_images = excluded.custom_endpoints_images,
       client_tags_json = excluded.client_tags_json,
+      key_polling_enabled = excluded.key_polling_enabled,
+      rpm = excluded.rpm,
       updated_at = CURRENT_TIMESTAMP
   `);
 
@@ -336,6 +350,8 @@ function replaceProviders(db, providers) {
       custom_endpoints_models: provider.customEndpoints?.models || '',
       custom_endpoints_images: provider.customEndpoints?.images || '',
       client_tags_json: serialize(normalizeProviderClientTags(provider.clientTags)),
+      key_polling_enabled: provider.keyPollingEnabled ? 1 : 0,
+      rpm: normalizeProviderRpm(provider.rpm),
       created_at: provider.createdAt || provider.created_at || nowIso()
     });
 
@@ -400,7 +416,7 @@ function buildApiSettingsFromDb(db) {
   const keyRows = db.prepare(`
     SELECT id, provider_id, name, api_key, enabled, weight, priority, fail_count, last_used_at, created_at, updated_at
     FROM provider_keys
-    ORDER BY provider_id ASC, priority DESC, weight DESC, created_at ASC, id ASC
+    ORDER BY provider_id ASC, created_at ASC, id ASC
   `).all();
 
   const modelsByProvider = new Map();
@@ -463,6 +479,8 @@ function buildApiSettingsFromDb(db) {
       apiType: row.api_type || 'openai',
       modelType: row.model_type || 'text',
       clientTags: normalizeProviderClientTags(deserialize(row.client_tags_json, DEFAULT_PROVIDER_CLIENT_TAGS)),
+      keyPollingEnabled: !!row.key_polling_enabled,
+      rpm: normalizeProviderRpm(row.rpm),
       sortOrder: row.sort_order ?? 0,
       disabled: !!row.disabled,
       failCount: row.fail_count || 0,
@@ -666,7 +684,7 @@ function replaceConversations(db, conversations) {
       title: conversation.title || '',
       model: conversation.model || '',
       created_at: conversation.createdAt || conversation.created_at || nowIso(),
-      updated_at: conversation.updatedAt || conversation.updated_at || nowIso()
+      updated_at: nowIso()
     });
 
     (conversation.messages || []).forEach((msg, index) => {
@@ -674,7 +692,9 @@ function replaceConversations(db, conversations) {
         conversation_id: conversation.id,
         message_index: index,
         role: msg.role,
-        content: msg.content || '',
+        content: typeof msg.content === 'string'
+          ? msg.content
+          : (msg.content == null ? '' : JSON.stringify(msg.content)),
         error: msg.error ? 1 : 0,
         streaming: msg.streaming ? 1 : 0,
         message_type: msg.messageType || '',
@@ -710,32 +730,40 @@ function buildConversationsFromDb(db) {
     if (!messageMap.has(row.conversation_id)) {
       messageMap.set(row.conversation_id, []);
     }
-    messageMap.get(row.conversation_id).push({
-      role: row.role,
-      content: row.content,
-      error: !!row.error,
-      streaming: !!row.streaming,
-      messageType: row.message_type || undefined,
-      rendered: row.rendered || undefined,
-      textContent: row.text_content || undefined,
-      metadata: deserialize(row.metadata_json, null),
-      errorDetails: deserialize(row.error_details_json, null),
-      generatedImages: deserialize(row.generated_images_json, null),
-      images: deserialize(row.images_json, null),
-      files: deserialize(row.files_json, null),
-      createdAt: row.created_at,
-      updatedAt: row.updated_at
-    });
+    messageMap.get(row.conversation_id).push(mapConversationMessageRow(row));
   }
 
-  return conversations.map(conversation => ({
+  return conversations.map(conversation => mapConversationRow(conversation, messageMap.get(conversation.id) || []));
+}
+
+function mapConversationMessageRow(row) {
+  return {
+    role: row.role,
+    content: row.content,
+    error: !!row.error,
+    streaming: !!row.streaming,
+    messageType: row.message_type || undefined,
+    rendered: row.rendered || undefined,
+    textContent: row.text_content || undefined,
+    metadata: deserialize(row.metadata_json, null),
+    errorDetails: deserialize(row.error_details_json, null),
+    generatedImages: deserialize(row.generated_images_json, null),
+    images: deserialize(row.images_json, null),
+    files: deserialize(row.files_json, null),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+function mapConversationRow(conversation, messages) {
+  return {
     id: conversation.id,
     title: conversation.title || '',
     model: conversation.model || '',
-    messages: messageMap.get(conversation.id) || [],
+    messages: messages || [],
     createdAt: conversation.created_at,
     updatedAt: conversation.updated_at
-  }));
+  };
 }
 
 async function readConversationFiles() {
@@ -931,6 +959,62 @@ function saveUserSettingsToDb(settings) {
   return getUserSettingsFromDb();
 }
 
+const HOT_USER_SETTING_KEYS = [
+  'pollingState',
+  'keyPollingState',
+  'modelFailCounts',
+  'keyFailCounts',
+  'disabledModels',
+  'conversationProviderMap'
+];
+
+function saveHotUserStateToDb(settings) {
+  const db = getDb();
+  const tx = db.transaction(() => {
+    HOT_USER_SETTING_KEYS.forEach((key) => {
+      if (settings?.[key] !== undefined) {
+        setSetting(db, key, settings[key]);
+      }
+    });
+  });
+  tx();
+}
+
+function saveColdUserSettingsToDb(updates) {
+  const db = getDb();
+  const tx = db.transaction(() => {
+    Object.entries(updates || {}).forEach(([key, value]) => {
+      if (key === 'proxyApiKeys' || HOT_USER_SETTING_KEYS.includes(key)) return;
+      setSetting(db, key, value, typeof value === 'string' ? 'string' : 'json');
+    });
+  });
+  tx();
+}
+
+function incrementProxyKeyUsageBatch(entries) {
+  if (!Array.isArray(entries) || entries.length === 0) return;
+
+  const db = getDb();
+  const stmt = db.prepare(`
+    UPDATE proxy_keys
+    SET usage_count = usage_count + @delta,
+        last_used = @last_used,
+        updated_at = CURRENT_TIMESTAMP
+    WHERE id = @id
+  `);
+
+  const tx = db.transaction((rows) => {
+    rows.forEach(([id, data]) => {
+      stmt.run({
+        id,
+        delta: data.delta,
+        last_used: data.lastUsed
+      });
+    });
+  });
+  tx(entries);
+}
+
 function getPromptsFromDb() {
   return buildPromptsFromDb(getDb());
 }
@@ -962,7 +1046,22 @@ function getConversationsFromDb() {
 }
 
 function getConversationByIdFromDb(id) {
-  return getConversationsFromDb().find(conversation => conversation.id === id) || null;
+  const db = getDb();
+  const conversation = db.prepare(`
+    SELECT id, title, model, created_at, updated_at
+    FROM conversations
+    WHERE id = ?
+  `).get(id);
+  if (!conversation) return null;
+
+  const messages = db.prepare(`
+    SELECT *
+    FROM conversation_messages
+    WHERE conversation_id = ?
+    ORDER BY message_index ASC
+  `).all(id).map(mapConversationMessageRow);
+
+  return mapConversationRow(conversation, messages);
 }
 
 function saveConversationToDb(conversation) {
@@ -979,7 +1078,7 @@ function saveConversationToDb(conversation) {
       title: conversation.title || '',
       model: conversation.model || '',
       created_at: conversation.createdAt || conversation.created_at || nowIso(),
-      updated_at: conversation.updatedAt || conversation.updated_at || nowIso()
+      updated_at: nowIso()
     });
 
     const insertMessage = db.prepare(`
@@ -999,7 +1098,9 @@ function saveConversationToDb(conversation) {
         conversation_id: conversation.id,
         message_index: index,
         role: msg.role,
-        content: msg.content || '',
+        content: typeof msg.content === 'string'
+          ? msg.content
+          : (msg.content == null ? '' : JSON.stringify(msg.content)),
         error: msg.error ? 1 : 0,
         streaming: msg.streaming ? 1 : 0,
         message_type: msg.messageType || '',
@@ -1034,6 +1135,10 @@ module.exports = {
   saveApiSettingsToDb,
   getUserSettingsFromDb,
   saveUserSettingsToDb,
+  saveHotUserStateToDb,
+  saveColdUserSettingsToDb,
+  incrementProxyKeyUsageBatch,
+  HOT_USER_SETTING_KEYS,
   getPromptsFromDb,
   savePromptsToDb,
   getLanguagesFromDb,
@@ -1046,5 +1151,6 @@ module.exports = {
   DEFAULT_LANGUAGES,
   DEFAULT_PROVIDER_GROUP,
   DEFAULT_PROMPT_GROUP,
-  DEFAULT_TRANSLATE_GROUP
+  DEFAULT_TRANSLATE_GROUP,
+  normalizeProviderRpm
 };

@@ -770,10 +770,10 @@ onUnmounted(() => {
 
 h2 {
   margin-bottom: 22px;
-  color: #0f172a;
+  color: var(--ink);
   font-size: 1.9rem;
   font-weight: 800;
-  letter-spacing: -0.03em;
+  letter-spacing: 0;
 }
 
 /* 工具栏 */
@@ -786,7 +786,7 @@ h2 {
   background: rgba(255, 255, 255, 0.96);
   border-radius: 22px;
   border: 1px solid rgba(226, 232, 240, 0.95);
-  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.05);
+  box-shadow: 0 8px 20px rgba(23, 28, 25, 0.05);
   flex-wrap: wrap;
   gap: 15px;
 }
@@ -853,21 +853,21 @@ h2 {
 
 .btn-search {
   padding: 9px 16px;
-  background: #0891b2;
+  background: var(--accent);
   color: white;
   border: none;
   border-radius: 999px;
   cursor: pointer;
   font-size: 14px;
   font-weight: 700;
-  box-shadow: 0 8px 16px rgba(8, 145, 178, 0.18);
+  box-shadow: 0 8px 16px rgba(57, 132, 91, 0.18);
   transition: all 0.22s ease;
 }
 
 .btn-search:hover {
-  background: #0e7490;
+  background: var(--accent-strong);
   transform: translateY(-1px);
-  box-shadow: 0 10px 20px rgba(8, 145, 178, 0.24);
+  box-shadow: 0 10px 20px rgba(57, 132, 91, 0.24);
 }
 
 .realtime-toggle {
@@ -913,11 +913,11 @@ h2 {
 }
 
 .btn-action.btn-today {
-  background: #0891b2;
+  background: var(--accent);
 }
 
 .btn-action.btn-today:hover {
-  background: #0e7490;
+  background: var(--accent-strong);
 }
 
 .btn-action.btn-recent {
@@ -989,7 +989,7 @@ h2 {
   border-radius: 18px;
   border: 1px solid rgba(226, 232, 240, 0.95);
   border-left: 4px solid #2196F3;
-  box-shadow: 0 6px 14px rgba(15, 23, 42, 0.04);
+  box-shadow: 0 6px 14px rgba(23, 28, 25, 0.04);
 }
 
 .stat-card.success {
@@ -1022,7 +1022,7 @@ h2 {
   border-radius: 24px;
   padding: 22px;
   border: 1px solid rgba(226, 232, 240, 0.95);
-  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.05);
+  box-shadow: 0 10px 24px rgba(23, 28, 25, 0.05);
 }
 
 .no-data {
@@ -1044,7 +1044,7 @@ h2 {
   flex-shrink: 0;
   min-height: 50px;
   background: linear-gradient(180deg, rgba(255,255,255,0.99) 0%, rgba(247,250,252,0.97) 100%);
-  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.03);
+  box-shadow: 0 4px 12px rgba(23, 28, 25, 0.03);
 }
 
 .log-header {

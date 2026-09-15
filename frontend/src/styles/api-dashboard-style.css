@@ -6,31 +6,35 @@
 /* ==================== 根变量 ==================== */
 .api-settings-container.api-style-dashboard,
 .api-settings-container.api-style-dashboard * {
-  --ab-bg: linear-gradient(135deg, #f5f7fa 0%, #e8ecf1 100%);
+  --ab-page: linear-gradient(180deg, #f3faf6 0%, #eaf6ef 58%, #fff4f2 100%);
+  --ab-bg: #f3faf6;
   --ab-surface: #ffffff;
-  --ab-surface-hover: #fafbfc;
-  --ab-border: #e1e4e8;
-  --ab-border-hover: #d1d5db;
-  --ab-text-primary: #1a1a1a;
-  --ab-text-secondary: #6b7280;
-  --ab-text-tertiary: #9ca3af;
-  --ab-primary: #007aff;
-  --ab-primary-hover: #0066d6;
-  --ab-primary-fade: rgba(0, 122, 255, 0.1);
-  --ab-success: #34c759;
-  --ab-success-hover: #28a745;
-  --ab-success-fade: rgba(52, 199, 89, 0.1);
-  --ab-warning: #ff9500;
-  --ab-warning-hover: #e68600;
-  --ab-danger: #ff3b30;
-  --ab-danger-hover: #d63027;
-  --ab-danger-fade: rgba(255, 59, 48, 0.1);
-  --ab-info: #5ac8fa;
-  --ab-shadow-xs: 0 1px 3px rgba(0, 0, 0, 0.04);
-  --ab-shadow-sm: 0 2px 6px rgba(0, 0, 0, 0.06);
-  --ab-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
-  --ab-shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.12);
-  --ab-shadow-xl: 0 12px 32px rgba(0, 0, 0, 0.15);
+  --ab-surface-hover: #f7fcf9;
+  --ab-border: #d4eadc;
+  --ab-border-hover: #b9d8c5;
+  --ab-text-primary: #24553c;
+  --ab-text-secondary: #6b8f7a;
+  --ab-text-tertiary: #8aae98;
+  --ab-primary: #39845b;
+  --ab-primary-hover: #2f6f4c;
+  --ab-primary-fade: rgba(253, 152, 145, 0.16);
+  --ab-pink: #fd9891;
+  --ab-pink-hover: #f57d75;
+  --ab-pink-soft: #ffe8e6;
+  --ab-success: #39845b;
+  --ab-success-hover: #2f6f4c;
+  --ab-success-fade: rgba(57, 132, 91, 0.12);
+  --ab-warning: #d89000;
+  --ab-warning-hover: #c07e00;
+  --ab-danger: #e23d3d;
+  --ab-danger-hover: #c83232;
+  --ab-danger-fade: rgba(226, 61, 61, 0.12);
+  --ab-info: #fd9891;
+  --ab-shadow-xs: 0 1px 3px rgba(36, 85, 60, 0.04);
+  --ab-shadow-sm: 0 2px 6px rgba(36, 85, 60, 0.06);
+  --ab-shadow: 0 4px 12px rgba(36, 85, 60, 0.08);
+  --ab-shadow-lg: 0 8px 24px rgba(36, 85, 60, 0.12);
+  --ab-shadow-xl: 0 12px 32px rgba(36, 85, 60, 0.14);
   --ab-radius-sm: 6px;
   --ab-radius: 12px;
   --ab-radius-lg: 16px;
@@ -46,7 +50,7 @@
 /* ==================== 基础样式 ==================== */
 .api-settings-container.api-style-dashboard {
   font-family: var(--ab-font-body);
-  background: var(--ab-bg);
+  background: var(--ab-page);
   color: var(--ab-text-primary);
   height: 100vh;
   display: flex;
@@ -171,7 +175,7 @@
 }
 
 .api-settings-container.api-style-dashboard .btn-add-provider {
-  background: linear-gradient(135deg, #007aff 0%, #0056b3 100%);
+  background: linear-gradient(135deg, var(--ab-primary) 0%, var(--ab-primary-hover) 100%);
 }
 
 .api-settings-container.api-style-dashboard .btn-add-provider:hover {
@@ -180,7 +184,8 @@
 }
 
 .api-settings-container.api-style-dashboard .btn-import {
-  background: linear-gradient(135deg, #34c759 0%, #28a745 100%);
+  background: linear-gradient(135deg, var(--ab-pink) 0%, var(--ab-pink-hover) 100%);
+  color: #24553c;
 }
 
 .api-settings-container.api-style-dashboard .btn-import:hover {
@@ -189,7 +194,8 @@
 }
 
 .api-settings-container.api-style-dashboard .btn-export {
-  background: linear-gradient(135deg, #ff9500 0%, #e68600 100%);
+  background: linear-gradient(135deg, #e3f4ea 0%, #d4eadc 100%);
+  color: #24553c;
 }
 
 .api-settings-container.api-style-dashboard .btn-export:hover {
@@ -346,19 +352,20 @@
 .api-settings-container.api-style-dashboard .provider-item:hover {
   transform: translateY(-3px) scale(1.02);
   box-shadow: var(--ab-shadow-lg);
-  border-color: var(--ab-primary);
+  border-color: var(--ab-pink);
 }
 
 .api-settings-container.api-style-dashboard .provider-item.active {
-  background: linear-gradient(135deg, #f0f7ff 0%, #e8f4ff 100%);
-  border-color: var(--ab-primary);
+  background: linear-gradient(135deg, var(--ab-pink-soft) 0%, #e3f4ea 100%);
+  border-color: var(--ab-pink);
   border-width: 2px;
+  color: var(--ab-text-primary);
   box-shadow: 0 0 0 4px var(--ab-primary-fade), var(--ab-shadow);
 }
 
 .api-settings-container.api-style-dashboard .provider-item.no-models {
   border-color: var(--ab-danger);
-  background: linear-gradient(135deg, #fff5f5 0%, #ffe8e8 100%);
+  background: linear-gradient(135deg, var(--ab-pink-soft) 0%, #ffe8e6 100%);
 }
 
 .api-settings-container.api-style-dashboard .provider-item.no-models.active {
@@ -371,7 +378,7 @@
   width: 48px;
   height: 48px;
   border-radius: 50%;
-  background: linear-gradient(135deg, var(--ab-bg) 0%, #e8ecf1 100%);
+  background: linear-gradient(135deg, var(--ab-bg) 0%, #e3f4ea 100%);
   color: var(--ab-text-secondary);
   display: flex;
   align-items: center;
@@ -384,10 +391,10 @@
 }
 
 .api-settings-container.api-style-dashboard .provider-item.active .provider-item-icon {
-  background: linear-gradient(135deg, var(--ab-primary) 0%, #0066d6 100%);
+  background: linear-gradient(135deg, var(--ab-primary) 0%, var(--ab-primary-hover) 100%);
   color: white;
   border-color: var(--ab-primary);
-  box-shadow: 0 4px 12px rgba(0, 122, 255, 0.3);
+  box-shadow: 0 4px 12px rgba(57, 132, 91, 0.28);
 }
 
 .api-settings-container.api-style-dashboard .provider-item.no-models .provider-item-icon {
@@ -396,9 +403,9 @@
 }
 
 .api-settings-container.api-style-dashboard .provider-item.no-models.active .provider-item-icon {
-  background: linear-gradient(135deg, var(--ab-danger) 0%, #d63027 100%);
+  background: linear-gradient(135deg, var(--ab-danger) 0%, #c83232 100%);
   color: white;
-  box-shadow: 0 4px 12px rgba(255, 59, 48, 0.3);
+  box-shadow: 0 4px 12px rgba(226, 61, 61, 0.28);
 }
 
 /* 提供商信息 */
@@ -513,7 +520,7 @@
   font-size: 28px;
   font-weight: 700;
   color: var(--ab-text-primary);
-  letter-spacing: -0.5px;
+  letter-spacing: 0;
 }
 
 /* 头部操作按钮 */
@@ -723,7 +730,7 @@
 }
 
 .api-settings-container.api-style-dashboard .count {
-  background: linear-gradient(135deg, var(--ab-primary) 0%, #0066d6 100%);
+  background: linear-gradient(135deg, var(--ab-primary) 0%, var(--ab-primary-hover) 100%);
   color: white;
   padding: 4px 14px;
   border-radius: 14px;
@@ -794,7 +801,7 @@
 }
 
 .api-settings-container.api-style-dashboard .added-model-card:hover {
-  border-color: var(--ab-primary);
+  border-color: var(--ab-pink);
   transform: translateY(-2px);
   box-shadow: var(--ab-shadow);
 }
@@ -896,7 +903,7 @@
 }
 
 .api-settings-container.api-style-dashboard .model-row:hover {
-  border-color: var(--ab-primary);
+  border-color: var(--ab-pink);
   transform: translateX(4px);
   box-shadow: var(--ab-shadow-sm);
 }
@@ -923,7 +930,7 @@
 }
 
 .api-settings-container.api-style-dashboard .btn-toggle-model {
-  background: linear-gradient(135deg, var(--ab-primary) 0%, #0066d6 100%);
+  background: linear-gradient(135deg, var(--ab-primary) 0%, var(--ab-primary-hover) 100%);
   color: white;
   border-color: transparent;
   box-shadow: var(--ab-shadow-xs);
@@ -1043,7 +1050,7 @@
   padding: 12px 24px;
   border: none;
   border-radius: var(--ab-radius);
-  background: linear-gradient(135deg, var(--ab-primary) 0%, #0066d6 100%);
+  background: linear-gradient(135deg, var(--ab-primary) 0%, var(--ab-primary-hover) 100%);
   color: white;
   cursor: pointer;
   transition: var(--ab-transition);
@@ -1149,4 +1156,95 @@
   .api-settings-container.api-style-dashboard .added-models-grid {
     grid-template-columns: 1fr;
   }
+}
+
+/* ==================== 选择器 / 徽章 / 拖拽 / 批量 ==================== */
+.api-settings-container.api-style-dashboard .sidebar-tools-toggle {
+  border-color: var(--ab-border);
+  background: var(--ab-surface);
+  color: var(--ab-text-primary);
+  box-shadow: var(--ab-shadow-xs);
+}
+
+.api-settings-container.api-style-dashboard .api-style-select-trigger {
+  background: var(--ab-bg);
+  border-color: var(--ab-border);
+  color: var(--ab-text-primary);
+}
+
+.api-settings-container.api-style-dashboard .api-style-select-trigger:hover {
+  background: var(--ab-pink-soft);
+  border-color: var(--ab-pink);
+}
+
+.api-settings-container.api-style-dashboard .selected-api-style,
+.api-settings-container.api-style-dashboard .dropdown-arrow {
+  color: var(--ab-text-secondary);
+}
+
+.api-settings-container.api-style-dashboard .api-style-dropdown {
+  background: var(--ab-surface);
+  border-color: var(--ab-border);
+  box-shadow: var(--ab-shadow-lg);
+}
+
+.api-settings-container.api-style-dashboard .api-style-search-input {
+  background: var(--ab-surface);
+  color: var(--ab-text-primary);
+  border-bottom-color: var(--ab-border);
+}
+
+.api-settings-container.api-style-dashboard .api-style-option {
+  border-bottom-color: var(--ab-border);
+  color: var(--ab-text-primary);
+}
+
+.api-settings-container.api-style-dashboard .api-style-option:hover {
+  background: var(--ab-bg);
+}
+
+.api-settings-container.api-style-dashboard .api-style-option.active {
+  background: var(--ab-pink-soft);
+  color: var(--ab-text-primary);
+}
+
+.api-settings-container.api-style-dashboard .rpm-badge {
+  background: var(--ab-pink);
+  color: #24553c;
+}
+
+.api-settings-container.api-style-dashboard .provider-item.drag-over {
+  border-color: var(--ab-pink);
+  background: var(--ab-pink-soft);
+  box-shadow: 0 0 0 4px var(--ab-primary-fade);
+}
+
+.api-settings-container.api-style-dashboard .provider-drag-handle,
+.api-settings-container.api-style-dashboard .provider-move-btn {
+  background: var(--ab-surface);
+  color: var(--ab-text-secondary);
+  border-color: var(--ab-border);
+}
+
+.api-settings-container.api-style-dashboard .provider-drag-handle:hover,
+.api-settings-container.api-style-dashboard .provider-move-btn:hover {
+  background: var(--ab-pink-soft);
+  border-color: var(--ab-pink);
+  color: var(--ab-text-primary);
+}
+
+.api-settings-container.api-style-dashboard .added-model-card.batch-selected,
+.api-settings-container.api-style-dashboard .btn-model-batch-select.active {
+  background: var(--ab-pink-soft);
+  border-color: var(--ab-pink);
+  color: var(--ab-text-primary);
+}
+
+.api-settings-container.api-style-dashboard .btn-fetch-provider-models {
+  background: var(--ab-primary);
+  color: #fff;
+}
+
+.api-settings-container.api-style-dashboard .btn-fetch-provider-models:hover:not(:disabled) {
+  background: var(--ab-primary-hover);
 }

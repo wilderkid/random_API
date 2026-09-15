@@ -72,6 +72,19 @@
       </div>
     </div>
 
+    <div class="control-group retry-control">
+      <label>轮询轮数:</label>
+      <input
+        v-model.number="settings.pollingMaxRounds"
+        type="number"
+        min="1"
+        max="20"
+        class="retry-input"
+        @change="saveRetrySettings"
+      >
+      <span class="retry-hint">失败后按供应商列表完整轮询的最大轮数，成功即停</span>
+    </div>
+
     <div class="three-column-container">
       <div class="column available-pool">
         <div class="column-header">
@@ -391,6 +404,10 @@ async function loadData() {
   if (!settings.value.pollingConfig) {
     settings.value.pollingConfig = { available: {}, excluded: [] }
   }
+  const loadedRounds = Number(settings.value.pollingMaxRounds ?? settings.value.pollingMaxRetries)
+  settings.value.pollingMaxRounds = Number.isFinite(loadedRounds)
+    ? Math.max(1, Math.min(20, Math.floor(loadedRounds)))
+    : 2
   if (!Array.isArray(settings.value.pollingConfig.excluded)) {
     // 兼容旧格式：将对象格式转换为数组格式
     const oldExcluded = settings.value.pollingConfig.excluded || {}
@@ -595,34 +612,30 @@ function drop(modelName, targetIndex) {
 
 async function reenable(itemId) {
   // itemId 格式为 "providerId:modelName"
-  const [providerId, modelName] = itemId.split(':')
+  const separator = String(itemId || '').indexOf(':')
+  const providerId = separator >= 0 ? itemId.slice(0, separator) : itemId
+  const modelName = separator >= 0 ? itemId.slice(separator + 1) : ''
   
-  // 从禁用模型列表中移除
-  if (settings.value.disabledModels && settings.value.disabledModels[providerId]) {
-    const index = settings.value.disabledModels[providerId].indexOf(modelName)
-    if (index > -1) {
-      settings.value.disabledModels[providerId].splice(index, 1)
-      // 如果该提供商没有其他禁用模型，删除整个条目
-      if (settings.value.disabledModels[providerId].length === 0) {
-        delete settings.value.disabledModels[providerId]
-      }
-    }
-  }
-  
-  // 重置模型失败计数
-  const failCountKey = `${providerId}:${modelName}`
-  if (settings.value.modelFailCounts && settings.value.modelFailCounts[failCountKey]) {
-    settings.value.modelFailCounts[failCountKey] = 0
-  }
-  
-  await saveSettings()
-  
-  // 重新加载数据
+  await axios.post('/api/polling/reenable-model', { providerId, modelName })
   await loadData()
 }
 
 async function saveSettings() {
-  await axios.put('/api/settings', settings.value)
+  await axios.put('/api/settings', {
+    pollingConfig: settings.value.pollingConfig,
+    pollingMaxRounds: settings.value.pollingMaxRounds
+  })
+}
+
+async function saveRetrySettings() {
+  const rounds = Number(settings.value.pollingMaxRounds ?? settings.value.pollingMaxRetries)
+  settings.value.pollingMaxRounds = Number.isFinite(rounds)
+    ? Math.max(1, Math.min(20, Math.floor(rounds)))
+    : 2
+  delete settings.value.pollingMaxRetries
+  await axios.put('/api/settings', {
+    pollingMaxRounds: settings.value.pollingMaxRounds
+  })
 }
 
 async function refreshConfig() {
@@ -708,8 +721,8 @@ onMounted(loadData)
 }
 
 .debug-info {
-  background: #f8f9fa;
-  border: 1px solid #dee2e6;
+  background: var(--bg-soft);
+  border: 1px solid var(--line);
   border-radius: 4px;
   padding: 15px;
   margin-bottom: 20px;
@@ -732,8 +745,8 @@ onMounted(loadData)
   align-items: center;
   margin-bottom: 20px;
   padding: 15px;
-  background: #f8f9fa;
-  border: 1px solid #dee2e6;
+  background: var(--bg-soft);
+  border: 1px solid var(--line);
   border-radius: 8px;
 }
 
@@ -760,7 +773,7 @@ onMounted(loadData)
 
 .control-select:focus {
   outline: none;
-  border-color: #007bff;
+  border-color: var(--accent);
   box-shadow: 0 0 0 2px rgba(0, 123, 255, 0.25);
 }
 
@@ -773,6 +786,29 @@ onMounted(loadData)
 }
 
 /* 新增：三列容器样式 */
+.retry-control {
+  width: fit-content;
+  margin: -8px 0 16px 0;
+  padding: 10px 12px;
+  background: var(--bg-soft);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.retry-input {
+  width: 72px;
+  padding: 6px 8px;
+  border: 1px solid #ced4da;
+  border-radius: 4px;
+  background: #fff;
+  font-size: 14px;
+}
+
+.retry-hint {
+  color: #6c757d;
+  font-size: 12px;
+}
+
 .three-column-container {
   display: grid;
   grid-template-columns: 1fr 1fr 1fr;
@@ -790,7 +826,7 @@ onMounted(loadData)
 }
 
 .column {
-  border: 1px solid #dee2e6;
+  border: 1px solid var(--line);
   border-radius: 8px;
   background: white;
   display: flex;
@@ -803,8 +839,8 @@ onMounted(loadData)
   justify-content: space-between;
   align-items: center;
   padding: 15px;
-  background: #f8f9fa;
-  border-bottom: 1px solid #dee2e6;
+  background: var(--bg-soft);
+  border-bottom: 1px solid var(--line);
   flex-shrink: 0;
 }
 
@@ -821,7 +857,7 @@ onMounted(loadData)
 
 .btn-expand {
   padding: 4px 8px;
-  border: 1px solid #dee2e6;
+  border: 1px solid var(--line);
   border-radius: 3px;
   background: white;
   cursor: pointer;
@@ -830,7 +866,7 @@ onMounted(loadData)
 }
 
 .btn-expand:hover {
-  background: #e9ecef;
+  background: var(--line);
   color: #495057;
 }
 
@@ -853,7 +889,7 @@ onMounted(loadData)
 
 .model-group {
   margin-bottom: 10px;
-  border: 1px solid #e9ecef;
+  border: 1px solid var(--line);
   border-radius: 4px;
 }
 
@@ -862,13 +898,13 @@ onMounted(loadData)
   justify-content: space-between;
   align-items: center;
   padding: 8px 12px;
-  background: #f8f9fa;
+  background: var(--bg-soft);
   cursor: pointer;
   border-radius: 4px 4px 0 0;
 }
 
 .group-header:hover {
-  background: #e9ecef;
+  background: var(--line);
 }
 
 .group-expand-icon {
@@ -893,7 +929,7 @@ onMounted(loadData)
 }
 
 .group-badge {
-  background: #007bff;
+  background: var(--accent);
   color: white;
   padding: 2px 6px;
   border-radius: 12px;
@@ -925,13 +961,13 @@ onMounted(loadData)
   padding: 6px 12px;
   margin: 2px 0;
   background: #fff;
-  border: 1px solid #dee2e6;
+  border: 1px solid var(--line);
   border-radius: 3px;
   cursor: move;
 }
 
 .provider-item:hover {
-  background: #f8f9fa;
+  background: var(--bg-soft);
 }
 
 .provider-item:hover .btn-exclude {
@@ -958,7 +994,7 @@ onMounted(loadData)
 
 .btn-exclude {
   padding: 2px 6px;
-  border: 1px solid #dee2e6;
+  border: 1px solid var(--line);
   border-radius: 3px;
   background: white;
   cursor: pointer;
@@ -1015,7 +1051,7 @@ onMounted(loadData)
 
 .btn-arrow, .btn-reenable, .btn-refresh, .btn-debug, .btn-reset {
   padding: 4px 8px;
-  border: 1px solid #dee2e6;
+  border: 1px solid var(--line);
   border-radius: 3px;
   background: white;
   cursor: pointer;
@@ -1023,7 +1059,7 @@ onMounted(loadData)
 }
 
 .btn-arrow:hover, .btn-reenable:hover, .btn-refresh:hover, .btn-debug:hover, .btn-reset:hover:not(:disabled) {
-  background: #e9ecef;
+  background: var(--line);
 }
 
 .btn-reset:disabled {
@@ -1032,16 +1068,16 @@ onMounted(loadData)
 }
 
 .btn-reenable {
-  background: #007bff;
+  background: var(--accent);
   color: white;
-  border-color: #007bff;
+  border-color: var(--accent);
   margin-top: 8px;
   align-self: flex-end;
 }
 
 .btn-reenable:hover {
-  background: #0056b3;
-  border-color: #0056b3;
+  background: var(--accent-strong);
+  border-color: var(--accent-strong);
 }
 
 .btn-refresh {
@@ -1135,7 +1171,7 @@ onMounted(loadData)
 
 .model-group {
   margin-bottom: 10px;
-  border: 1px solid #e9ecef;
+  border: 1px solid var(--line);
   border-radius: 4px;
   overflow: hidden;
 }
@@ -1147,7 +1183,7 @@ onMounted(loadData)
   padding: 6px 12px;
   margin: 2px 0;
   background: #fff;
-  border: 1px solid #dee2e6;
+  border: 1px solid var(--line);
   border-radius: 3px;
   cursor: move;
   word-break: break-word;

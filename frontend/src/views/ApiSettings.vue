@@ -120,6 +120,7 @@
                   <span class="model-count-badge" :class="{ 'zero-models': !provider.disabled && (!provider.models || provider.models.length === 0) }">
                     {{ provider.models?.length || 0 }}
                   </span>
+                  <span v-if="provider.rpm > 0" class="rpm-badge">{{ provider.rpm }}/min</span>
                 </div>
                 <div :class="['provider-item-status', provider.disabled ? 'disabled' : 'active']">
                   {{ provider.disabled ? '已禁用' : 'ON' }}
@@ -320,6 +321,11 @@
           <input v-model="providerForm.name" class="input-field" placeholder="例如: OpenAI">
         </label>
         <label>
+          RPM 限制
+          <input v-model.number="providerForm.rpm" type="number" min="0" step="1" class="input-field" placeholder="0">
+          <small class="hint">每分钟最多请求次数，0 表示不限制。普通对话达到上限会跳过该供应商；工具调用会等待，不会换供应商。</small>
+        </label>
+        <label>
           API 密钥
           <input v-model="providerForm.apiKey" type="password" class="input-field" placeholder="sk-...">
         </label>
@@ -331,16 +337,21 @@
               <button @click="syncPrimaryKeyToList" class="btn-icon-small" type="button">↘ 同步主 Key</button>
             </div>
           </div>
+          <label class="checkbox-inline key-polling-toggle">
+            <input type="checkbox" v-model="providerForm.keyPollingEnabled">
+            Key 顺序轮询
+            <small class="hint">开启后按列表顺序轮询 Key，并按权重分配名额；忽略优先级。</small>
+          </label>
           <div class="api-key-row api-key-header-row">
             <span>API 密钥</span>
             <span>启用</span>
             <span class="api-key-label-with-tip">
               权重
-              <span class="info-tooltip" data-tooltip="权重用于多 Key 轮询时的比例分配，数值越大被选中的概率越高。">ⓘ</span>
+              <span class="info-tooltip" data-tooltip="开启 Key 轮询后，权重是每轮占用次数，2 和 1 约为 2:1。关闭轮询时只在优先级相同的 Key 之间排序。">ⓘ</span>
             </span>
             <span class="api-key-label-with-tip">
               优先级
-              <span class="info-tooltip" data-tooltip="优先级用于确定优先使用的 Key，数值越小优先级越高。">ⓘ</span>
+              <span class="info-tooltip" data-tooltip="关闭 Key 轮询时生效，数值越小越优先。开启轮询后忽略此项。">ⓘ</span>
             </span>
             <span></span>
           </div>
@@ -510,7 +521,7 @@ const expandedGroups = ref({}) // 分组展开状态
 const showAddProvider = ref(false)
 const isSidebarToolsCollapsed = ref(false)
 const editingProvider = ref(null)
-const providerForm = ref({ name: '', baseUrl: '', apiKey: '', apiKeys: [], groupId: 'default', apiType: 'openai', clientTags: defaultClientTags(), customEndpoints: { chat: '', models: '', images: '' } })
+const providerForm = ref({ name: '', baseUrl: '', apiKey: '', apiKeys: [], keyPollingEnabled: false, rpm: 0, groupId: 'default', apiType: 'openai', clientTags: defaultClientTags(), customEndpoints: { chat: '', models: '', images: '' } })
 const showAdvanced = ref(false)
 const showApiKey = ref(false)
 const showAddModelModal = ref(false)
@@ -691,7 +702,7 @@ const groupSelectOptions = computed(() =>
 
 const apiTypeOptions = computed(() => [
   { label: 'OpenAI 兼容格式', value: 'openai', description: '/v1/chat/completions' },
-  { label: 'Responses 兼容格式', value: 'responses', description: '/v1/responses' },
+  { label: 'Responses 兼容格式', value: 'responses', description: '/v1/chat/completions（入站 Responses 会转成 chat）' },
   { label: 'Anthropic 兼容格式', value: 'anthropic', description: '/v1/messages' }
 ])
 
@@ -712,6 +723,8 @@ async function loadProviders() {
       models: p.models || [],
       groupId: p.groupId || 'default',
       apiType: p.apiType || 'openai', // 默认为OpenAI兼容格式
+      keyPollingEnabled: p.keyPollingEnabled === true,
+      rpm: Number(p.rpm) > 0 ? Math.floor(Number(p.rpm)) : 0,
       clientTags: normalizeClientTags(p.clientTags),
       apiKeys
     }
@@ -1174,6 +1187,8 @@ function editProvider() {
     })),
     groupId: selectedProvider.value.groupId || 'default',
     apiType: selectedProvider.value.apiType || 'openai',
+    keyPollingEnabled: selectedProvider.value.keyPollingEnabled === true,
+    rpm: Number(selectedProvider.value.rpm) > 0 ? Math.floor(Number(selectedProvider.value.rpm)) : 0,
     clientTags: normalizeClientTags(selectedProvider.value.clientTags),
     customEndpoints: { chat: ce.chat || '', models: ce.models || '', images: ce.images || '' }
   }
@@ -1181,11 +1196,17 @@ function editProvider() {
 }
 
 async function saveProvider() {
+  if (!(providerForm.value.baseUrl || '').trim()) {
+    alert('请填写 Base URL')
+    return
+  }
   const apiKey = (providerForm.value.apiKey || '').trim()
   const normalizedKeys = normalizeProviderKeys(providerForm.value.apiKeys)
   const payload = {
     ...providerForm.value,
     apiKey,
+    keyPollingEnabled: providerForm.value.keyPollingEnabled === true,
+    rpm: Number(providerForm.value.rpm) > 0 ? Math.floor(Number(providerForm.value.rpm)) : 0,
     clientTags: normalizeClientTags(providerForm.value.clientTags),
     apiKeys: normalizedKeys.length > 0
       ? normalizedKeys
@@ -1380,7 +1401,7 @@ function getModelIcon(modelId) {
 function closeModal() {
   showAddProvider.value = false
   editingProvider.value = null
-  providerForm.value = { name: '', baseUrl: '', apiKey: '', apiKeys: [], groupId: 'default', apiType: 'openai', clientTags: defaultClientTags(), customEndpoints: { chat: '', models: '', images: '' } }
+  providerForm.value = { name: '', baseUrl: '', apiKey: '', apiKeys: [], keyPollingEnabled: false, rpm: 0, groupId: 'default', apiType: 'openai', clientTags: defaultClientTags(), customEndpoints: { chat: '', models: '', images: '' } }
   showAdvanced.value = false
 }
 
@@ -1424,7 +1445,7 @@ async function addModelManually() {
 
 async function exportProviders() {
   try {
-    const response = await axios.get('/api/providers/export', {
+    const response = await axios.post('/api/providers/export', null, {
       responseType: 'blob',
     });
     const url = window.URL.createObjectURL(new Blob([response.data]));
@@ -1604,17 +1625,11 @@ function getFullApiUrl(provider) {
     if (apiType === 'anthropic') {
       return `${baseUrl}/messages`
     }
-    if (apiType === 'responses') {
-      return `${baseUrl}/responses`
-    }
     return `${baseUrl}/chat/completions`
   }
 
   if (apiType === 'anthropic') {
     return `${baseUrl}/v1/messages`
-  }
-  if (apiType === 'responses') {
-    return `${baseUrl}/v1/responses`
   }
   return `${baseUrl}/v1/chat/completions`
 }
@@ -1649,13 +1664,13 @@ onUnmounted(() => {
 .danger-group {
   margin-top: 8px;
   padding-top: 8px;
-  border-top: 1px dashed #ffc9c9;
+  border-top: 1px dashed var(--pink);
 }
 
 .btn-batch-select {
-  background: #f8f9fa;
-  color: #495057;
-  border: 1px solid #dee2e6;
+  background: var(--bg-soft);
+  color: var(--ink);
+  border: 1px solid var(--line);
   padding: 6px 12px;
   border-radius: 4px;
   cursor: pointer;
@@ -1664,17 +1679,17 @@ onUnmounted(() => {
 }
 
 .btn-batch-select:hover {
-  background: #e9ecef;
+  background: var(--line);
 }
 
 .btn-batch-select.active {
-  background: #e3f2fd;
-  color: #1976d2;
-  border-color: #90caf9;
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-color: var(--accent);
 }
 
 .btn-batch-delete {
-  background: #ff6b6b;
+  background: var(--bad);
   color: white;
   border: none;
   padding: 6px 12px;
@@ -1685,11 +1700,11 @@ onUnmounted(() => {
 }
 
 .btn-batch-delete:hover {
-  background: #ff5252;
+  background: #e23d3d;
 }
 
 .btn-clear-all {
-  background: #dc3545;
+  background: var(--bad);
   color: white;
   border: none;
   padding: 6px 12px;
@@ -1700,7 +1715,7 @@ onUnmounted(() => {
 }
 
 .btn-clear-all:hover {
-  background: #c82333;
+  background: #c83232;
 }
 
 .provider-checkbox {
@@ -1708,17 +1723,17 @@ onUnmounted(() => {
   width: 16px;
   height: 16px;
   cursor: pointer;
-  accent-color: #1976d2;
+  accent-color: var(--accent);
 }
 
 .provider-item.batch-selected {
-  background: #e3f2fd !important;
-  border-color: #90caf9 !important;
+  background: var(--accent-soft) !important;
+  border-color: var(--accent) !important;
 }
 
 .advanced-settings {
   margin-top: 12px;
-  border: 1px solid #e0e0e0;
+  border: 1px solid var(--line);
   border-radius: 6px;
   overflow: hidden;
 }
@@ -1729,19 +1744,19 @@ onUnmounted(() => {
   align-items: center;
   padding: 8px 12px;
   cursor: pointer;
-  background: #f5f5f5;
+  background: var(--bg-soft);
   font-size: 13px;
-  color: #555;
+  color: var(--muted);
   user-select: none;
 }
 
 .advanced-toggle:hover {
-  background: #ebebeb;
+  background: var(--line);
 }
 
 .advanced-content {
   padding: 12px;
-  border-top: 1px solid #e0e0e0;
+  border-top: 1px solid var(--line);
 }
 
 .advanced-content .hint {
@@ -1765,8 +1780,8 @@ onUnmounted(() => {
   align-items: center;
   gap: 8px;
   padding: 10px 14px;
-  background: #f8f9fa;
-  border: 1px solid #dee2e6;
+  background: var(--bg-soft);
+  border: 1px solid var(--line);
   border-radius: 6px;
   cursor: pointer;
   transition: all 0.2s;
@@ -1774,8 +1789,8 @@ onUnmounted(() => {
 }
 
 .api-style-select-trigger:hover {
-  background: #e9ecef;
-  border-color: #adb5bd;
+  background: var(--line);
+  border-color: var(--line-strong);
 }
 
 .api-style-icon {
@@ -1787,12 +1802,12 @@ onUnmounted(() => {
   flex: 1;
   font-size: 14px;
   font-weight: 500;
-  color: #495057;
+  color: var(--ink);
 }
 
 .dropdown-arrow {
   font-size: 10px;
-  color: #6c757d;
+  color: var(--muted);
   transition: transform 0.2s;
 }
 
@@ -1801,10 +1816,10 @@ onUnmounted(() => {
   top: calc(100% + 4px);
   left: 0;
   right: 0;
-  background: white;
-  border: 1px solid #dee2e6;
+  background: var(--surface);
+  border: 1px solid var(--line);
   border-radius: 8px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  box-shadow: 0 4px 12px rgba(36, 85, 60, 0.12);
   z-index: 1000;
   overflow: hidden;
 }
@@ -1813,13 +1828,13 @@ onUnmounted(() => {
   width: 100%;
   padding: 8px 10px;
   border: none;
-  border-bottom: 1px solid #dee2e6;
+  border-bottom: 1px solid var(--line);
   outline: none;
   font-size: 13px;
 }
 
 .api-style-search-input:focus {
-  border-bottom-color: #0891b2;
+  border-bottom-color: var(--accent);
 }
 
 .api-style-options {
@@ -1836,7 +1851,7 @@ onUnmounted(() => {
   padding: 12px 14px;
   cursor: pointer;
   transition: all 0.2s;
-  border-bottom: 1px solid #f1f3f5;
+  border-bottom: 1px solid var(--bg-soft);
 }
 
 .api-style-option:last-child {
@@ -1844,12 +1859,12 @@ onUnmounted(() => {
 }
 
 .api-style-option:hover {
-  background: #f8f9fa;
+  background: var(--bg-soft);
 }
 
 .api-style-option.active {
-  background: #e7f5ff;
-  color: #007bff;
+  background: var(--pink-soft);
+  color: var(--accent);
 }
 
 .api-style-option-icon {
@@ -1865,7 +1880,7 @@ onUnmounted(() => {
 
 .api-style-option-desc {
   font-size: 12px;
-  color: #6c757d;
+  color: var(--muted);
   margin-left: auto;
   max-width: 150px;
   white-space: nowrap;
@@ -1876,27 +1891,27 @@ onUnmounted(() => {
 .api-style-empty {
   padding: 12px;
   text-align: center;
-  color: #94a3b8;
+  color: var(--muted);
   font-size: 13px;
 }
 
 .api-settings-container {
   display: flex;
   height: 100vh;
-  background: #f8f9fa;
+  background: var(--bg-soft);
 }
 
 .providers-sidebar {
   width: 320px;
-  background: white;
-  border-right: 1px solid #dee2e6;
+  background: var(--surface);
+  border-right: 1px solid var(--line);
   display: flex;
   flex-direction: column;
 }
 
 .sidebar-header {
   padding: 20px;
-  border-bottom: 1px solid #dee2e6;
+  border-bottom: 1px solid var(--line);
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -1905,16 +1920,16 @@ onUnmounted(() => {
 .sidebar-tools-toggle {
   width: 100%;
   padding: 8px 12px;
-  border: 1px solid rgba(203, 213, 225, 0.9);
+  border: 1px solid var(--line);
   border-radius: 6px;
-  background: #f8fafc;
-  color: #1f2937;
+  background: var(--bg-soft);
+  color: var(--ink);
   font-weight: 600;
   cursor: pointer;
 }
 
 .sidebar-tools-toggle:hover {
-  background: #e2e8f0;
+  background: var(--line);
 }
 
 .sidebar-tools {
@@ -1934,7 +1949,7 @@ onUnmounted(() => {
 .btn-manage-groups {
   width: 100%;
   padding: 8px 12px;
-  background: #6c757d;
+  background: var(--muted);
   color: white;
   border: none;
   border-radius: 4px;
@@ -1943,13 +1958,13 @@ onUnmounted(() => {
 }
 
 .btn-manage-groups:hover {
-  background: #5a6268;
+  background: var(--ink);
 }
 
 .search-input {
   width: 100%;
   padding: 8px 12px;
-  border: 1px solid #dee2e6;
+  border: 1px solid var(--line);
   border-radius: 4px;
   margin-bottom: 12px;
 }
@@ -1970,31 +1985,31 @@ onUnmounted(() => {
 }
 
 .btn-add-provider {
-  background: #007bff;
+  background: var(--accent);
 }
 .btn-add-provider:hover {
-  background: #0056b3;
+  background: var(--accent-strong);
 }
 
 .btn-import {
-  background: #28a745;
+  background: var(--good);
 }
 .btn-import:hover {
-  background: #1e7e34;
+  background: var(--accent-strong);
 }
 
 .btn-export {
-  background: #ffc107;
-  color: #212529;
+  background: var(--pink);
+  color: var(--ink);
 }
 .btn-export:hover {
-  background: #e0a800;
+  background: var(--pink-strong);
 }
 
 .btn-refresh-all {
   width: 100%;
   padding: 8px 12px;
-  background: #17a2b8;
+  background: var(--accent);
   color: white;
   border: none;
   border-radius: 4px;
@@ -2005,11 +2020,11 @@ onUnmounted(() => {
 }
 
 .btn-refresh-all:hover:not(:disabled) {
-  background: #138496;
+  background: var(--accent-strong);
 }
 
 .btn-refresh-all:disabled {
-  background: #6c757d;
+  background: var(--muted);
   cursor: not-allowed;
   opacity: 0.6;
 }
@@ -2028,17 +2043,17 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   padding: 8px 12px;
-  background: #e9ecef;
+  background: var(--line);
   border-radius: 6px;
   cursor: pointer;
   font-weight: 500;
-  color: #495057;
+  color: var(--ink);
   margin-bottom: 4px;
   transition: background 0.2s;
 }
 
 .group-header:hover {
-  background: #dee2e6;
+  background: var(--line);
 }
 
 .group-expand-icon {
@@ -2051,7 +2066,7 @@ onUnmounted(() => {
 }
 
 .group-count {
-  background: #6c757d;
+  background: var(--muted);
   color: white;
   padding: 2px 8px;
   border-radius: 10px;
@@ -2067,7 +2082,7 @@ onUnmounted(() => {
   align-items: center;
   padding: 12px;
   margin-bottom: 8px;
-  background: #f8f9fa;
+  background: var(--bg-soft);
   border-radius: 8px;
   cursor: pointer;
   transition: all 0.2s;
@@ -2081,9 +2096,9 @@ onUnmounted(() => {
 }
 
 .provider-item.drag-over {
-  border-color: #66b3ff;
-  background: #edf6ff;
-  box-shadow: 0 0 0 1px rgba(102, 179, 255, 0.24);
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  box-shadow: 0 0 0 1px rgba(57, 132, 91, 0.24);
 }
 
 .provider-drag-handle {
@@ -2093,20 +2108,20 @@ onUnmounted(() => {
   width: 28px;
   height: 28px;
   margin-right: 10px;
-  border: 1px solid #dee2e6;
+  border: 1px solid var(--line);
   border-radius: 6px;
-  background: #ffffff;
-  color: #6c757d;
+  background: var(--surface);
+  color: var(--muted);
   cursor: grab;
   line-height: 1;
-  letter-spacing: -1px;
+  letter-spacing: 0;
   transition: all 0.2s ease;
 }
 
 .provider-drag-handle:hover {
-  background: #eef6ff;
-  border-color: #9ecbff;
-  color: #0d6efd;
+  background: var(--pink-soft);
+  border-color: var(--pink);
+  color: var(--accent);
 }
 
 .provider-drag-handle:active {
@@ -2126,9 +2141,9 @@ onUnmounted(() => {
 }
 
 .provider-move-btn {
-  border: 1px solid #dee2e6;
-  background: white;
-  color: #495057;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink);
   border-radius: 4px;
   padding: 2px 6px;
   font-size: 10px;
@@ -2142,16 +2157,16 @@ onUnmounted(() => {
 }
 
 .provider-item:hover {
-  background: #e9ecef;
+  background: var(--line);
 }
 
 .provider-item:hover .provider-drag-handle {
-  border-color: #cbd5e1;
-  color: #334155;
+  border-color: var(--line);
+  color: var(--ink-soft);
 }
 
 .provider-item.active {
-  background: #007bff;
+  background: var(--accent);
   color: white;
 }
 
@@ -2162,25 +2177,25 @@ onUnmounted(() => {
 }
 
 .provider-item.no-models {
-  border: 2px solid #dc3545;
-  background: #fff5f5;
+  border: 2px solid var(--bad);
+  background: var(--pink-soft);
 }
 
 .provider-item.no-models:hover {
-  background: #ffe5e5;
+  background: var(--pink-soft);
 }
 
 .provider-item.no-models.active {
-  background: #dc3545;
+  background: var(--bad);
   color: white;
-  border-color: #dc3545;
+  border-color: var(--bad);
 }
 
 .provider-item-icon {
   width: 40px;
   height: 40px;
   border-radius: 50%;
-  background: #6c757d;
+  background: var(--muted);
   color: white;
   display: flex;
   align-items: center;
@@ -2207,7 +2222,7 @@ onUnmounted(() => {
 
 .model-count-badge {
   display: inline-block;
-  background: #28a745;
+  background: var(--good);
   color: white;
   padding: 2px 8px;
   border-radius: 10px;
@@ -2218,7 +2233,22 @@ onUnmounted(() => {
 }
 
 .model-count-badge.zero-models {
-  background: #dc3545;
+  background: var(--bad);
+}
+
+.rpm-badge {
+  display: inline-block;
+  margin-left: 6px;
+  background: var(--pink);
+  color: white;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.provider-item.active .rpm-badge {
+  background: rgba(255, 255, 255, 0.3);
 }
 
 .provider-item.active .model-count-badge {
@@ -2236,12 +2266,12 @@ onUnmounted(() => {
 }
 
 .provider-item-status.active {
-  background: #28a745;
+  background: var(--good);
   color: white;
 }
 
 .provider-item-status.disabled {
-  background: #dc3545;
+  background: var(--bad);
   color: white;
 }
 
@@ -2265,7 +2295,7 @@ onUnmounted(() => {
 
 .details-header h2 {
   margin: 0;
-  color: #495057;
+  color: var(--ink);
 }
 
 .header-actions {
@@ -2275,22 +2305,22 @@ onUnmounted(() => {
 
 .btn-toggle {
   padding: 6px 12px;
-  border: 1px solid #dee2e6;
+  border: 1px solid var(--line);
   border-radius: 4px;
-  background: white;
+  background: var(--surface);
   cursor: pointer;
   transition: all 0.2s;
 }
 
 .btn-toggle:hover {
-  background: #e9ecef;
+  background: var(--line);
 }
 
 .btn-icon {
   padding: 6px 8px;
-  border: 1px solid #dee2e6;
+  border: 1px solid var(--line);
   border-radius: 4px;
-  background: white;
+  background: var(--surface);
   cursor: pointer;
   transition: all 0.2s;
   display: flex;
@@ -2302,7 +2332,7 @@ onUnmounted(() => {
 }
 
 .btn-icon:hover {
-  background: #e9ecef;
+  background: var(--line);
 }
 
 .config-section {
@@ -2313,7 +2343,7 @@ onUnmounted(() => {
   display: block;
   font-weight: 500;
   margin-bottom: 8px;
-  color: #495057;
+  color: var(--ink);
 }
 
 .checkbox-label {
@@ -2337,7 +2367,7 @@ onUnmounted(() => {
 
 .hint {
   font-size: 12px;
-  color: #6c757d;
+  color: var(--muted);
   font-weight: normal;
 }
 
@@ -2349,9 +2379,9 @@ onUnmounted(() => {
 .input-field {
   flex: 1;
   padding: 8px 12px;
-  border: 1px solid #dee2e6;
+  border: 1px solid var(--line);
   border-radius: 4px;
-  background: #f8f9fa;
+  background: var(--bg-soft);
 }
 
 .api-keys-preview {
@@ -2360,9 +2390,9 @@ onUnmounted(() => {
   flex-direction: column;
   gap: 8px;
   padding: 10px 12px;
-  border: 1px dashed #dee2e6;
+  border: 1px dashed var(--line);
   border-radius: 6px;
-  background: #f8f9fa;
+  background: var(--bg-soft);
 }
 
 .api-keys-preview-row {
@@ -2373,33 +2403,33 @@ onUnmounted(() => {
 }
 
 .api-key-meta {
-  color: #6c757d;
+  color: var(--muted);
 }
 
 .api-key-status {
   padding: 2px 6px;
   border-radius: 10px;
   font-size: 11px;
-  background: #e9ecef;
-  color: #6c757d;
+  background: var(--line);
+  color: var(--muted);
 }
 
 .api-key-status.enabled {
-  background: #d1e7dd;
-  color: #0f5132;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
 }
 
 .api-key-status.disabled {
-  background: #f8d7da;
-  color: #842029;
+  background: var(--pink-soft);
+  color: var(--bad);
 }
 
 .api-keys-editor {
   margin: 12px 0 16px;
   padding: 12px;
-  border: 1px solid #dee2e6;
+  border: 1px solid var(--line);
   border-radius: 6px;
-  background: #f8f9fa;
+  background: var(--bg-soft);
 }
 
 .api-keys-header {
@@ -2407,13 +2437,25 @@ onUnmounted(() => {
   align-items: center;
   justify-content: space-between;
   font-weight: 600;
-  color: #495057;
+  color: var(--ink);
   margin-bottom: 10px;
 }
 
 .api-keys-actions {
   display: flex;
   gap: 6px;
+}
+
+.key-polling-toggle {
+  margin: 0 0 10px 0;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.key-polling-toggle .hint {
+  margin-left: 0;
+  font-weight: normal;
 }
 
 .api-key-row {
@@ -2428,7 +2470,7 @@ onUnmounted(() => {
   margin-bottom: 4px;
   padding: 0;
   font-size: 12px;
-  color: #6c757d;
+  color: var(--muted);
   font-weight: 500;
 }
 
@@ -2456,8 +2498,8 @@ onUnmounted(() => {
   width: 16px;
   height: 16px;
   border-radius: 50%;
-  background: #e9ecef;
-  color: #495057;
+  background: var(--line);
+  color: var(--ink);
   font-size: 11px;
   cursor: help;
 }
@@ -2468,8 +2510,8 @@ onUnmounted(() => {
   bottom: calc(100% + 8px);
   right: 0;
   transform: none;
-  background: #212529;
-  color: #f8f9fa;
+  background: var(--ink);
+  color: var(--bg-soft);
   font-size: 12px;
   line-height: 1.4;
   padding: 8px 10px;
@@ -2480,7 +2522,7 @@ onUnmounted(() => {
   opacity: 0;
   pointer-events: none;
   transition: opacity 0.2s ease;
-  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.2);
+  box-shadow: 0 6px 16px rgba(36, 85, 60, 0.16);
   z-index: 2;
 }
 
@@ -2492,7 +2534,7 @@ onUnmounted(() => {
   transform: none;
   border-width: 6px;
   border-style: solid;
-  border-color: #212529 transparent transparent transparent;
+  border-color: var(--ink) transparent transparent transparent;
   opacity: 0;
   transition: opacity 0.2s ease;
 }
@@ -2514,14 +2556,14 @@ onUnmounted(() => {
 .client-tags-editor {
   margin: 12px 0 16px;
   padding: 12px;
-  border: 1px solid #dee2e6;
+  border: 1px solid var(--line);
   border-radius: 6px;
-  background: #f8f9fa;
+  background: var(--bg-soft);
 }
 
 .client-tags-title {
   font-weight: 600;
-  color: #495057;
+  color: var(--ink);
   margin-bottom: 4px;
 }
 
@@ -2537,11 +2579,11 @@ onUnmounted(() => {
   align-items: center;
   gap: 8px;
   padding: 8px 10px;
-  border: 1px solid #dee2e6;
+  border: 1px solid var(--line);
   border-radius: 6px;
-  background: #fff;
+  background: var(--surface);
   font-size: 13px;
-  color: #495057;
+  color: var(--ink);
 }
 
 .input-mini {
@@ -2556,7 +2598,7 @@ onUnmounted(() => {
   align-items: center;
   gap: 6px;
   font-size: 12px;
-  color: #495057;
+  color: var(--ink);
   justify-self: center;
 }
 
@@ -2571,7 +2613,7 @@ onUnmounted(() => {
 
 .empty-hint {
   font-size: 12px;
-  color: #6c757d;
+  color: var(--muted);
   margin-bottom: 8px;
   text-align: center;
   padding: 10px 0;
@@ -2579,25 +2621,25 @@ onUnmounted(() => {
 
 .btn-icon-small, .btn-test {
   padding: 8px 12px;
-  border: 1px solid #dee2e6;
+  border: 1px solid var(--line);
   border-radius: 4px;
-  background: white;
+  background: var(--surface);
   cursor: pointer;
 }
 
 .btn-test {
-  background: #28a745;
+  background: var(--good);
   color: white;
-  border-color: #28a745;
+  border-color: var(--good);
 }
 
 .btn-test:hover {
-  background: #1e7e34;
+  background: var(--accent-strong);
 }
 
 .models-config {
-  background: white;
-  border: 1px solid #dee2e6;
+  background: var(--surface);
+  border: 1px solid var(--line);
   border-radius: 8px;
   padding: 20px;
 }
@@ -2612,12 +2654,12 @@ onUnmounted(() => {
 
 .models-toolbar label {
   font-weight: 500;
-  color: #495057;
+  color: var(--ink);
   margin: 0;
 }
 
 .count {
-  background: #007bff;
+  background: var(--accent);
   color: white;
   padding: 2px 6px;
   border-radius: 3px;
@@ -2626,7 +2668,7 @@ onUnmounted(() => {
 
 .search-input-small {
   padding: 6px 10px;
-  border: 1px solid #dee2e6;
+  border: 1px solid var(--line);
   border-radius: 4px;
   flex: 1;
   min-width: 200px;
@@ -2635,12 +2677,12 @@ onUnmounted(() => {
 .available-models-panel {
   max-height: 400px;
   overflow-y: auto;
-  border: 1px solid #dee2e6;
+  border: 1px solid var(--line);
   border-radius: 4px;
 }
 
 .model-group {
-  border-bottom: 1px solid #e9ecef;
+  border-bottom: 1px solid var(--line);
 }
 
 .model-group:last-child {
@@ -2649,7 +2691,7 @@ onUnmounted(() => {
 
 .group-header {
   padding: 12px 16px;
-  background: #f8f9fa;
+  background: var(--bg-soft);
   cursor: pointer;
   font-weight: 500;
   display: flex;
@@ -2658,7 +2700,7 @@ onUnmounted(() => {
 }
 
 .group-header:hover {
-  background: #e9ecef;
+  background: var(--line);
 }
 
 .group-models {
@@ -2673,7 +2715,7 @@ onUnmounted(() => {
 }
 
 .model-row:hover {
-  background: #f8f9fa;
+  background: var(--bg-soft);
 }
 
 .model-icon {
@@ -2693,9 +2735,9 @@ onUnmounted(() => {
 
 .icon-btn, .btn-toggle-model {
   padding: 4px 6px;
-  border: 1px solid #dee2e6;
+  border: 1px solid var(--line);
   border-radius: 3px;
-  background: white;
+  background: var(--surface);
   cursor: pointer;
   font-size: 12px;
 }
@@ -2704,7 +2746,7 @@ onUnmounted(() => {
   padding: 6px 12px;
   border: none;
   border-radius: 4px;
-  background: #17a2b8;
+  background: var(--accent);
   color: white;
   cursor: pointer;
   font-size: 12px;
@@ -2714,19 +2756,19 @@ onUnmounted(() => {
 }
 
 .btn-fetch-provider-models:hover:not(:disabled) {
-  background: #138496;
+  background: var(--accent-strong);
 }
 
 .btn-fetch-provider-models:disabled {
-  background: #6c757d;
+  background: var(--muted);
   cursor: not-allowed;
   opacity: 0.65;
 }
 
 .btn-toggle-model {
-  background: #007bff;
+  background: var(--accent);
   color: white;
-  border-color: #007bff;
+  border-color: var(--accent);
   font-weight: bold;
 }
 
@@ -2741,10 +2783,10 @@ onUnmounted(() => {
 
 .added-group-header {
   font-weight: 500;
-  color: #495057;
+  color: var(--ink);
   margin-bottom: 8px;
   padding-bottom: 4px;
-  border-bottom: 1px solid #dee2e6;
+  border-bottom: 1px solid var(--line);
 }
 
 .added-models-grid {
@@ -2757,43 +2799,43 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   padding: 8px 12px;
-  background: #f8f9fa;
-  border: 1px solid #dee2e6;
+  background: var(--bg-soft);
+  border: 1px solid var(--line);
   border-radius: 4px;
   gap: 8px;
 }
 
 .added-model-card.batch-selected {
-  background: #e7f1ff;
-  border-color: #86b7fe;
+  background: var(--accent-soft);
+  border-color: var(--accent);
 }
 
 .model-checkbox {
   width: 16px;
   height: 16px;
   cursor: pointer;
-  accent-color: #007bff;
+  accent-color: var(--accent);
 }
 
 .btn-model-batch-select {
   padding: 6px 12px;
-  border: 1px solid #dee2e6;
+  border: 1px solid var(--line);
   border-radius: 4px;
-  background: #f8f9fa;
-  color: #495057;
+  background: var(--bg-soft);
+  color: var(--ink);
   cursor: pointer;
   font-size: 12px;
   transition: all 0.2s;
 }
 
 .btn-model-batch-select:hover {
-  background: #e9ecef;
+  background: var(--line);
 }
 
 .btn-model-batch-select.active {
-  background: #e7f1ff;
-  color: #0d6efd;
-  border-color: #86b7fe;
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-color: var(--accent);
 }
 
 .model-batch-toolbar {
@@ -2803,31 +2845,31 @@ onUnmounted(() => {
   flex-wrap: wrap;
   margin-bottom: 14px;
   padding: 10px 12px;
-  background: #f8f9fa;
-  border: 1px solid #dee2e6;
+  background: var(--bg-soft);
+  border: 1px solid var(--line);
   border-radius: 6px;
 }
 
 .model-batch-count {
   font-size: 12px;
-  color: #495057;
+  color: var(--ink);
   font-weight: 500;
   margin-right: 4px;
 }
 
 .btn-model-batch-action {
   padding: 6px 10px;
-  border: 1px solid #dee2e6;
+  border: 1px solid var(--line);
   border-radius: 4px;
-  background: white;
-  color: #495057;
+  background: var(--surface);
+  color: var(--ink);
   cursor: pointer;
   font-size: 12px;
   transition: all 0.2s;
 }
 
 .btn-model-batch-action:hover:not(:disabled) {
-  background: #e9ecef;
+  background: var(--line);
 }
 
 .btn-model-batch-action:disabled {
@@ -2836,18 +2878,18 @@ onUnmounted(() => {
 }
 
 .btn-model-batch-show {
-  color: #198754;
-  border-color: #b7dfc8;
+  color: var(--good);
+  border-color: var(--line-strong);
 }
 
 .btn-model-batch-hide {
-  color: #fd7e14;
-  border-color: #ffd2ad;
+  color: var(--pink-strong);
+  border-color: var(--pink);
 }
 
 .btn-model-batch-delete {
-  color: #dc3545;
-  border-color: #f1b0b7;
+  color: var(--bad);
+  border-color: var(--pink);
 }
 
 .added-model-card .model-name {
@@ -2858,16 +2900,16 @@ onUnmounted(() => {
 
 .btn-icon-tiny {
   padding: 2px 4px;
-  border: 1px solid #dee2e6;
+  border: 1px solid var(--line);
   border-radius: 2px;
-  background: white;
+  background: var(--surface);
   cursor: pointer;
   font-size: 10px;
 }
 
 .empty-state {
   text-align: center;
-  color: #6c757d;
+  color: var(--muted);
   padding: 60px 20px;
 }
 
@@ -2885,7 +2927,7 @@ onUnmounted(() => {
 }
 
 .modal-content {
-  background: white;
+  background: var(--surface);
   padding: 24px;
   border-radius: 8px;
   width: 90%;
@@ -2913,7 +2955,7 @@ onUnmounted(() => {
   align-items: center;
   margin-bottom: 12px;
   font-weight: 500;
-  color: #495057;
+  color: var(--ink);
 }
 
 .group-item {
@@ -2921,8 +2963,8 @@ onUnmounted(() => {
   justify-content: space-between;
   align-items: center;
   padding: 12px;
-  background: #f8f9fa;
-  border: 1px solid #dee2e6;
+  background: var(--bg-soft);
+  border: 1px solid var(--line);
   border-radius: 6px;
   margin-bottom: 8px;
 }
@@ -2933,19 +2975,19 @@ onUnmounted(() => {
 
 .group-item-name {
   font-weight: 500;
-  color: #495057;
+  color: var(--ink);
   margin-bottom: 4px;
 }
 
 .group-item-desc {
   font-size: 12px;
-  color: #6c757d;
+  color: var(--muted);
   margin-bottom: 4px;
 }
 
 .group-item-count {
   font-size: 12px;
-  color: #007bff;
+  color: var(--accent);
 }
 
 .group-item-actions {
@@ -2955,14 +2997,14 @@ onUnmounted(() => {
 
 .modal-content h3 {
   margin: 0 0 20px 0;
-  color: #495057;
+  color: var(--ink);
 }
 
 .modal-content label {
   display: block;
   margin-bottom: 16px;
   font-weight: 500;
-  color: #495057;
+  color: var(--ink);
 }
 
 .modal-content > label > .input-field,
@@ -2972,14 +3014,14 @@ onUnmounted(() => {
 
 .modal-content .input-field {
   margin-top: 4px;
-  background: white;
+  background: var(--surface);
 }
 
 .modal-content small.hint {
   display: block;
   margin-top: 4px;
   font-size: 12px;
-  color: #6c757d;
+  color: var(--muted);
 }
 
 .modal-content input[type="checkbox"] {
@@ -2995,31 +3037,31 @@ onUnmounted(() => {
 
 .btn-save, .btn-cancel {
   padding: 8px 16px;
-  border: 1px solid #dee2e6;
+  border: 1px solid var(--line);
   border-radius: 4px;
   cursor: pointer;
 }
 
 .btn-save {
-  background: #007bff;
+  background: var(--accent);
   color: white;
-  border-color: #007bff;
+  border-color: var(--accent);
 }
 
 .btn-save:hover:not(:disabled) {
-  background: #0056b3;
+  background: var(--accent-strong);
 }
 
 .btn-save:disabled {
-  background: #6c757d;
+  background: var(--muted);
   cursor: not-allowed;
 }
 
 .btn-cancel {
-  background: white;
+  background: var(--surface);
 }
 
 .btn-cancel:hover {
-  background: #e9ecef;
+  background: var(--line);
 }
 </style>
