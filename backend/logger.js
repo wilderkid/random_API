@@ -1,6 +1,7 @@
 const fs = require('fs').promises;
 const path = require('path');
 const crypto = require('crypto');
+const { normalizeTokenUsage } = require('./proxyUtils');
 
 const LOGS_DIR = path.join(__dirname, '../data/logs');
 const ARCHIVE_DIR = path.join(__dirname, '../data/logs/archive');
@@ -239,9 +240,12 @@ async function logApiCall(...args) {
     duration = null,
     requestSize = null,
     responseSize = null,
+    tokenUsage = null,
+    firstTokenMs = null,
     metadata = {}
   } = params;
 
+  const resolvedFirstTokenMs = Number(firstTokenMs);
   const logEntry = createLogEntry({
     level: success ? LogLevel.INFO : LogLevel.ERROR,
     type: LogType.API_CALL,
@@ -256,7 +260,9 @@ async function logApiCall(...args) {
       errorCode,
       duration,
       requestSize,
-      responseSize
+      responseSize,
+      tokenUsage: compactTokenUsage(tokenUsage),
+      ...(Number.isFinite(resolvedFirstTokenMs) && resolvedFirstTokenMs >= 0 ? { firstTokenMs: resolvedFirstTokenMs } : {})
     },
     metadata
   });
@@ -353,22 +359,34 @@ async function logApiRequest({
         stream: request.stream,
         messageCount: request.messages?.length || 0
       },
-      providers: providers.map(p => ({
-        attempt: p.attempt,
-        providerId: p.providerId,
-        providerName: p.providerName,
-        status: p.status,
-        statusCode: p.statusCode,
-        duration: p.duration,
-        error: p.error
-      })),
+      providers: providers.map(p => {
+        const providerEntry = {
+          attempt: p.attempt,
+          providerId: p.providerId,
+          providerName: p.providerName,
+          status: p.status,
+          statusCode: p.statusCode,
+          duration: p.duration,
+          error: p.error
+        };
+        if (p.firstTokenMs !== null && p.firstTokenMs !== undefined && p.firstTokenMs !== '') {
+          const providerFirstTokenMs = Number(p.firstTokenMs);
+          if (Number.isFinite(providerFirstTokenMs) && providerFirstTokenMs >= 0) {
+            providerEntry.firstTokenMs = providerFirstTokenMs;
+          }
+        }
+        return providerEntry;
+      }),
       result: {
         status: result.status,
         successfulProvider: result.successfulProvider,
         totalAttempts: result.totalAttempts,
         totalDuration: result.totalDuration,
-        tokenUsage: result.tokenUsage,
-        estimatedCost: result.estimatedCost
+        tokenUsage: compactTokenUsage(result.tokenUsage),
+        estimatedCost: result.estimatedCost,
+        ...(result.firstTokenMs !== null && result.firstTokenMs !== undefined && result.firstTokenMs !== '' && Number.isFinite(Number(result.firstTokenMs)) && Number(result.firstTokenMs) >= 0
+          ? { firstTokenMs: Number(result.firstTokenMs) }
+          : {})
       }
     },
     metadata
@@ -745,7 +763,13 @@ async function searchLogs({
 
     // 按类型过滤
     if (type) {
-      filteredLogs = filteredLogs.filter(log => log.type === type);
+      const types = String(type).split(',').map(item => item.trim()).filter(Boolean);
+      if (types.length === 1) {
+        filteredLogs = filteredLogs.filter(log => log.type === types[0]);
+      } else if (types.length > 1) {
+        const typeSet = new Set(types);
+        filteredLogs = filteredLogs.filter(log => typeSet.has(log.type));
+      }
     }
 
     // 按用户ID过滤
@@ -887,6 +911,134 @@ function parseLegacyLogs(logsContent) {
   return stats;
 }
 
+function compactTokenUsage(usage) {
+  return normalizeTokenUsage(usage);
+}
+
+function extractRequestModel(entry) {
+  const data = entry && entry.data ? entry.data : {};
+  if (data.request && data.request.model) return data.request.model;
+  if (data.model) return data.model;
+  const message = String((entry && entry.message) || '');
+  const matched = message.match(/^API[^:]*:\s*(.+)$/);
+  if (matched && matched[1]) {
+    let value = matched[1].trim();
+    value = value.replace(/\s+-\s+(success|failed)\s*$/i, '');
+    const slash = value.indexOf('/');
+    return slash >= 0 ? value.slice(slash + 1) : value;
+  }
+  return null;
+}
+
+function extractRequestEndpoint(entry) {
+  const metadata = entry && entry.metadata ? entry.metadata : {};
+  if (metadata.endpoint) {
+    const endpoint = String(metadata.endpoint);
+    return endpoint.startsWith('/') ? endpoint : '/v1/' + endpoint;
+  }
+  if (metadata.isStreaming !== undefined || (entry.data && entry.data.request)) {
+    return '/v1/chat/completions';
+  }
+  return 'internal';
+}
+
+function timelineKey(timestamp) {
+  const date = timestamp ? new Date(timestamp) : new Date();
+  if (Number.isNaN(date.getTime())) return null;
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  const hour = String(date.getHours()).padStart(2, '0');
+  return year + '-' + month + '-' + day + ' ' + hour + ':00';
+}
+
+function ensureCounterBucket(target, key, extra) {
+  if (!target[key]) {
+    target[key] = Object.assign({
+      total: 0,
+      success: 0,
+      failed: 0,
+      totalPromptTokens: 0,
+      totalCompletionTokens: 0,
+      totalTokens: 0,
+      totalCachedTokens: 0,
+      totalCacheWriteTokens: 0,
+      avgDuration: 0,
+      totalDuration: 0
+    }, extra || {});
+  }
+  return target[key];
+}
+
+function addTokenAmounts(target, usage) {
+  if (!target || !usage) return;
+  target.totalPromptTokens = (target.totalPromptTokens || 0) + (usage.promptTokens || 0);
+  target.totalCompletionTokens = (target.totalCompletionTokens || 0) + (usage.completionTokens || 0);
+  target.totalTokens = (target.totalTokens || 0) + (usage.totalTokens || 0);
+  target.totalCachedTokens = (target.totalCachedTokens || 0) + (usage.cachedTokens || 0);
+  target.totalCacheWriteTokens = (target.totalCacheWriteTokens || 0) + (usage.cacheWriteTokens || 0);
+}
+
+function addTimelinePoint(stats, timestamp, details) {
+  const key = timelineKey(timestamp);
+  if (!key) return;
+  if (!stats.timeline) stats.timeline = {};
+  const bucket = ensureCounterBucket(stats.timeline, key);
+  bucket.total += 1;
+  if (details && details.success) bucket.success += 1;
+  if (details && details.failed) bucket.failed += 1;
+  if (details && details.duration) {
+    bucket.totalDuration += details.duration;
+    bucket.avgDuration = bucket.totalDuration / bucket.total;
+  }
+  addTokenAmounts(bucket, details && details.usage);
+}
+
+function isThinDuplicateApiCall(entry, hasApiRequests) {
+  if (!hasApiRequests) return false;
+  if (entry.traceId) return false;
+  const duration = entry.data && entry.data.duration;
+  if (Number(duration) > 0) return false;
+  if (entry.data && entry.data.tokenUsage) return false;
+  return true;
+}
+
+function addFirstTokenStats(target, ms) {
+  if (!target) return;
+  if (ms === null || ms === undefined || ms === '') return;
+  const value = Number(ms);
+  if (!Number.isFinite(value) || value < 0) return;
+  if (!target.firstTokenCount) {
+    target.firstTokenCount = 0;
+    target.totalFirstTokenMs = 0;
+    target.avgFirstTokenMs = 0;
+    target.minFirstTokenMs = value;
+    target.maxFirstTokenMs = value;
+  }
+  target.firstTokenCount += 1;
+  target.totalFirstTokenMs += value;
+  target.avgFirstTokenMs = target.totalFirstTokenMs / target.firstTokenCount;
+  target.minFirstTokenMs = Math.min(target.minFirstTokenMs, value);
+  target.maxFirstTokenMs = Math.max(target.maxFirstTokenMs, value);
+}
+
+function resolveAttemptFirstTokenMs(provider, result) {
+  if (provider && provider.firstTokenMs !== null && provider.firstTokenMs !== undefined && provider.firstTokenMs !== '') {
+    const direct = Number(provider.firstTokenMs);
+    if (Number.isFinite(direct) && direct >= 0) return direct;
+  }
+  if (!provider || provider.status !== 'success') return null;
+  const successId = result && result.successfulProvider;
+  if (successId && successId !== provider.providerId && successId !== provider.providerName) {
+    return null;
+  }
+  if (result && result.firstTokenMs !== null && result.firstTokenMs !== undefined && result.firstTokenMs !== '') {
+    const fallback = Number(result.firstTokenMs);
+    if (Number.isFinite(fallback) && fallback >= 0) return fallback;
+  }
+  return null;
+}
+
 // 解析新格式日志
 function parseModernLogs(logEntries) {
   const stats = {
@@ -894,9 +1046,20 @@ function parseModernLogs(logEntries) {
     successfulCalls: 0,
     failedCalls: 0,
     providerStats: {},
+    modelStats: {},
+    endpointStats: {},
+    timeline: {},
+    tokenStats: {
+      totalPromptTokens: 0,
+      totalCompletionTokens: 0,
+      totalTokens: 0,
+      totalCachedTokens: 0,
+      totalCacheWriteTokens: 0
+    },
     levelStats: {},
     typeStats: {}
   };
+  const hasApiRequests = logEntries.some(item => item && item.type === LogType.API_REQUEST);
 
   // 初始化级别统计
   Object.values(LogLevel).forEach(level => {
@@ -921,7 +1084,7 @@ function parseModernLogs(logEntries) {
       }
 
       // API调用统计
-      if (entry.type === LogType.API_CALL) {
+      if (entry.type === LogType.API_CALL && !isThinDuplicateApiCall(entry, hasApiRequests)) {
         stats.totalApiCalls++;
 
         const { provider, model, status } = entry.data || {};
@@ -977,6 +1140,62 @@ function parseModernLogs(logEntries) {
             }
           }
         }
+
+        const callModel = extractRequestModel(entry);
+        const callProvider = (entry.data || {}).provider;
+        const callUsage = compactTokenUsage((entry.data || {}).tokenUsage);
+        const callSuccess = (entry.data || {}).status === 'SUCCESS';
+        if (callModel) {
+          const modelBucket = ensureCounterBucket(stats.modelStats, callModel);
+          modelBucket.total += 1;
+          if (callSuccess) modelBucket.success += 1;
+          else modelBucket.failed += 1;
+          addTokenAmounts(modelBucket, callUsage);
+        }
+        if (callProvider) {
+          addTokenAmounts(stats.providerStats[callProvider], callUsage);
+        }
+        const callEndpoint = extractRequestEndpoint(entry);
+        const endpointBucket = ensureCounterBucket(stats.endpointStats, callEndpoint);
+        endpointBucket.total += 1;
+        if (callSuccess) endpointBucket.success += 1;
+        else endpointBucket.failed += 1;
+        addTokenAmounts(endpointBucket, callUsage);
+        addTimelinePoint(stats, entry.timestamp, {
+          success: callSuccess,
+          failed: !callSuccess,
+          usage: callUsage,
+          duration: (entry.data || {}).duration || 0
+        });
+        const callDuration = Number((entry.data || {}).duration) || 0;
+        addTokenAmounts(stats.tokenStats, callUsage);
+        if (callDuration > 0) {
+          if (!stats.performanceStats) {
+            stats.performanceStats = {
+              totalDuration: 0,
+              avgDuration: 0,
+              minDuration: Infinity,
+              maxDuration: 0
+            };
+          }
+          stats.performanceStats.totalDuration += callDuration;
+          stats.performanceStats.avgDuration = stats.performanceStats.totalDuration / stats.totalApiCalls;
+          stats.performanceStats.minDuration = Math.min(stats.performanceStats.minDuration, callDuration);
+          stats.performanceStats.maxDuration = Math.max(stats.performanceStats.maxDuration, callDuration);
+        }
+        if (callSuccess) {
+          if (!stats.performanceStats) {
+            stats.performanceStats = {
+              totalDuration: 0,
+              avgDuration: 0,
+              minDuration: Infinity,
+              maxDuration: 0
+            };
+          }
+          addFirstTokenStats(stats.performanceStats, (entry.data || {}).firstTokenMs);
+          if (callModel) addFirstTokenStats(stats.modelStats[callModel], (entry.data || {}).firstTokenMs);
+          if (callProvider) addFirstTokenStats(stats.providerStats[callProvider], (entry.data || {}).firstTokenMs);
+        }
       }
 
     // API请求统计（新增强版）
@@ -1025,6 +1244,10 @@ function parseModernLogs(logEntries) {
               stats.providerStats[providerName].total;
           }
 
+          if (provider.status === 'success') {
+            addFirstTokenStats(stats.providerStats[providerName], resolveAttemptFirstTokenMs(provider, result));
+          }
+
           // 模型统计
           if (request?.model) {
             const modelName = request.model;
@@ -1061,10 +1284,17 @@ function parseModernLogs(logEntries) {
                 stats.providerStats[providerName].models[modelName].total;
             }
 
-            if (provider.status === 'success' && result?.tokenUsage) {
-              stats.providerStats[providerName].models[modelName].totalPromptTokens += result.tokenUsage.promptTokens || 0;
-              stats.providerStats[providerName].models[modelName].totalCompletionTokens += result.tokenUsage.completionTokens || 0;
-              stats.providerStats[providerName].models[modelName].totalTokens += result.tokenUsage.totalTokens || 0;
+            if (provider.status === 'success') {
+              addFirstTokenStats(
+                stats.providerStats[providerName].models[modelName],
+                resolveAttemptFirstTokenMs(provider, result)
+              );
+            }
+
+            if (provider.status === 'success') {
+              const usage = compactTokenUsage(result && result.tokenUsage);
+              addTokenAmounts(stats.providerStats[providerName], usage);
+              addTokenAmounts(stats.providerStats[providerName].models[modelName], usage);
             }
           }
 
@@ -1096,19 +1326,37 @@ function parseModernLogs(logEntries) {
       }
 
       // Token使用统计
-      if (result?.tokenUsage) {
-        if (!stats.tokenStats) {
-          stats.tokenStats = {
-            totalPromptTokens: 0,
-            totalCompletionTokens: 0,
-            totalTokens: 0
-          };
-        }
+      const requestUsage = compactTokenUsage(result && result.tokenUsage);
+      addTokenAmounts(stats.tokenStats, requestUsage);
 
-        stats.tokenStats.totalPromptTokens += result.tokenUsage.promptTokens || 0;
-        stats.tokenStats.totalCompletionTokens += result.tokenUsage.completionTokens || 0;
-        stats.tokenStats.totalTokens += result.tokenUsage.totalTokens || 0;
+      const requestModel = extractRequestModel(entry);
+      const requestSuccess = result && result.status === 'success';
+      if (requestModel) {
+        const modelBucket = ensureCounterBucket(stats.modelStats, requestModel);
+        modelBucket.total += 1;
+        if (requestSuccess) modelBucket.success += 1;
+        else modelBucket.failed += 1;
+        if (result && result.totalDuration) {
+          modelBucket.totalDuration += result.totalDuration;
+          modelBucket.avgDuration = modelBucket.totalDuration / modelBucket.total;
+        }
+        if (requestSuccess) addFirstTokenStats(modelBucket, result && result.firstTokenMs);
+        addTokenAmounts(modelBucket, requestUsage);
       }
+
+      const requestEndpoint = extractRequestEndpoint(entry);
+      const endpointBucket = ensureCounterBucket(stats.endpointStats, requestEndpoint);
+      endpointBucket.total += 1;
+      if (requestSuccess) endpointBucket.success += 1;
+      else endpointBucket.failed += 1;
+      addTokenAmounts(endpointBucket, requestUsage);
+
+      addTimelinePoint(stats, entry.timestamp, {
+        success: requestSuccess,
+        failed: !requestSuccess,
+        usage: requestUsage,
+        duration: (result && result.totalDuration) || 0
+      });
 
       // 性能统计
       if (result?.totalDuration) {
@@ -1131,6 +1379,18 @@ function parseModernLogs(logEntries) {
           stats.performanceStats.maxDuration,
           result.totalDuration
         );
+      }
+
+      if (result?.status === 'success') {
+        if (!stats.performanceStats) {
+          stats.performanceStats = {
+            totalDuration: 0,
+            avgDuration: 0,
+            minDuration: Infinity,
+            maxDuration: 0
+          };
+        }
+        addFirstTokenStats(stats.performanceStats, result.firstTokenMs);
       }
 
       // 成本统计
@@ -1343,6 +1603,7 @@ module.exports = {
   readLogs,
   searchLogs,
   parseLogsForStats,
+  parseModernLogs,
   getAvailableLogDates,
 
   // 日志管理函数

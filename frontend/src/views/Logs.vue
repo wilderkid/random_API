@@ -1,256 +1,187 @@
 <template>
   <div class="logs-page">
-    <h2>系统日志</h2>
-
-    <!-- 工具栏 -->
-    <div class="logs-toolbar">
-      <div class="toolbar-left">
-        <div class="date-range">
-          <label>开始日期：</label>
-          <input v-model="filters.startDate" type="date" class="input-field" @change="onDateChange">
-          <label>结束日期：</label>
-          <input v-model="filters.endDate" type="date" class="input-field" @change="onDateChange">
-          <span class="hint">（最多查询7天）</span>
-        </div>
-
-        <div class="filters-row">
-          <!-- 日志级别筛选 -->
-          <div class="filter-group">
-            <label>级别：</label>
-            <SearchableSelect
-              v-model="filters.level"
-              :options="logLevelOptions"
-              class="input-field select-field"
-              placeholder="全部"
-              search-placeholder="搜索日志级别..."
-              @change="applyFilters"
-            />
-          </div>
-
-          <!-- 日志类型筛选 -->
-          <div class="filter-group">
-            <label>类型：</label>
-            <SearchableSelect
-              v-model="filters.type"
-              :options="logTypeOptions"
-              class="input-field select-field"
-              placeholder="全部"
-              search-placeholder="搜索日志类型..."
-              @change="applyFilters"
-            />
-          </div>
-
-          <!-- 搜索框 -->
-          <div class="filter-group search-group">
-            <input
-              v-model="filters.keyword"
-              type="text"
-              class="input-field search-input"
-              placeholder="搜索关键词..."
-              @keyup.enter="applyFilters"
-            >
-            <button @click="applyFilters" class="btn-search">搜索</button>
-          </div>
-
-          <!-- 实时监控开关 -->
-          <div class="filter-group realtime-group">
-            <label class="realtime-toggle">
-              <input type="checkbox" v-model="isRealtimeEnabled" @change="toggleRealtime">
-              <span>实时监控</span>
-            </label>
-          </div>
-        </div>
+    <header class="page-head">
+      <div>
+        <h1>调用日志</h1>
+        <p>按调用查看模型、供应商、Token 和延迟</p>
       </div>
+      <div class="tab-switch">
+        <button type="button" :class="['tab', { active: viewMode === 'usage' }]" @click="setViewMode('usage')">调用记录</button>
+        <button type="button" :class="['tab', { active: viewMode === 'system' }]" @click="setViewMode('system')">系统日志</button>
+      </div>
+    </header>
 
-      <div class="toolbar-actions">
-        <button @click="applyFilters" class="btn-action">刷新</button>
-        <button @click="loadToday" class="btn-action btn-today">今日</button>
-        <button @click="loadRecent7Days" class="btn-action btn-recent">最近七天</button>
-        <button @click="exportLogs('json')" class="btn-action btn-export">导出JSON</button>
-        <button @click="exportLogs('csv')" class="btn-action btn-export">导出CSV</button>
-        <button @click="showDeleteOldLogsDialog" class="btn-action btn-delete-old">删除七天前</button>
-        <button @click="showDeleteDialog" class="btn-action btn-delete" :disabled="!canDelete">清除日志</button>
-      </div>
-    </div>
-
-    <!-- 统计概览 -->
-    <div class="stats-overview">
-      <div class="stat-card">
-        <div class="stat-label">总日志数</div>
-        <div class="stat-value">{{ pagination.total }}</div>
-      </div>
-      <div class="stat-card success">
-        <div class="stat-label">INFO</div>
-        <div class="stat-value">{{ stats.levelStats?.INFO || 0 }}</div>
-      </div>
-      <div class="stat-card warning">
-        <div class="stat-label">WARN</div>
-        <div class="stat-value">{{ stats.levelStats?.WARN || 0 }}</div>
-      </div>
-      <div class="stat-card failed">
-        <div class="stat-label">ERROR</div>
-        <div class="stat-value">{{ stats.levelStats?.ERROR || 0 }}</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-label">DEBUG</div>
-        <div class="stat-value">{{ stats.levelStats?.DEBUG || 0 }}</div>
-      </div>
-    </div>
-
-    <!-- 加载状态 -->
-    <div v-if="loading && !logs.length" class="loading">加载中...</div>
-    <div v-else-if="error" class="error-message">{{ error }}</div>
-
-    <!-- 日志列表 -->
-    <div v-else class="logs-content">
-      <div v-if="logs.length === 0" class="no-data">暂无日志数据</div>
-
-      <div v-else class="logs-list">
-        <div
-          v-for="log in logs"
-          :key="log.timestamp + log.traceId"
-          class="log-entry"
-          :class="getLogLevelClass(log.level)"
+    <section class="toolbar">
+      <div class="toolbar-row">
+        <input v-model="filters.startDate" type="date" @change="onDateChange">
+        <span>至</span>
+        <input v-model="filters.endDate" type="date" @change="onDateChange">
+        <input
+          v-model="filters.keyword"
+          class="search-input"
+          type="text"
+          placeholder="搜索模型 / 供应商 / 密钥"
+          @keyup.enter="applyFilters"
         >
-          <div class="log-header" @click="toggleLogDetail(log)">
-            <span :class="['log-badge', `level-${log.level.toLowerCase()}`]">{{ log.level }}</span>
-            <span :class="['log-badge', `type-${log.type.toLowerCase()}`]">{{ log.type }}</span>
-            <span class="log-time">{{ formatTime(log.timestamp) }}</span>
-            <span class="log-message-short">{{ getShortMessage(log.message) }}</span>
-            <span class="toggle-icon">{{ expandedLogs.has(log.traceId) ? '▼' : '▶' }}</span>
+        <template v-if="viewMode === 'system'">
+          <SearchableSelect
+            v-model="filters.level"
+            :options="logLevelOptions"
+            placeholder="全部级别"
+            search-placeholder="搜索级别..."
+            @change="applyFilters"
+          />
+          <SearchableSelect
+            v-model="filters.type"
+            :options="logTypeOptions"
+            placeholder="全部类型"
+            search-placeholder="搜索类型..."
+            @change="applyFilters"
+          />
+        </template>
+        <label class="realtime">
+          <input type="checkbox" v-model="isRealtimeEnabled" @change="toggleRealtime">
+          实时
+        </label>
+      </div>
+      <div class="toolbar-row">
+        <button type="button" class="btn" @click="applyFilters">刷新</button>
+        <button type="button" class="btn" @click="loadToday">今日</button>
+        <button type="button" class="btn" @click="loadRecent7Days">最近七天</button>
+        <button type="button" class="btn ghost" @click="exportLogs('json')">导出 JSON</button>
+        <button type="button" class="btn ghost" @click="exportLogs('csv')">导出 CSV</button>
+        <button type="button" class="btn danger" @click="showDeleteOldLogsDialog">删除七天前</button>
+        <button type="button" class="btn danger" :disabled="!canDelete" @click="showDeleteDialog">清除日志</button>
+      </div>
+    </section>
+
+    <section class="summary-row">
+      <div class="summary-chip">记录 {{ pagination.total }}</div>
+      <div class="summary-chip">成功 {{ usageSummary.success }}</div>
+      <div class="summary-chip">失败 {{ usageSummary.failed }}</div>
+      <div class="summary-chip">Token {{ formatCompact(usageSummary.tokens) }}</div>
+    </section>
+
+    <div v-if="loading && !logs.length" class="state-msg">加载中...</div>
+    <div v-else-if="error" class="state-msg error">{{ error }}</div>
+
+    <section v-else-if="viewMode === 'usage'" class="panel">
+      <div class="table-scroll">
+        <table class="call-table">
+          <thead>
+            <tr>
+              <th>时间</th>
+              <th>API 密钥</th>
+              <th>模型</th>
+              <th>供应商</th>
+              <th>类型</th>
+              <th>Token</th>
+              <th>延迟</th>
+              <th>状态</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-if="usageRows.length === 0">
+              <td colspan="8" class="empty">暂无调用记录</td>
+            </tr>
+            <template v-for="row in usageRows" :key="row.id">
+              <tr class="call-row" @click="toggleLogDetail(row.raw)">
+                <td>{{ row.time }}</td>
+                <td>{{ row.apiKeyName }}</td>
+                <td class="strong">{{ row.model }}</td>
+                <td><span class="provider-chip">{{ row.providerName }}</span></td>
+                <td>
+                  <span :class="['type-chip', row.stream ? 'stream' : 'json']">{{ row.stream ? '流式' : '非流式' }}</span>
+                </td>
+                <td>
+                  <div class="token-stack">
+                    <span class="in">入 {{ formatNumber(row.promptTokens) }}</span>
+                    <span class="out">出 {{ formatNumber(row.completionTokens) }}</span>
+                    <span class="total">共 {{ formatNumber(row.totalTokens) }}</span>
+                  </div>
+                </td>
+                <td>
+                  <div class="latency">
+                    <div class="latency-bar">
+                      <span class="first" :style="{ width: row.firstPct + '%' }"></span>
+                      <span class="rest" :style="{ width: row.restPct + '%' }"></span>
+                    </div>
+                    <div class="latency-text">
+                      <span>首字 {{ formatDuration(row.firstTokenMs) }}</span>
+                      <span>总耗时 {{ formatDuration(row.duration) }}</span>
+                    </div>
+                  </div>
+                </td>
+                <td><span :class="['status-pill', row.status]">{{ row.status === 'success' ? '成功' : '失败' }}</span></td>
+              </tr>
+              <tr v-if="expandedLogs.has(row.raw.traceId || row.id)" class="detail-row">
+                <td colspan="8">
+                  <div class="detail-grid">
+                    <div><strong>IP</strong>{{ row.ip }}</div>
+                    <div><strong>尝试</strong>{{ row.attempts }}</div>
+                    <div><strong>链路</strong>{{ row.chain }}</div>
+                    <div v-if="row.error"><strong>错误</strong>{{ row.error }}</div>
+                  </div>
+                  <pre class="detail-json">{{ formatJson(row.raw.data || {}) }}</pre>
+                </td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section v-else class="panel">
+      <div v-if="logs.length === 0" class="empty">暂无日志数据</div>
+      <div v-else class="sys-list">
+        <div v-for="log in logs" :key="log.timestamp + log.traceId" class="sys-item" @click="toggleLogDetail(log)">
+          <div class="sys-head">
+            <span :class="['log-badge', `level-${(log.level || '').toLowerCase()}`]">{{ log.level }}</span>
+            <span class="log-badge type">{{ log.type }}</span>
+            <span class="sys-time">{{ formatTime(log.timestamp) }}</span>
+            <span class="sys-msg">{{ getShortMessage(log.message) }}</span>
           </div>
-
-          <!-- 日志详情 -->
-          <div v-if="expandedLogs.has(log.traceId)" class="log-detail">
-            <div class="detail-row">
-              <span class="detail-label">时间：</span>
-              <span class="detail-value">{{ log.timestamp }}</span>
-            </div>
-            <div class="detail-row">
-              <span class="detail-label">级别：</span>
-              <span class="detail-value">{{ log.level }}</span>
-            </div>
-            <div class="detail-row">
-              <span class="detail-label">类型：</span>
-              <span class="detail-value">{{ log.type }}</span>
-            </div>
-            <div class="detail-row">
-              <span class="detail-label">消息：</span>
-              <span class="detail-value">{{ log.message }}</span>
-            </div>
-            <div v-if="log.userId" class="detail-row">
-              <span class="detail-label">用户ID：</span>
-              <span class="detail-value">{{ log.userId }}</span>
-            </div>
-            <div v-if="log.traceId" class="detail-row">
-              <span class="detail-label">追踪ID：</span>
-              <span class="detail-value trace-id">{{ log.traceId }}</span>
-            </div>
-
-            <div v-if="getErrorSummary(log)" class="error-summary-card">
-              <div class="error-summary-header">错误摘要</div>
-              <div class="error-summary-message">{{ getErrorSummary(log) }}</div>
-              <div class="error-summary-meta">
-                <span v-if="getStatusCode(log)" class="error-chip">HTTP {{ getStatusCode(log) }}</span>
-                <span v-if="getErrorCode(log)" class="error-chip">{{ getErrorCode(log) }}</span>
-                <span v-if="getProviderName(log)" class="error-chip">{{ getProviderName(log) }}</span>
-                <span v-if="getModelName(log)" class="error-chip">{{ getModelName(log) }}</span>
-              </div>
-            </div>
-
-            <div v-if="getRequestInfo(log)" class="detail-row">
-              <span class="detail-label">请求：</span>
-              <div class="detail-value detail-stack">
-                <span v-if="getRequestInfo(log).method">方法: {{ getRequestInfo(log).method }}</span>
-                <span v-if="getRequestInfo(log).url">地址: {{ getRequestInfo(log).url }}</span>
-                <span v-if="getRequestInfo(log).timeout">超时: {{ getRequestInfo(log).timeout }}ms</span>
-              </div>
-            </div>
-
-            <div v-if="getResponseData(log)" class="detail-row detail-row-block">
-              <span class="detail-label">响应详情：</span>
-              <pre class="detail-json detail-json-error">{{ formatJson(getResponseData(log)) }}</pre>
-            </div>
-
-            <div v-if="log.metadata && Object.keys(log.metadata).length > 0" class="detail-row detail-row-block">
-              <span class="detail-label">元数据：</span>
-              <pre class="detail-json">{{ formatJson(log.metadata) }}</pre>
-            </div>
-
-            <div v-if="log.data && Object.keys(log.data).length > 0" class="detail-row detail-row-block">
-              <span class="detail-label">完整数据：</span>
-              <pre class="detail-json">{{ formatJson(log.data) }}</pre>
-            </div>
-          </div>
+          <pre v-if="expandedLogs.has(log.traceId)" class="detail-json">{{ formatJson(log) }}</pre>
         </div>
       </div>
+    </section>
 
-      <!-- 分页控制 -->
-      <div v-if="pagination.total > 0" class="pagination">
-        <div class="pagination-left">
-          <label class="page-size-label">每页显示：</label>
-          <SearchableSelect
-            v-model="pagination.limit"
-            :options="pageSizeSelectOptions"
-            class="page-size-select"
-            placeholder="选择每页条数"
-            search-placeholder="搜索分页条数..."
-            @change="onPageSizeChange"
-          />
-        </div>
-        <div class="pagination-controls">
-          <button
-            @click="goToPage(0)"
-            class="btn-page"
-            :disabled="pagination.offset === 0"
-          >首页</button>
-          <button
-            @click="prevPage"
-            class="btn-page"
-            :disabled="pagination.offset === 0"
-          >上一页</button>
-          <span class="page-info">
-            {{ pagination.offset + 1 }} - {{ Math.min(pagination.offset + pagination.limit, pagination.total) }}
-            / {{ pagination.total }}
-          </span>
-          <button
-            @click="nextPage"
-            class="btn-page"
-            :disabled="!pagination.hasMore"
-          >下一页</button>
-        </div>
+    <div v-if="pagination.total > 0" class="pagination">
+      <SearchableSelect
+        v-model="pagination.limit"
+        :options="pageSizeSelectOptions"
+        placeholder="每页条数"
+        search-placeholder="搜索分页条数..."
+        @change="onPageSizeChange"
+      />
+      <div class="pager">
+        <button type="button" class="btn ghost" :disabled="pagination.offset === 0" @click="goToPage(0)">首页</button>
+        <button type="button" class="btn ghost" :disabled="pagination.offset === 0" @click="prevPage">上一页</button>
+        <span>{{ pagination.offset + 1 }} - {{ Math.min(pagination.offset + pagination.limit, pagination.total) }} / {{ pagination.total }}</span>
+        <button type="button" class="btn ghost" :disabled="!pagination.hasMore" @click="nextPage">下一页</button>
       </div>
     </div>
 
-    <!-- 删除确认对话框 -->
     <div v-if="deleteDialog.show" class="dialog-overlay" @click="closeDeleteDialog">
       <div class="dialog-box" @click.stop>
         <h3>确认删除日志</h3>
-        <p class="dialog-message">
-          确定要删除 <strong>{{ filters.startDate }}</strong> 到 <strong>{{ filters.endDate }}</strong> 的日志吗？
-        </p>
-        <p class="dialog-warning">此操作不可恢复！</p>
+        <p>确定要删除 {{ filters.startDate }} 到 {{ filters.endDate }} 的日志吗？此操作不可恢复。</p>
         <div class="dialog-actions">
-          <button @click="closeDeleteDialog" class="btn-cancel">取消</button>
-          <button @click="confirmDelete" class="btn-confirm-delete" :disabled="deleteDialog.deleting">
+          <button type="button" class="btn ghost" @click="closeDeleteDialog">取消</button>
+          <button type="button" class="btn danger" :disabled="deleteDialog.deleting" @click="confirmDelete">
             {{ deleteDialog.deleting ? '删除中...' : '确认删除' }}
           </button>
         </div>
       </div>
     </div>
 
-    <!-- 删除7天前日志对话框 -->
     <div v-if="deleteOldLogsDialog.show" class="dialog-overlay" @click="closeDeleteOldLogsDialog">
       <div class="dialog-box" @click.stop>
         <h3>清理旧日志</h3>
-        <p class="dialog-message">
-          确定要删除 <strong>{{ deleteOldLogsDialog.startDate }}</strong> 到 <strong>{{ deleteOldLogsDialog.endDate }}</strong> 的所有日志吗？
-        </p>
-        <p class="dialog-info">此操作将删除7天前的所有日志，仅保留最近7天的日志。</p>
-        <p class="dialog-warning">此操作不可恢复！</p>
+        <p>将删除 7 天前的所有日志，仅保留最近 7 天。</p>
         <div class="dialog-actions">
-          <button @click="closeDeleteOldLogsDialog" class="btn-cancel">取消</button>
-          <button @click="confirmDeleteOldLogs" class="btn-confirm-delete" :disabled="deleteOldLogsDialog.deleting">
+          <button type="button" class="btn ghost" @click="closeDeleteOldLogsDialog">取消</button>
+          <button type="button" class="btn danger" :disabled="deleteOldLogsDialog.deleting" @click="confirmDeleteOldLogs">
             {{ deleteOldLogsDialog.deleting ? '删除中...' : '确认删除' }}
           </button>
         </div>
@@ -260,13 +191,12 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import axios from 'axios'
 import SearchableSelect from '../components/SearchableSelect.vue'
+import { formatCompact, formatDateTime, formatDuration, formatNumber, pickTokenUsage } from '../utils/usageFormat.js'
 
 const API_BASE = window.location.origin
-
-// 日志级别定义
 const logLevels = [
   { value: 'DEBUG', label: 'DEBUG' },
   { value: 'INFO', label: 'INFO' },
@@ -274,37 +204,20 @@ const logLevels = [
   { value: 'ERROR', label: 'ERROR' },
   { value: 'CRITICAL', label: 'CRITICAL' }
 ]
-
-// 日志类型定义
 const logTypes = [
   { value: 'API_CALL', label: 'API调用' },
   { value: 'API_REQUEST', label: 'API请求' },
   { value: 'PROVIDER_SWITCH', label: '提供商切换' },
   { value: 'SESSION_BIND', label: '会话绑定' },
-  { value: 'TOKEN_USAGE', label: 'Token使用' },
-  { value: 'COST_TRACKING', label: '成本追踪' },
   { value: 'SYSTEM', label: '系统' },
-  { value: 'USER_ACTION', label: '用户操作' },
   { value: 'AUTH', label: '认证' },
-  { value: 'DATABASE', label: '数据库' },
-  { value: 'PERFORMANCE', label: '性能' },
-  { value: 'SECURITY', label: '安全' }
+  { value: 'PERFORMANCE', label: '性能' }
 ]
 
-// 状态
 const loading = ref(false)
 const error = ref('')
 const logs = ref([])
-const stats = ref({
-  totalApiCalls: 0,
-  successfulCalls: 0,
-  failedCalls: 0,
-  providerStats: {},
-  levelStats: {},
-  typeStats: {}
-})
-
-// 筛选条件
+const viewMode = ref('usage')
 const filters = ref({
   startDate: '',
   endDate: '',
@@ -312,119 +225,70 @@ const filters = ref({
   type: '',
   keyword: ''
 })
-
-// 分页
 const pagination = ref({
   total: 0,
-  limit: 10,
+  limit: 20,
   offset: 0,
   hasMore: false
 })
-
-// 每页显示条目数选项
-const pageSizeOptions = [10, 20, 50, 100]
-
-// 展开的日志详情
 const expandedLogs = ref(new Set())
 const formattedJsonCache = new Map()
 const MAX_EXPANDED_LOGS = 3
-
-// 实时监控
 const isRealtimeEnabled = ref(false)
 const eventSource = ref(null)
+const deleteDialog = ref({ show: false, deleting: false })
+const deleteOldLogsDialog = ref({ show: false, deleting: false, startDate: '', endDate: '' })
+const stats = ref({ tokenStats: {}, successfulCalls: 0, failedCalls: 0 })
 
-// 对话框
-const deleteDialog = ref({
-  show: false,
-  deleting: false
+const logLevelOptions = computed(() => [{ value: '', label: '全部级别' }, ...logLevels])
+const logTypeOptions = computed(() => [{ value: '', label: '全部类型' }, ...logTypes])
+const pageSizeSelectOptions = computed(() => [10, 20, 50, 100].map(value => ({ value, label: String(value) })))
+const canDelete = computed(() => Boolean(filters.value.startDate && filters.value.endDate))
+
+const usageRows = computed(() => logs.value.map(mapUsageRow))
+const usageSummary = computed(() => {
+  const rows = usageRows.value
+  return {
+    success: rows.filter(row => row.status === 'success').length,
+    failed: rows.filter(row => row.status !== 'success').length,
+    tokens: rows.reduce((sum, row) => sum + Number(row.totalTokens || 0), 0)
+  }
 })
 
-const deleteOldLogsDialog = ref({
-  show: false,
-  deleting: false,
-  startDate: '',
-  endDate: ''
-})
-
-// 计算属性
-const logLevelOptions = computed(() => [
-  { label: '全部', value: '' },
-  ...logLevels.map(level => ({ label: level.label, value: level.value }))
-])
-
-const logTypeOptions = computed(() => [
-  { label: '全部', value: '' },
-  ...logTypes.map(type => ({ label: type.label, value: type.value }))
-])
-
-const pageSizeSelectOptions = computed(() =>
-  pageSizeOptions.map(size => ({ label: `${size} 条`, value: size }))
-)
-
-const canDelete = computed(() => {
-  return filters.value.startDate && filters.value.endDate
-})
-
-// 初始化日期范围
-function initDateRange() {
-  const now = new Date()
-  const year = now.getFullYear()
-  const month = String(now.getMonth() + 1).padStart(2, '0')
-  const day = String(now.getDate()).padStart(2, '0')
-  const today = `${year}-${month}-${day}`
-  filters.value.startDate = today
-  filters.value.endDate = today
+function setViewMode(mode) {
+  viewMode.value = mode
+  pagination.value.offset = 0
+  if (mode === 'usage') filters.value.type = ''
+  applyFilters()
 }
 
-// 日期变化时重置分页
+function todayStamp(date = new Date()) {
+  const pad = value => String(value).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
+}
+
+async function initDateRange() {
+  filters.value.endDate = todayStamp()
+  filters.value.startDate = todayStamp()
+}
+
 function onDateChange() {
   pagination.value.offset = 0
   applyFilters()
 }
 
-// 应用筛选条件
-async function applyFilters() {
+function applyFilters() {
   pagination.value.offset = 0
-  await loadLogs()
+  loadLogs()
 }
 
-// 加载今日日志
-async function loadToday() {
-  initDateRange()
-  await applyFilters()
-}
-
-// 加载最近七天日志
-async function loadRecent7Days() {
-  const now = new Date()
-  const year = now.getFullYear()
-  const month = String(now.getMonth() + 1).padStart(2, '0')
-  const day = String(now.getDate()).padStart(2, '0')
-  const today = `${year}-${month}-${day}`
-
-  // 计算7天前的日期
-  const sevenDaysAgo = new Date(now)
-  sevenDaysAgo.setDate(now.getDate() - 6)  // 今天+往前6天=共7天
-  const pastYear = sevenDaysAgo.getFullYear()
-  const pastMonth = String(sevenDaysAgo.getMonth() + 1).padStart(2, '0')
-  const pastDay = String(sevenDaysAgo.getDate()).padStart(2, '0')
-  const startDate = `${pastYear}-${pastMonth}-${pastDay}`
-
-  filters.value.startDate = startDate
-  filters.value.endDate = today
-  await applyFilters()
-}
-
-// 加载日志数据
 async function loadLogs() {
   if (!filters.value.startDate || !filters.value.endDate) {
     error.value = '请选择日期范围'
     return
   }
-
   loading.value = true
   error.value = ''
-
   try {
     const params = {
       startDate: filters.value.startDate,
@@ -432,147 +296,111 @@ async function loadLogs() {
       limit: pagination.value.limit,
       offset: pagination.value.offset
     }
-
-    if (filters.value.level) params.level = filters.value.level
-    if (filters.value.type) params.type = filters.value.type
+    if (viewMode.value === 'usage') {
+      params.type = 'API_REQUEST,API_CALL'
+    } else {
+      if (filters.value.level) params.level = filters.value.level
+      if (filters.value.type) params.type = filters.value.type
+    }
     if (filters.value.keyword) params.keyword = filters.value.keyword
-
     const response = await axios.get(`${API_BASE}/api/logs`, { params })
-
-    logs.value = response.data.logs
+    logs.value = response.data.logs || []
     formattedJsonCache.clear()
     pagination.value = response.data.pagination
-    pagination.value.total = response.data.pagination.total
-
-    // 同时加载统计数据
     await loadStats()
   } catch (err) {
     error.value = err.response?.data?.error || err.message || '加载日志失败'
-    console.error('Error loading logs:', err)
   } finally {
     loading.value = false
   }
 }
 
-// 加载统计数据
 async function loadStats() {
   try {
-    const params = {
-      startDate: filters.value.startDate,
-      endDate: filters.value.endDate
-    }
-
-    const response = await axios.get(`${API_BASE}/api/logs/stats`, { params })
-    stats.value = response.data.stats
+    const response = await axios.get(`${API_BASE}/api/logs/stats`, {
+      params: { startDate: filters.value.startDate, endDate: filters.value.endDate }
+    })
+    stats.value = response.data.stats || {}
   } catch (err) {
     console.error('Error loading stats:', err)
   }
 }
 
-// 切换日志详情展开/收起
-function toggleLogDetail(log) {
-  if (expandedLogs.value.has(log.traceId)) {
-    expandedLogs.value.delete(log.traceId)
-  } else {
-    if (expandedLogs.value.size >= MAX_EXPANDED_LOGS) {
-      const firstExpanded = expandedLogs.value.values().next().value
-      if (firstExpanded) {
-        expandedLogs.value.delete(firstExpanded)
-      }
-    }
-    expandedLogs.value.add(log.traceId)
+function mapUsageRow(log) {
+  const request = log.data?.request || {}
+  const result = log.data?.result || {}
+  const providers = Array.isArray(log.data?.providers) ? log.data.providers : []
+  const successProvider =
+    providers.find(item => item.providerId === result.successfulProvider) ||
+    providers.find(item => item.status === 'success') ||
+    providers[0]
+  const tokens = pickTokenUsage(result.tokenUsage || log.data?.tokenUsage)
+  const success = result.status ? result.status === 'success' : log.data?.status === 'SUCCESS'
+  const duration = result.totalDuration ?? successProvider?.duration ?? log.data?.duration ?? null
+  const firstTokenMs = result.firstTokenMs ?? successProvider?.firstTokenMs ?? log.data?.firstTokenMs ?? null
+  const firstPct = duration ? Math.min(100, Math.round((Number(firstTokenMs || 0) / duration) * 100)) : 0
+  return {
+    id: `${log.timestamp}-${log.traceId || Math.random()}`,
+    raw: log,
+    time: formatDateTime(log.timestamp),
+    apiKeyName: request.apiKeyName || log.metadata?.apiKeyName || '-',
+    model: request.model || log.data?.model || '-',
+    providerName: successProvider?.providerName || log.data?.provider || '-',
+    stream: request.stream === true || log.metadata?.isStreaming === true,
+    promptTokens: tokens.prompt,
+    completionTokens: tokens.completion,
+    totalTokens: tokens.total,
+    firstTokenMs,
+    duration,
+    firstPct,
+    restPct: Math.max(0, 100 - firstPct),
+    status: success ? 'success' : 'failed',
+    ip: request.clientIp || log.data?.request?.clientIp || '-',
+    attempts: result.totalAttempts || providers.length || 1,
+    chain: providers.map(item => item.providerName).filter(Boolean).join(' -> ') || (log.data?.provider || '-'),
+    error: log.data?.errorMessage || providers.find(item => item.error)?.error || ''
   }
 }
 
-// 获取日志级别对应的样式类
-function getLogLevelClass(level) {
-  return `log-level-${level.toLowerCase()}`
+function toggleLogDetail(log) {
+  const key = log.traceId || `${log.timestamp}`
+  if (expandedLogs.value.has(key)) {
+    expandedLogs.value.delete(key)
+    return
+  }
+  if (expandedLogs.value.size >= MAX_EXPANDED_LOGS) {
+    const firstExpanded = expandedLogs.value.values().next().value
+    if (firstExpanded) expandedLogs.value.delete(firstExpanded)
+  }
+  expandedLogs.value.add(key)
 }
 
-// 获取短消息
 function getShortMessage(message) {
   if (!message) return ''
   return message.length > 80 ? message.substring(0, 80) + '...' : message
 }
 
 function formatJson(value) {
-  const cacheKey = value && typeof value === 'object' ? JSON.stringify(Object.keys(value).sort()) + ':' + (value.traceId || value.timestamp || '') + ':' + (value.id || '') : String(value)
-
-  if (formattedJsonCache.has(cacheKey)) {
-    return formattedJsonCache.get(cacheKey)
-  }
-
-  let formatted
   try {
-    formatted = JSON.stringify(value, null, 2)
+    return JSON.stringify(value, null, 2)
   } catch {
-    formatted = String(value)
+    return String(value)
   }
-
-  if (formattedJsonCache.size > 200) {
-    const firstKey = formattedJsonCache.keys().next().value
-    formattedJsonCache.delete(firstKey)
-  }
-  formattedJsonCache.set(cacheKey, formatted)
-  return formatted
 }
 
-function getProviderName(log) {
-  return log?.data?.provider || log?.data?.providers?.[0]?.providerName || log?.metadata?.providerName || null
-}
-
-function getModelName(log) {
-  return log?.data?.model || log?.data?.request?.model || log?.metadata?.model || null
-}
-
-function getStatusCode(log) {
-  return (
-    log?.data?.statusCode ||
-    log?.metadata?.status ||
-    log?.data?.providers?.find?.(p => p.statusCode)?.statusCode ||
-    null
-  )
-}
-
-function getErrorCode(log) {
-  return log?.data?.errorCode || log?.metadata?.errorCode || log?.metadata?.code || null
-}
-
-function getRequestInfo(log) {
-  return log?.metadata?.request || null
-}
-
-function getResponseData(log) {
-  return log?.metadata?.responseData || null
-}
-
-function getErrorSummary(log) {
-  return (
-    log?.data?.errorMessage ||
-    log?.metadata?.providerMessage ||
-    log?.data?.providers?.find?.(p => p.error)?.error ||
-    null
-  )
-}
-
-// 格式化时间
 function formatTime(timestamp) {
   const date = new Date(timestamp)
-  const hours = String(date.getHours()).padStart(2, '0')
-  const minutes = String(date.getMinutes()).padStart(2, '0')
-  const seconds = String(date.getSeconds()).padStart(2, '0')
-  return `${hours}:${minutes}:${seconds}`
+  const pad = value => String(value).padStart(2, '0')
+  return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
 }
 
-// 分页控制
 function goToPage(offset) {
   pagination.value.offset = offset
   loadLogs()
 }
 
 function prevPage() {
-  const newOffset = Math.max(0, pagination.value.offset - pagination.value.limit)
-  pagination.value.offset = newOffset
+  pagination.value.offset = Math.max(0, pagination.value.offset - pagination.value.limit)
   loadLogs()
 }
 
@@ -581,19 +409,28 @@ function nextPage() {
   loadLogs()
 }
 
-// 改变每页显示条目数
-function changePageSize(newSize) {
-  pagination.value.limit = Number(newSize)
+function onPageSizeChange(option) {
+  const value = typeof option === 'object' && option !== null ? option.value : pagination.value.limit
+  pagination.value.limit = Number(value)
   pagination.value.offset = 0
   loadLogs()
 }
 
-function onPageSizeChange(option) {
-  const value = typeof option === 'object' && option !== null ? option.value : pagination.value.limit
-  changePageSize(value)
+async function loadToday() {
+  filters.value.startDate = todayStamp()
+  filters.value.endDate = todayStamp()
+  applyFilters()
 }
 
-// 导出日志
+async function loadRecent7Days() {
+  const end = new Date()
+  const start = new Date()
+  start.setDate(end.getDate() - 6)
+  filters.value.startDate = todayStamp(start)
+  filters.value.endDate = todayStamp(end)
+  applyFilters()
+}
+
 async function exportLogs(format) {
   try {
     const params = {
@@ -601,62 +438,34 @@ async function exportLogs(format) {
       endDate: filters.value.endDate,
       format
     }
-
-    const response = await axios.get(`${API_BASE}/api/logs/export`, {
-      params,
-      responseType: 'blob'
-    })
-
-    // 创建下载链接
-    const url = window.URL.createObjectURL(new Blob([response.data]))
+    if (viewMode.value === 'usage') params.type = 'API_REQUEST,API_CALL'
+    const response = await axios.get(`${API_BASE}/api/logs/export`, { params, responseType: 'blob' })
+    const url = window.URL.createObjectURL(response.data)
     const link = document.createElement('a')
     link.href = url
-    link.setAttribute('download', `logs_${filters.value.startDate}_${filters.value.endDate}.${format}`)
-    document.body.appendChild(link)
+    link.download = `logs-${filters.value.startDate}-${filters.value.endDate}.${format}`
     link.click()
-    link.remove()
     window.URL.revokeObjectURL(url)
   } catch (err) {
-    alert('导出失败: ' + (err.response?.data?.error || err.message))
+    error.value = err.response?.data?.error || err.message || '导出失败'
   }
 }
 
-// 实时监控
 function toggleRealtime() {
-  if (isRealtimeEnabled.value) {
-    startRealtime()
-  } else {
-    stopRealtime()
-  }
+  if (isRealtimeEnabled.value) startRealtime()
+  else stopRealtime()
 }
 
 function startRealtime() {
-  if (eventSource.value) return
-
+  stopRealtime()
   const url = new URL(`${API_BASE}/api/logs/stream`)
-  if (filters.value.level) url.searchParams.set('level', filters.value.level)
-  if (filters.value.type) url.searchParams.set('type', filters.value.type)
-
-  eventSource.value = new EventSource(url.toString())
-
-  eventSource.value.onmessage = (event) => {
+  eventSource.value = new EventSource(url)
+  eventSource.value.onmessage = event => {
     try {
       const log = JSON.parse(event.data)
-      if (log.type === 'connected') {
-        console.log(log.message)
-        return
-      }
-      // 添加新日志到列表顶部
-      logs.value = [log, ...logs.value].slice(0, 100)
-      formattedJsonCache.clear()
-    } catch (err) {
-      console.error('Error parsing SSE message:', err)
-    }
-  }
-
-  eventSource.value.onerror = (err) => {
-    console.error('SSE error:', err)
-    stopRealtime()
+      if (viewMode.value === 'usage' && !['API_REQUEST', 'API_CALL'].includes(log.type)) return
+      logs.value = [log, ...logs.value].slice(0, pagination.value.limit)
+    } catch {}
   }
 }
 
@@ -667,796 +476,297 @@ function stopRealtime() {
   }
 }
 
-// 删除对话框
 function showDeleteDialog() {
-  if (!canDelete.value) {
-    alert('请先选择日期范围')
-    return
-  }
   deleteDialog.value.show = true
 }
 
 function closeDeleteDialog() {
-  if (!deleteDialog.value.deleting) {
-    deleteDialog.value.show = false
-  }
-}
-
-// 删除7天前日志对话框
-function showDeleteOldLogsDialog() {
-  const now = new Date()
-  const sevenDaysAgo = new Date(now)
-  sevenDaysAgo.setDate(now.getDate() - 7)
-
-  const year = sevenDaysAgo.getFullYear()
-  const month = String(sevenDaysAgo.getMonth() + 1).padStart(2, '0')
-  const day = String(sevenDaysAgo.getDate()).padStart(2, '0')
-  const endDate = `${year}-${month}-${day}`
-
-  deleteOldLogsDialog.value.endDate = endDate
-  deleteOldLogsDialog.value.startDate = '2024-01-01'  // 设置一个很早的起始日期
-  deleteOldLogsDialog.value.show = true
-}
-
-function closeDeleteOldLogsDialog() {
-  if (!deleteOldLogsDialog.value.deleting) {
-    deleteOldLogsDialog.value.show = false
-  }
-}
-
-async function confirmDeleteOldLogs() {
-  deleteOldLogsDialog.value.deleting = true
-
-  try {
-    const response = await axios.delete(`${API_BASE}/api/logs`, {
-      params: {
-        startDate: deleteOldLogsDialog.value.startDate,
-        endDate: deleteOldLogsDialog.value.endDate
-      }
-    })
-
-    if (response.data.success) {
-      alert(`成功删除 ${response.data.deletedCount} 个日志文件`)
-      deleteOldLogsDialog.value.show = false
-      await loadLogs()
-    }
-  } catch (err) {
-    alert('删除日志失败: ' + (err.response?.data?.error || err.message))
-  } finally {
-    deleteOldLogsDialog.value.deleting = false
-  }
+  if (!deleteDialog.value.deleting) deleteDialog.value.show = false
 }
 
 async function confirmDelete() {
   deleteDialog.value.deleting = true
-
   try {
-    const response = await axios.delete(`${API_BASE}/api/logs`, {
-      params: {
-        startDate: filters.value.startDate,
-        endDate: filters.value.endDate
-      }
+    await axios.delete(`${API_BASE}/api/logs`, {
+      params: { startDate: filters.value.startDate, endDate: filters.value.endDate }
     })
-
-    if (response.data.success) {
-      alert(`成功删除 ${response.data.deletedCount} 个日志文件`)
-      deleteDialog.value.show = false
-      await loadLogs()
-    }
+    deleteDialog.value.show = false
+    await loadLogs()
   } catch (err) {
-    alert('删除日志失败: ' + (err.response?.data?.error || err.message))
+    error.value = err.response?.data?.error || err.message || '删除失败'
   } finally {
     deleteDialog.value.deleting = false
   }
 }
 
-// 生命周期
+function showDeleteOldLogsDialog() {
+  const end = new Date()
+  end.setDate(end.getDate() - 7)
+  deleteOldLogsDialog.value.endDate = todayStamp(end)
+  deleteOldLogsDialog.value.startDate = '2024-01-01'
+  deleteOldLogsDialog.value.show = true
+}
+
+function closeDeleteOldLogsDialog() {
+  if (!deleteOldLogsDialog.value.deleting) deleteOldLogsDialog.value.show = false
+}
+
+async function confirmDeleteOldLogs() {
+  deleteOldLogsDialog.value.deleting = true
+  try {
+    await axios.delete(`${API_BASE}/api/logs`, {
+      params: {
+        startDate: deleteOldLogsDialog.value.startDate,
+        endDate: deleteOldLogsDialog.value.endDate
+      }
+    })
+    deleteOldLogsDialog.value.show = false
+    await loadLogs()
+  } catch (err) {
+    error.value = err.response?.data?.error || err.message || '删除失败'
+  } finally {
+    deleteOldLogsDialog.value.deleting = false
+  }
+}
+
 onMounted(async () => {
   await initDateRange()
   await loadLogs()
 })
 
-onUnmounted(() => {
-  stopRealtime()
-})
+onUnmounted(stopRealtime)
 </script>
 
 <style scoped>
 .logs-page {
-  padding: 20px;
-  max-width: 1680px;
+  padding: clamp(16px, 2vw, 24px);
+  max-width: min(100%, 1680px);
   margin: 0 auto;
 }
 
-h2 {
-  margin-bottom: 22px;
-  color: var(--ink);
-  font-size: 1.9rem;
-  font-weight: 800;
-  letter-spacing: 0;
-}
-
-/* 工具栏 */
-.logs-toolbar {
+.page-head {
   display: flex;
   justify-content: space-between;
-  align-items: flex-start;
-  margin-bottom: 24px;
-  padding: 18px;
-  background: rgba(255, 255, 255, 0.96);
-  border-radius: 22px;
-  border: 1px solid rgba(226, 232, 240, 0.95);
-  box-shadow: 0 8px 20px rgba(23, 28, 25, 0.05);
+  gap: 16px;
+  align-items: flex-end;
+  margin-bottom: 16px;
   flex-wrap: wrap;
-  gap: 15px;
 }
 
-.toolbar-left {
-  flex: 1;
-  min-width: 0;
+h1 {
+  font-size: 1.85rem;
+  font-weight: 800;
+  color: var(--ink);
 }
 
-.date-range {
+.page-head p,
+.empty,
+.state-msg {
+  color: var(--muted);
+}
+
+.tab-switch,
+.toolbar-row,
+.summary-row,
+.pagination,
+.pager,
+.dialog-actions {
   display: flex;
+  gap: 8px;
   align-items: center;
-  gap: 10px;
   flex-wrap: wrap;
+}
+
+.tab,
+.btn {
+  min-height: 34px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink-soft);
+  padding: 0 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.tab.active,
+.btn {
+  background: var(--accent);
+  color: white;
+  border-color: var(--accent);
+}
+
+.btn.ghost {
+  background: var(--surface);
+  color: var(--ink-soft);
+}
+
+.btn.danger {
+  background: var(--pink);
+  border-color: var(--pink);
+  color: white;
+}
+
+.toolbar,
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 14px;
+  box-shadow: var(--shadow-soft);
+  margin-bottom: 14px;
+}
+
+.toolbar {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+input[type="date"],
+.search-input {
+  min-height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 0 10px;
+  background: white;
+}
+
+.search-input { min-width: 220px; }
+
+.summary-chip,
+.provider-chip,
+.type-chip,
+.status-pill,
+.log-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.summary-chip,
+.provider-chip {
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
+.type-chip.stream {
+  background: var(--pink-soft);
+  color: var(--pink-strong);
+}
+
+.type-chip.json,
+.status-pill.success {
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
+.status-pill.failed {
+  background: var(--pink-soft);
+  color: var(--pink-strong);
+}
+
+.table-scroll { overflow: auto; }
+
+.call-table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 1080px;
+}
+
+.call-table th,
+.call-table td {
+  text-align: left;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+  font-size: 13px;
+  vertical-align: top;
+}
+
+.call-table th { color: var(--muted); }
+
+.call-row { cursor: pointer; }
+.call-row:hover { background: var(--bg-soft); }
+.strong { font-weight: 700; color: var(--ink); }
+
+.token-stack,
+.latency-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-variant-numeric: tabular-nums;
+}
+
+.token-stack .in { color: var(--accent); }
+.token-stack .out { color: var(--pink-strong); }
+.token-stack .total { color: var(--ink-soft); }
+
+.latency-bar {
+  width: 120px;
+  height: 8px;
+  border-radius: 99px;
+  background: var(--bg-soft);
+  display: flex;
+  overflow: hidden;
+  margin-bottom: 4px;
+}
+
+.latency-bar .first { background: var(--accent); height: 100%; }
+.latency-bar .rest { background: var(--pink); height: 100%; }
+.latency-text { color: var(--muted); font-size: 12px; }
+
+.detail-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
   margin-bottom: 10px;
 }
 
-.date-range label {
-  font-weight: 500;
-  color: #555;
-  white-space: nowrap;
-}
-
-.filters-row {
-  display: flex;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-
-.filter-group {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-}
-
-.hint {
-  color: #999;
-  font-size: 12px;
-}
-
-.toolbar-actions {
-  display: flex;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-
-.input-field {
-  padding: 9px 12px;
-  border: 1px solid rgba(203, 213, 225, 0.95);
-  border-radius: 14px;
-  font-size: 14px;
-  background: rgba(255,255,255,0.92);
-  transition: all 0.22s ease;
-}
-
-.select-field {
-  min-width: 100px;
-  cursor: pointer;
-}
-
-.search-input {
-  min-width: 200px;
-}
-
-.btn-search {
-  padding: 9px 16px;
-  background: var(--accent);
-  color: white;
-  border: none;
-  border-radius: 999px;
-  cursor: pointer;
-  font-size: 14px;
-  font-weight: 700;
-  box-shadow: 0 8px 16px rgba(57, 132, 91, 0.18);
-  transition: all 0.22s ease;
-}
-
-.btn-search:hover {
-  background: var(--accent-strong);
-  transform: translateY(-1px);
-  box-shadow: 0 10px 20px rgba(57, 132, 91, 0.24);
-}
-
-.realtime-toggle {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  cursor: pointer;
-  user-select: none;
-}
-
-.realtime-toggle input[type="checkbox"] {
-  width: 18px;
-  height: 18px;
-  cursor: pointer;
-}
-
-.realtime-toggle span {
-  font-size: 14px;
-  color: #555;
-}
-
-.btn-action {
-  padding: 9px 16px;
-  border: none;
-  border-radius: 999px;
-  cursor: pointer;
-  font-size: 14px;
-  font-weight: 700;
-  transition: background-color 0.18s ease, color 0.18s ease, opacity 0.18s ease;
-  white-space: nowrap;
-  background: linear-gradient(135deg, #15803d 0%, #166534 100%);
-  color: white;
-  min-width: 86px;
-  height: 38px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  box-shadow: 0 6px 14px rgba(22, 101, 52, 0.12);
-}
-
-.btn-action:hover {
-  opacity: 0.96;
-}
-
-.btn-action.btn-today {
-  background: var(--accent);
-}
-
-.btn-action.btn-today:hover {
-  background: var(--accent-strong);
-}
-
-.btn-action.btn-recent {
-  background: #9C27B0;
-}
-
-.btn-action.btn-recent:hover {
-  background: #7B1FA2;
-}
-
-.btn-action.btn-export {
-  background: #FF9800;
-}
-
-.btn-action.btn-export:hover {
-  background: #F57C00;
-}
-
-.btn-action.btn-delete {
-  background: #f44336;
-}
-
-.btn-action.btn-delete:hover:not(:disabled) {
-  background: #d32f2f;
-}
-
-.btn-action.btn-delete-old {
-  background: #D32F2F;
-}
-
-.btn-action.btn-delete-old:hover {
-  background: #B71C1C;
-}
-
-.btn-action:disabled {
-  background: #ccc;
-  cursor: not-allowed;
-  opacity: 0.6;
-}
-
-.loading {
-  text-align: center;
-  padding: 40px;
-  color: #666;
-  font-size: 16px;
-}
-
-.error-message {
-  padding: 16px 18px;
-  background: linear-gradient(180deg, #fff1f2 0%, #ffe4e6 100%);
-  color: #b91c1c;
-  border-radius: 18px;
-  border: 1px solid #fecdd3;
-  margin-bottom: 20px;
-  box-shadow: 0 16px 30px rgba(185, 28, 28, 0.08);
-}
-
-/* 统计概览 */
-.stats-overview {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
-  gap: 16px;
-  margin-bottom: 22px;
-}
-
-.stat-card {
-  padding: 16px 18px;
-  background: linear-gradient(180deg, rgba(255,255,255,0.98) 0%, rgba(247,250,252,0.95) 100%);
-  border-radius: 18px;
-  border: 1px solid rgba(226, 232, 240, 0.95);
-  border-left: 4px solid #2196F3;
-  box-shadow: 0 6px 14px rgba(23, 28, 25, 0.04);
-}
-
-.stat-card.success {
-  border-left-color: #4CAF50;
-}
-
-.stat-card.warning {
-  border-left-color: #FF9800;
-}
-
-.stat-card.failed {
-  border-left-color: #f44336;
-}
-
-.stat-label {
-  font-size: 12px;
-  color: #666;
-  margin-bottom: 5px;
-}
-
-.stat-value {
-  font-size: 24px;
-  font-weight: bold;
-  color: #333;
-}
-
-/* 日志列表 */
-.logs-content {
-  background: rgba(255, 255, 255, 0.98);
-  border-radius: 24px;
-  padding: 22px;
-  border: 1px solid rgba(226, 232, 240, 0.95);
-  box-shadow: 0 10px 24px rgba(23, 28, 25, 0.05);
-}
-
-.no-data {
-  text-align: center;
-  padding: 40px;
-  color: #999;
-}
-
-.logs-list {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.log-entry {
-  border: 1px solid rgba(226, 232, 240, 0.95);
-  border-radius: 18px;
-  overflow: hidden;
-  flex-shrink: 0;
-  min-height: 50px;
-  background: linear-gradient(180deg, rgba(255,255,255,0.99) 0%, rgba(247,250,252,0.97) 100%);
-  box-shadow: 0 4px 12px rgba(23, 28, 25, 0.03);
-}
-
-.log-header {
-  display: flex;
-  align-items: center;
-  padding: 13px 16px;
-  background: rgba(248, 250, 252, 0.9);
-  cursor: pointer;
-  transition: background-color 0.18s ease;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-
-.log-header:hover {
-  background: rgba(241, 245, 249, 1);
-}
-
-.log-badge {
-  padding: 3px 8px;
-  border-radius: 4px;
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  white-space: nowrap;
-}
-
-.log-badge.level-debug {
-  background: #E3F2FD;
-  color: #1976D2;
-}
-
-.log-badge.level-info {
-  background: #E8F5E9;
-  color: #388E3C;
-}
-
-.log-badge.level-warn {
-  background: #FFF3E0;
-  color: #F57C00;
-}
-
-.log-badge.level-error {
-  background: #FFEBEE;
-  color: #D32F2F;
-}
-
-.log-badge.level-critical {
-  background: #212121;
-  color: #fff;
-}
-
-.log-badge.type-api_call {
-  background: #F3E5F5;
-  color: #7B1FA2;
-}
-
-.log-badge.type-system {
-  background: #E0F2F1;
-  color: #00796B;
-}
-
-.log-badge.type-user_action {
-  background: #FFF8E1;
-  color: #FFA000;
-}
-
-.log-badge.type-auth {
-  background: #FFEBEE;
-  color: #C62828;
-}
-
-.log-badge.type-database {
-  background: #E8EAF6;
-  color: #3F51B5;
-}
-
-.log-badge.type-performance {
-  background: #FCE4EC;
-  color: #C2185B;
-}
-
-.log-badge.type-security {
-  background: #212121;
-  color: #fff;
-}
-
-.log-time {
-  font-family: monospace;
-  font-size: 13px;
-  color: #666;
-  min-width: 70px;
-}
-
-.log-message-short {
-  flex: 1;
-  color: #333;
-  font-size: 14px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  min-width: 200px;
-}
-
-.toggle-icon {
-  color: #666;
-  font-size: 12px;
-}
-
-/* 日志详情 */
-.log-detail {
-  padding: 12px 15px;
-  background: white;
-  border-top: 1px solid #e0e0e0;
-}
-
-.error-summary-card {
-  margin: 10px 0 14px;
-  padding: 12px;
-  background: #fff5f5;
-  border: 1px solid #fecaca;
-  border-left: 4px solid #ef4444;
-  border-radius: 8px;
-}
-
-.error-summary-header {
-  font-size: 12px;
-  font-weight: 700;
-  color: #b91c1c;
-  margin-bottom: 6px;
-}
-
-.error-summary-message {
-  color: #7f1d1d;
-  font-size: 13px;
-  line-height: 1.6;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-.error-summary-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 10px;
-}
-
-.error-chip {
-  display: inline-flex;
-  align-items: center;
-  padding: 4px 8px;
-  border-radius: 999px;
-  background: #fee2e2;
-  color: #991b1b;
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.detail-row {
-  display: flex;
-  margin-bottom: 8px;
-  align-items: flex-start;
-}
-
-.detail-row:last-child {
-  margin-bottom: 0;
-}
-
-.detail-row-block {
-  align-items: stretch;
-}
-
-.detail-label {
-  font-weight: 500;
-  color: #666;
-  min-width: 80px;
-  font-size: 13px;
-  flex-shrink: 0;
-}
-
-.detail-value {
-  color: #333;
-  font-size: 13px;
-  word-break: break-word;
-}
-
-.detail-stack {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.trace-id {
-  font-family: monospace;
-  font-size: 12px;
-  background: #f5f5f5;
-  padding: 2px 6px;
-  border-radius: 3px;
-}
-
 .detail-json {
-  margin: 0;
+  background: var(--bg-soft);
+  border-radius: 10px;
   padding: 10px;
-  background: #f5f5f5;
-  border-radius: 4px;
+  overflow: auto;
+  max-height: 240px;
   font-size: 12px;
-  overflow-x: auto;
-  max-width: 100%;
-  white-space: pre-wrap;
-  word-break: break-word;
 }
 
-.detail-json-error {
-  background: #fff7ed;
-  border: 1px solid #fed7aa;
-}
-
-/* 分页 */
-.pagination {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 20px;
-  margin-top: 20px;
-  padding-top: 20px;
-  border-top: 1px solid #e0e0e0;
-  flex-wrap: wrap;
-}
-
-.pagination-left {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.page-size-label {
-  font-size: 14px;
-  color: #666;
-  white-space: nowrap;
-}
-
-.page-size-select {
-  padding: 6px 10px;
-  border: 1px solid #ddd;
-  border-radius: 4px;
-  background: white;
+.sys-item {
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
   cursor: pointer;
-  font-size: 14px;
-  transition: border-color 0.3s;
 }
 
-.page-size-select:hover {
-  border-color: #999;
-}
+.sys-head { display: flex; gap: 8px; align-items: center; }
+.log-badge.level-error, .log-badge.level-critical { background: var(--pink-soft); color: var(--pink-strong); }
+.log-badge.level-info { background: var(--accent-soft); color: var(--accent-strong); }
+.sys-time { color: var(--muted); font-size: 12px; }
 
-.page-size-select:focus {
-  outline: none;
-  border-color: #2196F3;
-}
+.pagination { justify-content: space-between; margin-top: 12px; }
 
-.pagination-controls {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.btn-page {
-  padding: 8px 16px;
-  border: 1px solid #ddd;
-  border-radius: 4px;
-  background: white;
-  cursor: pointer;
-  font-size: 14px;
-  transition: all 0.3s;
-}
-
-.btn-page:hover:not(:disabled) {
-  background: #f5f5f5;
-  border-color: #999;
-}
-
-.btn-page:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.page-info {
-  font-size: 14px;
-  color: #666;
-  white-space: nowrap;
-}
-
-/* 对话框 */
 .dialog-overlay {
   position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: rgba(0, 0, 0, 0.5);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 1000;
+  inset: 0;
+  background: rgba(36, 85, 60, 0.18);
+  display: grid;
+  place-items: center;
 }
 
 .dialog-box {
+  width: min(92vw, 420px);
   background: white;
-  border-radius: 8px;
-  padding: 24px;
-  max-width: 500px;
-  width: 90%;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  border-radius: 16px;
+  padding: 18px;
 }
 
-.dialog-box h3 {
-  margin: 0 0 16px 0;
-  color: #333;
-  font-size: 20px;
-}
+.realtime { color: var(--ink-soft); font-size: 13px; display: flex; gap: 6px; align-items: center; }
 
-.dialog-message {
-  margin: 0 0 12px 0;
-  color: #666;
-  font-size: 15px;
-  line-height: 1.5;
-}
-
-.dialog-warning {
-  margin: 0 0 20px 0;
-  color: #f44336;
-  font-size: 14px;
-  font-weight: 500;
-}
-
-.dialog-info {
-  margin: 0 0 8px 0;
-  color: #2196F3;
-  font-size: 14px;
-  font-weight: 400;
-}
-
-.dialog-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-
-.btn-cancel {
-  padding: 8px 20px;
-  border: 1px solid #ddd;
-  border-radius: 4px;
-  background: white;
-  color: #666;
-  cursor: pointer;
-  font-size: 14px;
-  transition: all 0.3s;
-}
-
-.btn-cancel:hover {
-  background: #f5f5f5;
-  border-color: #999;
-}
-
-.btn-confirm-delete {
-  padding: 8px 20px;
-  border: none;
-  border-radius: 4px;
-  background: #f44336;
-  color: white;
-  cursor: pointer;
-  font-size: 14px;
-  transition: background-color 0.3s;
-}
-
-.btn-confirm-delete:hover:not(:disabled) {
-  background: #d32f2f;
-}
-
-.btn-confirm-delete:disabled {
-  background: #ccc;
-  cursor: not-allowed;
-}
-
-/* 响应式 */
-@media (max-width: 768px) {
-  .logs-toolbar {
-    flex-direction: column;
-    align-items: stretch;
-  }
-
-  .toolbar-actions {
-    justify-content: stretch;
-  }
-
-  .btn-action {
-    flex: 1;
-    min-width: 0;
-  }
-
-  .filters-row {
-    flex-direction: column;
-  }
-
-  .filter-group {
-    width: 100%;
-  }
-
-  .search-input,
-  .select-field {
-    width: 100%;
-    box-sizing: border-box;
-  }
+@media (max-width: 800px) {
+  .detail-grid { grid-template-columns: 1fr 1fr; }
+  h1 { font-size: 1.45rem; }
 }
 </style>

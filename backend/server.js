@@ -209,9 +209,9 @@ const CONFIG = {
   MIN_MESSAGE_COUNT_FOR_EXTENDED: 3, // 保留更久的最小消息数
   MODEL_FAIL_THRESHOLD: 3, // 模型失败阈值
   POLLING_MAX_ROUNDS: 2, // 轮询失败后最多完整遍历供应商列表的轮数
-  STREAM_TIMEOUT: 600000, // 流式看门狗（10分钟），避免长会话被 2 分钟掐断
-  UPSTREAM_STREAM_TIMEOUT: 0, // 0 表示不中断仍在传输的上游流
-  REQUEST_TIMEOUT: 120000 // 非流式上游超时（2分钟）
+  STREAM_TIMEOUT: 1800000, // 流式空闲超时（30分钟无数据才断开），有数据会续命
+  UPSTREAM_STREAM_TIMEOUT: 0, // 0 表示不限制仍在传输的上游流
+  REQUEST_TIMEOUT: 600000 // 非流式上游超时（10分钟）
 };
 
 function createEntityId() {
@@ -257,8 +257,8 @@ if (httpProxy || httpsProxy) {
   console.log('[Proxy] No proxy configured, using direct connection');
 }
 
-// 配置axios默认超时
-axios.defaults.timeout = 30000;
+// 非流式请求各自传入 timeout；流式必须显式 timeout: 0，避免默认 30s 掐断
+axios.defaults.timeout = 0;
 
 // ==================== 文件写入队列机制 ====================
 // 解决并发写入导致的数据竞争问题
@@ -2884,7 +2884,7 @@ function buildChatRequestBody(modelId, messages, params, apiType = 'openai', ima
     }
 
     log.verbose(`[DEBUG] Final OpenAI request body created`);
-    return requestBody;
+    return ensureStreamUsageOption(requestBody, 'openai');
   }
 }
 
@@ -3130,7 +3130,7 @@ function collectToolCallDelta(toolCalls, deltaToolCalls) {
   }
 }
 
-async function streamChatCompletionAsResponses(upstream, res, req, { requestMessages, modelId }) {
+async function streamChatCompletionAsResponses(upstream, res, req, { requestMessages, modelId, startedAt = Date.now() }) {
   res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
@@ -3143,6 +3143,11 @@ async function streamChatCompletionAsResponses(upstream, res, req, { requestMess
   let usage = null;
   let finishReason = 'stop';
   let buffer = '';
+  let firstTokenMs = null;
+  const markFirstToken = () => {
+    if (firstTokenMs != null) return;
+    firstTokenMs = finiteNonNegativeMs(Date.now() - startedAt);
+  };
 
   writeSseEvent(res, {
     type: 'response.created',
@@ -3160,7 +3165,7 @@ async function streamChatCompletionAsResponses(upstream, res, req, { requestMess
     if (upstream.data && !upstream.data.destroyed) upstream.data.destroy();
     if (upstream.raw && !upstream.raw.destroyed) upstream.raw.destroy();
   };
-  if (req) req.on('close', stopUpstream);
+  bindClientDisconnect(req, res, stopUpstream);
 
   await new Promise((resolve, reject) => {
     const consumeSseLine = (line) => {
@@ -3179,6 +3184,7 @@ async function streamChatCompletionAsResponses(upstream, res, req, { requestMess
       if (!choice) return;
       const delta = choice.delta || {};
       if (typeof delta.content === 'string' && delta.content) {
+        markFirstToken();
         text += delta.content;
         writeSseEvent(res, {
           type: 'response.output_text.delta',
@@ -3187,6 +3193,7 @@ async function streamChatCompletionAsResponses(upstream, res, req, { requestMess
         }, 'response.output_text.delta');
       }
       if (Array.isArray(delta.tool_calls) && delta.tool_calls.length > 0) {
+        markFirstToken();
         collectToolCallDelta(toolCalls, delta.tool_calls);
         for (const part of delta.tool_calls) {
           if (typeof part.function?.arguments === 'string' && part.function.arguments) {
@@ -3253,7 +3260,7 @@ async function streamChatCompletionAsResponses(upstream, res, req, { requestMess
     res.write('data: [DONE]\n\n');
     res.end();
   }
-  return { jsonData, responsePayload };
+  return { jsonData, responsePayload, firstTokenMs };
 }
 
 function extractModelName(modelId) {
@@ -4286,16 +4293,6 @@ class BackgroundTaskProcessor {
       try {
         // Run these operations in parallel
         await Promise.all([
-          logApiCall({
-            provider: selectedProvider.name,
-            model: pureModelName,
-            success: true,
-            metadata: {
-              providerId: selectedProvider.id,
-              apiKeyId: keyInfo?.key?.id || null,
-              apiKeyName: keyInfo?.key?.name || null
-            }
-          }),
           resetModelFailCount(selectedProvider.id, pureModelName, userSettings),
           resetKeyFailCount(keyInfo?.key?.id, userSettings)
         ]);
@@ -4313,17 +4310,6 @@ class BackgroundTaskProcessor {
     this.addTask(async () => {
       try {
         await Promise.all([
-          logApiCall({
-            provider: selectedProvider.name,
-            model: pureModelName,
-            success: false,
-            errorMessage,
-            metadata: {
-              providerId: selectedProvider.id,
-              apiKeyId: keyInfo?.key?.id || null,
-              apiKeyName: keyInfo?.key?.name || null
-            }
-          }),
           incrementModelFailCount(selectedProvider.id, pureModelName, userSettings),
           incrementKeyFailCount(keyInfo?.key?.id, userSettings)
         ]);
@@ -4420,13 +4406,305 @@ function formatProviderAttemptError(error) {
   }
 }
 
+function mergeCapturedTokenUsage(current, incoming) {
+  const next = normalizeTokenUsage(incoming);
+  if (!next) return current;
+  if (!current) return next;
+  const promptTokens = next.promptTokens || current.promptTokens || 0;
+  const completionTokens = next.completionTokens || current.completionTokens || 0;
+  const cachedTokens = next.cachedTokens || current.cachedTokens || 0;
+  const cacheWriteTokens = next.cacheWriteTokens || current.cacheWriteTokens || 0;
+  return {
+    promptTokens,
+    completionTokens,
+    totalTokens: promptTokens + completionTokens,
+    cachedTokens,
+    cacheWriteTokens
+  };
+}
+
+function captureTokenUsageFromPayload(payload) {
+  if (!payload || typeof payload !== 'object') return null;
+  if (payload.usage) return normalizeTokenUsage(payload.usage);
+  if (payload.message && payload.message.usage) return normalizeTokenUsage(payload.message.usage);
+  if (payload.response && payload.response.usage) return normalizeTokenUsage(payload.response.usage);
+  return null;
+}
+
+function collectSseUsageAndText(chunk, state = { tokenUsage: null, text: '' }) {
+  const text = Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk || '');
+  const lines = text.split(/\r?\n/);
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith('data:')) continue;
+    const data = trimmed.slice(5).trim();
+    if (!data || data === '[DONE]') continue;
+    try {
+      const payload = JSON.parse(data);
+      const captured = captureTokenUsageFromPayload(payload);
+      if (captured) state.tokenUsage = mergeCapturedTokenUsage(state.tokenUsage, captured);
+      const delta = payload.choices && payload.choices[0] && payload.choices[0].delta;
+      if (delta && typeof delta.content === 'string' && delta.content) {
+        state.text += delta.content;
+      }
+      if (payload.type === 'content_block_delta' && payload.delta && typeof payload.delta.text === 'string' && payload.delta.text) {
+        state.text += payload.delta.text;
+      }
+      if (payload.type === 'response.output_text.delta') {
+        if (typeof payload.delta === 'string' && payload.delta) state.text += payload.delta;
+        else if (payload.delta && typeof payload.delta.text === 'string' && payload.delta.text) state.text += payload.delta.text;
+      }
+    } catch {
+      // ignore incomplete JSON in this chunk
+    }
+  }
+  return state;
+}
+
+function ensureStreamUsageOption(requestBody, apiType = 'openai') {
+  if (!requestBody || typeof requestBody !== 'object') return requestBody;
+  if (requestBody.stream !== true) return requestBody;
+  if (apiType === 'anthropic') return requestBody;
+  const existing = requestBody.stream_options;
+  if (existing && existing.include_usage === false) return requestBody;
+  requestBody.stream_options = { ...(existing || {}), include_usage: true };
+  return requestBody;
+}
+
+function logChatUiRequest({
+  res,
+  provider,
+  model,
+  success,
+  duration,
+  firstTokenMs = null,
+  tokenUsage = null,
+  errorMessage = null,
+  keyInfo = null,
+  stream = true,
+  endpoint = '/api/chat'
+}) {
+  const req = res && res.req;
+  const resolvedFirstTokenMs = finiteNonNegativeMs(firstTokenMs);
+  const providerEntry = {
+    attempt: 1,
+    providerId: provider && provider.id,
+    providerName: provider && provider.name,
+    status: success ? 'success' : 'failed',
+    duration
+  };
+  if (resolvedFirstTokenMs != null) providerEntry.firstTokenMs = resolvedFirstTokenMs;
+  if (errorMessage) providerEntry.error = errorMessage;
+
+  setImmediate(() => {
+    logApiRequest({
+      traceId: generateTraceId(),
+      clientIp: req?.ip || req?.socket?.remoteAddress || null,
+      userAgent: req?.headers?.['user-agent'] || null,
+      apiKeyName: keyInfo?.key?.name || 'Chat UI',
+      sessionId: null,
+      isPolling: false,
+      isNewConversation: false,
+      request: { model, stream, messageCount: 0 },
+      providers: [providerEntry],
+      result: {
+        status: success ? 'success' : 'failed',
+        successfulProvider: success ? (provider && provider.id) : null,
+        totalAttempts: 1,
+        totalDuration: duration,
+        tokenUsage: tokenUsage || null,
+        estimatedCost: null,
+        ...(resolvedFirstTokenMs != null ? { firstTokenMs: resolvedFirstTokenMs } : {})
+      },
+      metadata: {
+        endpoint,
+        isStreaming: !!stream,
+        source: 'ui',
+        apiKeyId: keyInfo?.key?.id || null
+      }
+    });
+  });
+}
+
+function finiteNonNegativeMs(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const ms = Number(value);
+  return Number.isFinite(ms) && ms >= 0 ? ms : null;
+}
+
+function sseChunkIncludesDone(chunk) {
+  const text = Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk || '');
+  return /(^|\n)data:\s*\[DONE\]\s*(?:\n|$)/.test(text);
+}
+
+function bindClientDisconnect(req, res, onDisconnect) {
+  let stopped = false;
+  const notify = (reason) => {
+    if (stopped) return;
+    stopped = true;
+    try {
+      onDisconnect(reason);
+    } catch (error) {
+      console.error('[Stream] disconnect handler failed:', error.message);
+    }
+  };
+  if (req) {
+    req.on('aborted', () => notify('aborted'));
+  }
+  if (res) {
+    res.on('close', () => {
+      if (!res.writableEnded) notify('close');
+    });
+  }
+  return () => { stopped = true; };
+}
+
+function createIdleWatchdog(ms, onTimeout) {
+  if (!ms || ms <= 0) {
+    return { hit() {}, clear() {} };
+  }
+  let timer = setTimeout(onTimeout, ms);
+  return {
+    hit() {
+      clearTimeout(timer);
+      timer = setTimeout(onTimeout, ms);
+    },
+    clear() {
+      clearTimeout(timer);
+    }
+  };
+}
+
+function forwardSseToClient(source, res, { ensureDone = true } = {}) {
+  let sawDone = false;
+  let finished = false;
+  source.on('data', (chunk) => {
+    if (!sawDone && sseChunkIncludesDone(chunk)) sawDone = true;
+  });
+  source.pipe(res, { end: false });
+  const finish = () => {
+    if (finished || res.writableEnded) return;
+    finished = true;
+    if (ensureDone && !sawDone) {
+      try { res.write('data: [DONE]\n\n'); } catch (_) {}
+    }
+    if (!res.writableEnded) res.end();
+  };
+  source.on('end', finish);
+  source.on('close', finish);
+  source.on('error', (error) => {
+    console.log('[SSE] upstream error:', error.message);
+    finish();
+  });
+  return { finish };
+}
+
+function ssePayloadLooksLikeFirstToken(payload) {
+  if (!payload || typeof payload !== 'object') return false;
+
+  const choice = payload.choices && payload.choices[0];
+  const delta = choice && choice.delta;
+  if (delta && typeof delta === 'object') {
+    if (typeof delta.content === 'string' && delta.content.length > 0) return true;
+    if (typeof delta.reasoning_content === 'string' && delta.reasoning_content.length > 0) return true;
+    if (Array.isArray(delta.tool_calls) && delta.tool_calls.length > 0) return true;
+  }
+
+  const type = payload.type;
+  if (type === 'content_block_start' || type === 'content_block_delta') return true;
+  if (type === 'response.output_text.delta' || type === 'response.function_call_arguments.delta') return true;
+
+  return false;
+}
+
+function chunkHasFirstToken(chunk) {
+  const text = Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk || '');
+  const lines = text.split(/\r?\n/);
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith('data:')) continue;
+    const data = trimmed.slice(5).trim();
+    if (!data || data === '[DONE]') continue;
+    try {
+      if (ssePayloadLooksLikeFirstToken(JSON.parse(data))) return true;
+    } catch {
+      // ignore incomplete JSON in this chunk
+    }
+  }
+  return false;
+}
+
+function createFirstTokenProbe(startedAt = Date.now()) {
+  let buffer = '';
+  let firstTokenMs = null;
+  let settled = false;
+  let resolveReady = null;
+  const ready = new Promise((resolve) => {
+    resolveReady = resolve;
+  });
+
+  const settle = (value) => {
+    if (settled) return;
+    settled = true;
+    firstTokenMs = finiteNonNegativeMs(value);
+    resolveReady(firstTokenMs);
+  };
+
+  const observeLine = (line) => {
+    if (settled) return;
+    const trimmed = String(line || '').trim();
+    if (!trimmed.startsWith('data:')) return;
+    const data = trimmed.slice(5).trim();
+    if (!data || data === '[DONE]') return;
+    try {
+      if (ssePayloadLooksLikeFirstToken(JSON.parse(data))) {
+        settle(Date.now() - startedAt);
+      }
+    } catch {
+      // ignore incomplete JSON
+    }
+  };
+
+  const observe = (chunk) => {
+    if (settled) return;
+    buffer += Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk || '');
+    const lines = buffer.split(/\r?\n/);
+    buffer = lines.pop() || '';
+    for (const line of lines) {
+      observeLine(line);
+      if (settled) return;
+    }
+  };
+
+  const mark = () => {
+    settle(Date.now() - startedAt);
+  };
+
+  const finish = () => {
+    if (settled) return;
+    if (buffer.trim()) observeLine(buffer);
+    settle(null);
+  };
+
+  return {
+    observe,
+    mark,
+    finish,
+    get firstTokenMs() {
+      return firstTokenMs;
+    },
+    ready
+  };
+}
+
 function recordProviderAttempt(providerAttempts, {
   attempt,
   provider,
   status,
   statusCode = null,
   duration = null,
-  error = null
+  error = null,
+  firstTokenMs = null
 }) {
   const entry = {
     attempt,
@@ -4436,6 +4714,11 @@ function recordProviderAttempt(providerAttempts, {
     statusCode,
     duration
   };
+
+  const resolvedFirstTokenMs = finiteNonNegativeMs(firstTokenMs);
+  if (resolvedFirstTokenMs != null) {
+    entry.firstTokenMs = resolvedFirstTokenMs;
+  }
 
   const formattedError = formatProviderAttemptError(error);
   if (formattedError) {
@@ -4605,6 +4888,7 @@ function convertAnthropicStreamToOpenAI(apiType) {
 
             if (data === '[DONE]') {
               console.log('[Converter] Received [DONE] signal');
+              emittedDone = true;
               this.push('data: [DONE]\n\n');
               continue;
             }
@@ -4734,6 +5018,7 @@ function convertAnthropicStreamToOpenAI(apiType) {
         if (leftover.startsWith('data: ')) {
           const data = leftover.slice(6);
           if (data === '[DONE]') {
+            emittedDone = true;
             this.push('data: [DONE]\n\n');
           } else {
             try {
@@ -4755,6 +5040,10 @@ function convertAnthropicStreamToOpenAI(apiType) {
         } else {
           this.push(leftover);
         }
+      }
+      if (!emittedDone) {
+        emittedDone = true;
+        this.push('data: [DONE]\n\n');
       }
       callback();
     }
@@ -4836,6 +5125,13 @@ function convertAnthropicEventToOpenAI(anthropicEvent, toolCallIndex, currentToo
   switch (anthropicEvent.type) {
     case 'message_start':
       baseChunk.choices[0].delta = { role: 'assistant', content: '' };
+      if (anthropicEvent.message && anthropicEvent.message.usage) {
+        baseChunk.usage = {
+          prompt_tokens: anthropicEvent.message.usage.input_tokens || 0,
+          completion_tokens: anthropicEvent.message.usage.output_tokens || 0,
+          total_tokens: (anthropicEvent.message.usage.input_tokens || 0) + (anthropicEvent.message.usage.output_tokens || 0)
+        };
+      }
       return baseChunk;
 
     case 'content_block_start':
@@ -4886,6 +5182,15 @@ function convertAnthropicEventToOpenAI(anthropicEvent, toolCallIndex, currentToo
         baseChunk.choices[0].finish_reason = anthropicEvent.delta.stop_reason === 'end_turn' ? 'stop' :
                                              anthropicEvent.delta.stop_reason === 'tool_use' ? 'tool_calls' :
                                              anthropicEvent.delta.stop_reason;
+      }
+      if (anthropicEvent.usage) {
+        baseChunk.usage = {
+          prompt_tokens: anthropicEvent.usage.input_tokens || 0,
+          completion_tokens: anthropicEvent.usage.output_tokens || 0,
+          total_tokens: (anthropicEvent.usage.input_tokens || 0) + (anthropicEvent.usage.output_tokens || 0)
+        };
+      }
+      if (anthropicEvent.delta?.stop_reason || anthropicEvent.usage) {
         return baseChunk;
       }
       break;
@@ -4968,9 +5273,22 @@ function convertAnthropicJsonToOpenAI(anthropicResponse) {
 }
 
 // Performance optimization: Simplified streaming response handler
-async function handleStreamingResponse(response, res, stream, selectedProvider, pureModelName, userSettings, pollingConfig, sessionIdentifier, apiType, requestMessages = [], skipConverter = false, keyInfo = null, apiKeyInfo = null, stickPolicy = null) {
+async function handleStreamingResponse(response, res, stream, selectedProvider, pureModelName, userSettings, pollingConfig, sessionIdentifier, apiType, requestMessages = [], skipConverter = false, keyInfo = null, apiKeyInfo = null, stickPolicy = null, firstTokenStartedAt = Date.now()) {
   const originalContentType = response.headers['content-type'];
   let tokenUsage = null;
+  const firstTokenProbe = createFirstTokenProbe(firstTokenStartedAt);
+  let settleStream = null;
+  const streamFinished = new Promise((resolve) => {
+    settleStream = resolve;
+  });
+  const markStreamFinished = () => {
+    firstTokenProbe.finish();
+    if (settleStream) {
+      const done = settleStream;
+      settleStream = null;
+      done();
+    }
+  };
 
   if (stream) {
     res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
@@ -5023,12 +5341,17 @@ async function handleStreamingResponse(response, res, stream, selectedProvider, 
     let sseEventCount = 0;
     let hasToolCalls = false;
     let streamedText = '';
+    const usageCollector = { tokenUsage: null, text: '' };
 
     // Bind as soon as upstream accepted the stream. Waiting until 'end' would let a
     // mid-stream error leave tool-calling sessions unbound and switch providers.
     recordSuccess();
 
     response.data.on('data', (chunk) => {
+      firstTokenProbe.observe(chunk);
+      collectSseUsageAndText(chunk, usageCollector);
+      tokenUsage = usageCollector.tokenUsage;
+      streamedText = usageCollector.text;
       const chunkStr = chunk.toString();
       if (!dataReceived) {
         console.log('[DEBUG] First SSE chunk received');
@@ -5037,38 +5360,28 @@ async function handleStreamingResponse(response, res, stream, selectedProvider, 
 
       const lines = chunkStr.split('\n');
       for (const line of lines) {
-        if (line.startsWith('data: ') && line !== 'data: [DONE]') {
-          sseEventCount++;
-          try {
-            const data = JSON.parse(line.slice(6));
-            const delta = data.choices?.[0]?.delta;
-            const finishReason = data.choices?.[0]?.finish_reason;
-
-            if (data.usage) {
-              tokenUsage = {
-                promptTokens: data.usage.prompt_tokens || 0,
-                completionTokens: data.usage.completion_tokens || 0,
-                totalTokens: data.usage.total_tokens || 0
-              };
+        const trimmed = line.trim();
+        if (!trimmed.startsWith('data:') || trimmed === 'data: [DONE]' || trimmed === 'data:[DONE]') continue;
+        sseEventCount++;
+        try {
+          const data = JSON.parse(trimmed.slice(trimmed.indexOf(':') + 1).trim());
+          const delta = data.choices?.[0]?.delta;
+          const finishReason = data.choices?.[0]?.finish_reason;
+          if (delta?.tool_calls) hasToolCalls = true;
+          if (sseEventCount <= 3 || delta?.tool_calls || finishReason) {
+            console.log('[SSE] event #' + sseEventCount);
+            if (delta?.content) {
+              console.log('  content: "' + delta.content.substring(0, 100) + (delta.content.length > 100 ? '...' : '') + '"');
             }
-
-            if (sseEventCount <= 3 || delta?.tool_calls || finishReason) {
-              console.log(`[SSE调试] 事件 #${sseEventCount}:`);
-              if (delta?.content) {
-                streamedText += delta.content;
-                console.log(`  content: "${delta.content.substring(0, 100)}${delta.content.length > 100 ? '...' : ''}"`);
-              }
-              if (delta?.tool_calls) {
-                hasToolCalls = true;
-                console.log(`  tool_calls: ${JSON.stringify(delta.tool_calls)}`);
-              }
-              if (finishReason) {
-                console.log(`  finish_reason: ${finishReason}`);
-              }
+            if (delta?.tool_calls) {
+              console.log('  tool_calls: ' + JSON.stringify(delta.tool_calls));
             }
-          } catch (e) {
-            // ignore parse errors on individual SSE events
+            if (finishReason) {
+              console.log('  finish_reason: ' + finishReason);
+            }
           }
+        } catch (e) {
+          // ignore parse errors on individual SSE events
         }
       }
     });
@@ -5079,13 +5392,15 @@ async function handleStreamingResponse(response, res, stream, selectedProvider, 
       if (!tokenUsage) {
         tokenUsage = estimateTokenUsageFromMessages(requestMessages, streamedText);
       }
+      markStreamFinished();
     });
 
     if (shouldConvert) {
       const converter = convertAnthropicStreamToOpenAI('anthropic');
-      response.data.pipe(converter).pipe(res);
+      response.data.pipe(converter);
+      forwardSseToClient(converter, res, { ensureDone: true });
     } else {
-      response.data.pipe(res);
+      forwardSseToClient(response.data, res, { ensureDone: true });
     }
   } else {
     let chunks = [];
@@ -5096,7 +5411,10 @@ async function handleStreamingResponse(response, res, stream, selectedProvider, 
     });
 
     response.data.on('end', async () => {
-      if (terminal || successRecorded) return;
+      if (terminal || successRecorded) {
+        markStreamFinished();
+        return;
+      }
 
       try {
         const fullData = Buffer.concat(chunks).toString('utf8');
@@ -5116,9 +5434,14 @@ async function handleStreamingResponse(response, res, stream, selectedProvider, 
           res.json(jsonData);
         }
 
+        const capturedUsage = captureTokenUsageFromPayload(jsonData);
+        if (capturedUsage) tokenUsage = mergeCapturedTokenUsage(tokenUsage, capturedUsage);
+        firstTokenProbe.mark();
         recordSuccess();
         terminal = true;
+        markStreamFinished();
       } catch (parseError) {
+        markStreamFinished();
         log.error('Error parsing response:', parseError);
         recordFailure('Invalid response format');
       }
@@ -5126,26 +5449,29 @@ async function handleStreamingResponse(response, res, stream, selectedProvider, 
   }
 
   response.data.on('error', (error) => {
+    markStreamFinished();
     console.log('[DEBUG] SSE stream error:', error.message);
     if (successRecorded || terminal) {
       log.error('Stream error after success:', error.message);
-      if (!res.writableEnded) res.end();
+      if (!res.writableEnded) {
+        try { res.write('data: [DONE]\n\n'); } catch (_) {}
+        res.end();
+      }
       return;
     }
     log.error('Stream error:', error.message);
     recordFailure(error.message);
   });
 
-  const clientReq = res.req;
-  if (clientReq) {
-    clientReq.on('close', () => {
-      if (!res.writableEnded && response.data && !response.data.destroyed) {
-        response.data.destroy();
-      }
-    });
-  }
+  bindClientDisconnect(res.req, res, () => {
+    if (response.data && !response.data.destroyed) {
+      response.data.destroy();
+    }
+  });
 
-  return { tokenUsage };
+  const firstTokenMs = await firstTokenProbe.ready;
+  await streamFinished;
+  return { tokenUsage, firstTokenMs };
 }
 
 // ==================== 图像生成模型支持 ====================
@@ -5533,6 +5859,7 @@ function parseImageResponse(data, apiType, isChatFormat = false) {
  * @param {Object|null} userSettings - 用户设置
  */
 async function generateImage(provider, prompt, params, res, modelId, keyInfo = null, images = null, userSettings = null) {
+  const startedAt = Date.now();
   log.info(`[ImageGen] Starting image generation with provider: ${provider.name}, model: ${modelId}`);
   log.verbose(`[ImageGen] Prompt: ${prompt.substring(0, 100)}...`);
   log.verbose(`[ImageGen] Params:`, params);
@@ -5684,13 +6011,11 @@ async function generateImage(provider, prompt, params, res, modelId, keyInfo = n
         if (!res.writableEnded) res.end();
       });
 
-      if (res.req) {
-        res.req.on('close', () => {
-          if (upstreamResponse.data && !upstreamResponse.data.destroyed) {
-            upstreamResponse.data.destroy();
-          }
-        });
-      }
+      bindClientDisconnect(res.req, res, () => {
+        if (upstreamResponse.data && !upstreamResponse.data.destroyed) {
+          upstreamResponse.data.destroy();
+        }
+      });
 
       // 因为我们正在手动处理流，所以在这里返回，防止后续代码执行
       return;
@@ -5709,6 +6034,8 @@ async function generateImage(provider, prompt, params, res, modelId, keyInfo = n
       provider: provider.name,
       model: modelId,
       success: true,
+      duration: Date.now() - startedAt,
+      firstTokenMs: Date.now() - startedAt,
       metadata: {
         apiKeyName: keyInfo?.key?.name || null,
         apiKeyId: keyInfo?.key?.id || null
@@ -5751,6 +6078,7 @@ async function generateImage(provider, prompt, params, res, modelId, keyInfo = n
       provider: provider.name,
       model: modelId,
       success: false,
+      duration: Date.now() - startedAt,
       errorMessage,
       errorCode: errorDetails.code,
       metadata: {
@@ -5772,19 +6100,39 @@ async function generateImage(provider, prompt, params, res, modelId, keyInfo = n
 }
 
 async function streamChat(provider, messages, params, res, modelId, images, systemPrompt, keyInfo = null) {
-  log.verbose(`[DEBUG] streamChat: provider=${provider.name}, modelId=${modelId}, messages=${messages.length}, apiType=${provider.apiType}, systemPrompt=${systemPrompt ? 'yes' : 'no'}`);
-
   const apiType = getProviderChatApiType(provider);
   const url = buildApiUrl(provider.baseUrl, 'chat/completions', apiType, provider.customEndpoints);
+  const startedAt = Date.now();
+  const resolvedModel = modelId || provider.defaultModel;
+  let logged = false;
+
+  const logResult = (success, extras = {}) => {
+    if (logged) return;
+    logged = true;
+    logChatUiRequest({
+      res,
+      provider,
+      model: resolvedModel,
+      success,
+      duration: Date.now() - startedAt,
+      firstTokenMs: extras.firstTokenMs,
+      tokenUsage: extras.tokenUsage || null,
+      errorMessage: extras.errorMessage || null,
+      keyInfo,
+      stream: true,
+      endpoint: '/api/chat'
+    });
+  };
+
   try {
-    log.verbose(`[DEBUG] streamChat: Building request body...`);
-    const requestBody = buildChatRequestBody(modelId || provider.defaultModel, messages, { ...params, stream: true }, apiType, images, systemPrompt, null, null);
+    const requestBody = ensureStreamUsageOption(
+      buildChatRequestBody(resolvedModel, messages, { ...params, stream: true }, apiType, images, systemPrompt, null, null),
+      apiType
+    );
     const headers = {
       ...buildProviderAuthHeaders(provider, keyInfo),
       'Content-Type': 'application/json'
     };
-
-    log.verbose(`[DEBUG] streamChat: Making POST request to: ${url}`);
 
     const response = await axios.post(url, requestBody, {
       headers,
@@ -5792,20 +6140,8 @@ async function streamChat(provider, messages, params, res, modelId, images, syst
       timeout: CONFIG.UPSTREAM_STREAM_TIMEOUT
     });
 
-    log.verbose(`[DEBUG] streamChat: Request successful, response status: ${response.status}`);
-
-    // Record successful API call
-    await logApiCall({
-      provider: provider.name,
-      model: modelId || provider.defaultModel,
-      success: true,
-      metadata: {
-        apiKeyName: keyInfo?.key?.name || null,
-        apiKeyId: keyInfo?.key?.id || null
-      }
-    });
-
-    // Performance optimization: Add error handling and timeout control
+    const firstTokenProbe = createFirstTokenProbe(startedAt);
+    const usageCollector = { tokenUsage: null, text: '' };
     let streamClosed = false;
     let streamSource = response.data;
     if (apiType === 'anthropic') {
@@ -5820,8 +6156,6 @@ async function streamChat(provider, messages, params, res, modelId, images, syst
     const cleanupStream = () => {
       if (streamClosed) return;
       streamClosed = true;
-
-      // 移除所有事件监听器，防止内存泄漏
       response.data.removeAllListeners('data');
       response.data.removeAllListeners('end');
       response.data.removeAllListeners('error');
@@ -5829,86 +6163,82 @@ async function streamChat(provider, messages, params, res, modelId, images, syst
         streamSource.removeAllListeners('data');
         streamSource.removeAllListeners('end');
         streamSource.removeAllListeners('error');
-        if (!streamSource.destroyed) {
-          streamSource.destroy();
-        }
+        if (!streamSource.destroyed) streamSource.destroy();
       }
-
-      // 销毁流
-      if (!response.data.destroyed) {
-        response.data.destroy();
-      }
+      if (!response.data.destroyed) response.data.destroy();
     };
 
-    const timeout = setTimeout(() => {
-      cleanupStream();
-      if (!res.writableEnded) {
+    await new Promise((resolve) => {
+      let settled = false;
+      let sawDone = false;
+      const settle = () => {
+        if (settled) return;
+        settled = true;
+        watchdog.clear();
+        resolve();
+      };
+      const finishClient = (payload) => {
+        if (res.writableEnded) return;
         try {
-          res.write(`data: ${JSON.stringify({ error: 'Stream timeout' })}\n\n`);
+          if (payload) res.write('data: ' + JSON.stringify(payload) + '\n\n');
+          if (!sawDone) res.write('data: [DONE]\n\n');
         } catch (_) {}
-      }
-      res.end();
-    }, CONFIG.STREAM_TIMEOUT);
+        if (!res.writableEnded) res.end();
+      };
 
-    streamSource.on('data', chunk => {
-      try {
-        res.write(chunk);
-      } catch (error) {
-        log.error('Error writing chunk:', error);
-        clearTimeout(timeout);
+      const watchdog = createIdleWatchdog(CONFIG.STREAM_TIMEOUT, () => {
         cleanupStream();
-        res.end();
-      }
-    });
+        finishClient({ error: 'Stream idle timeout' });
+        settle();
+      });
 
-    streamSource.on('end', () => {
-      clearTimeout(timeout);
-      cleanupStream();
-      res.end();
-    });
-
-    streamSource.on('error', (error) => {
-      log.error('Stream error:', error);
-      clearTimeout(timeout);
-      cleanupStream();
-      if (!res.writableEnded) {
+      streamSource.on('data', chunk => {
+        watchdog.hit();
+        firstTokenProbe.observe(chunk);
+        collectSseUsageAndText(chunk, usageCollector);
+        if (sseChunkIncludesDone(chunk)) sawDone = true;
         try {
-          res.write(`data: ${JSON.stringify({ error: 'Stream error: ' + error.message })}\n\n`);
-        } catch (_) {}
-        res.end();
-      }
+          res.write(chunk);
+        } catch (error) {
+          log.error('Error writing chunk:', error);
+          cleanupStream();
+          if (!res.writableEnded) res.end();
+          settle();
+        }
+      });
+
+      streamSource.on('end', () => {
+        cleanupStream();
+        finishClient();
+        settle();
+      });
+
+      streamSource.on('error', (error) => {
+        log.error('Stream error:', error);
+        cleanupStream();
+        finishClient({ error: 'Stream error: ' + error.message });
+        settle();
+      });
+
+      bindClientDisconnect(res.req, res, () => {
+        cleanupStream();
+        settle();
+      });
     });
 
-    res.on('close', () => {
-      clearTimeout(timeout);
-      cleanupStream();
+    firstTokenProbe.finish();
+    let tokenUsage = usageCollector.tokenUsage;
+    if (!tokenUsage) {
+      tokenUsage = estimateTokenUsageFromMessages(messages, usageCollector.text);
+    }
+    logResult(true, {
+      firstTokenMs: firstTokenProbe.firstTokenMs,
+      tokenUsage
     });
   } catch (error) {
-    log.error(`[DEBUG] streamChat error occurred:`, error.message);
-
-    // Use efficient error parser
     const errorDetails = parseErrorResponse(error);
     const errorMessage = formatErrorForLog(errorDetails);
-    log.verbose(`[DEBUG] Parsed error details:`, errorDetails);
-
-    // Record failed API call
-    await logApiCall({
-      provider: provider.name,
-      model: modelId || provider.defaultModel,
-      success: false,
-      errorMessage,
-      errorCode: errorDetails.code,
-      metadata: {
-        status: errorDetails.status,
-        statusText: errorDetails.statusText,
-        request: errorDetails.request,
-        responseData: errorDetails.responseData,
-        providerMessage: errorDetails.providerMessage,
-        apiType,
-        apiKeyName: keyInfo?.key?.name || null,
-        apiKeyId: keyInfo?.key?.id || null
-      }
-    });
+    logResult(false, { errorMessage });
     throw error;
   }
 }
@@ -6374,12 +6704,57 @@ app.post('/v1/messages', verifyProxyApiKey, async (req, res) => {
 
           backgroundProcessor.handleSuccess(selectedProvider, pureModelName, userSettings, pollingConfig, sessionIdentifier, keyInfo, req.apiKeyInfo, stickPolicy);
           perfTracker.checkpoint('request_complete');
+          const firstTokenProbe = createFirstTokenProbe(attemptStartedAt);
+          let tokenUsage = null;
+          let settleStream = null;
+          const streamFinished = new Promise((resolve) => { settleStream = resolve; });
+          const markStreamFinished = () => {
+            firstTokenProbe.finish();
+            if (settleStream) {
+              const done = settleStream;
+              settleStream = null;
+              done();
+            }
+          };
+
+          res.status(response.status);
+          res.setHeader('Content-Type', response.headers['content-type'] || 'text/event-stream; charset=utf-8');
+          res.setHeader('Cache-Control', 'no-cache');
+          res.setHeader('Connection', 'keep-alive');
+          bindClientDisconnect(req, res, () => {
+            if (response.data && !response.data.destroyed) response.data.destroy();
+          });
+          response.data.on('data', (chunk) => {
+            firstTokenProbe.observe(chunk);
+            const lines = String(chunk).split(/\r?\n/);
+            for (const line of lines) {
+              const trimmed = line.trim();
+              if (!trimmed.startsWith('data:')) continue;
+              const payload = trimmed.slice(5).trim();
+              if (!payload || payload === '[DONE]') continue;
+              try {
+                const capturedUsage = captureTokenUsageFromPayload(JSON.parse(payload));
+                if (capturedUsage) tokenUsage = mergeCapturedTokenUsage(tokenUsage, capturedUsage);
+              } catch {}
+            }
+          });
+          response.data.on('end', () => markStreamFinished());
+          response.data.on('error', (streamError) => {
+            markStreamFinished();
+            console.log(`[Anthropic Messages] Upstream stream error: ${streamError.message}`);
+            if (!res.writableEnded) res.end();
+          });
+          response.data.pipe(res);
+          const firstTokenMs = await firstTokenProbe.ready;
+          await streamFinished;
+          const attemptDuration = Date.now() - attemptStartedAt;
           recordProviderAttempt(providerAttempts, {
             attempt: attempt + 1,
             provider: selectedProvider,
             status: 'success',
             statusCode: response.status,
-            duration: Date.now() - attemptStartedAt
+            duration: attemptDuration,
+            firstTokenMs
           });
 
           setImmediate(() => {
@@ -6398,25 +6773,13 @@ app.post('/v1/messages', verifyProxyApiKey, async (req, res) => {
                 successfulProvider: selectedProvider.id,
                 totalAttempts: providerAttempts.length,
                 totalDuration: perfTracker.getTotalDuration(),
-                tokenUsage: null,
-                estimatedCost: null
+                tokenUsage,
+                estimatedCost: null,
+                firstTokenMs
               },
               metadata: { endpoint: 'messages', protocol: 'anthropic', failoverOccurred: attempt > 0 }
             });
           });
-
-          res.status(response.status);
-          res.setHeader('Content-Type', response.headers['content-type'] || 'text/event-stream; charset=utf-8');
-          res.setHeader('Cache-Control', 'no-cache');
-          res.setHeader('Connection', 'keep-alive');
-          req.on('close', () => {
-            if (!response.data.destroyed) response.data.destroy();
-          });
-          response.data.on('error', (streamError) => {
-            console.log(`[Anthropic Messages] Upstream stream error: ${streamError.message}`);
-            if (!res.writableEnded) res.end();
-          });
-          response.data.pipe(res);
           return;
         }
 
@@ -6434,12 +6797,14 @@ app.post('/v1/messages', verifyProxyApiKey, async (req, res) => {
 
         backgroundProcessor.handleSuccess(selectedProvider, pureModelName, userSettings, pollingConfig, sessionIdentifier, keyInfo, req.apiKeyInfo, stickPolicy);
         perfTracker.checkpoint('request_complete');
+        const attemptDuration = Date.now() - attemptStartedAt;
         recordProviderAttempt(providerAttempts, {
           attempt: attempt + 1,
           provider: selectedProvider,
           status: 'success',
           statusCode: response.status,
-          duration: Date.now() - attemptStartedAt
+          duration: attemptDuration,
+          firstTokenMs: attemptDuration
         });
 
         setImmediate(() => {
@@ -6459,7 +6824,8 @@ app.post('/v1/messages', verifyProxyApiKey, async (req, res) => {
               totalAttempts: providerAttempts.length,
               totalDuration: perfTracker.getTotalDuration(),
               tokenUsage: normalizeTokenUsage(response.data?.usage, 'anthropic'),
-              estimatedCost: null
+              estimatedCost: null,
+              firstTokenMs: attemptDuration
             },
             metadata: { endpoint: 'messages', protocol: 'anthropic', failoverOccurred: attempt > 0 }
           });
@@ -7025,7 +7391,8 @@ app.post('/v1/responses', verifyProxyApiKey, async (req, res) => {
           }
           const streamed = await streamChatCompletionAsResponses(streamSource, res, req, {
             requestMessages,
-            modelId: providerModelId
+            modelId: providerModelId,
+            startedAt: attemptStartedAt
           });
           if (stickConversation && streamed.responsePayload?.id) {
             saveConversationProvider(`resp:${streamed.responsePayload.id}`, pureModelName, currentProvider.id, userSettings, req.apiKeyInfo, {
@@ -7038,7 +7405,8 @@ app.post('/v1/responses', verifyProxyApiKey, async (req, res) => {
             provider: currentProvider,
             status: 'success',
             statusCode: response.status,
-            duration: Date.now() - attemptStartedAt
+            duration: Date.now() - attemptStartedAt,
+            firstTokenMs: streamed.firstTokenMs
           });
           setImmediate(() => {
             logApiRequest({
@@ -7057,7 +7425,8 @@ app.post('/v1/responses', verifyProxyApiKey, async (req, res) => {
                 totalAttempts: providerAttempts.length,
                 totalDuration: perfTracker.getTotalDuration(),
                 tokenUsage: streamed.jsonData?.usage || null,
-                estimatedCost: null
+                estimatedCost: null,
+                firstTokenMs: streamed.firstTokenMs
               },
               metadata: { failoverOccurred: attempt > 0, isStreaming: true }
             });
@@ -7105,12 +7474,14 @@ app.post('/v1/responses', verifyProxyApiKey, async (req, res) => {
         }
 
         perfTracker.checkpoint('request_complete');
+        const attemptDuration = Date.now() - attemptStartedAt;
         recordProviderAttempt(providerAttempts, {
           attempt: attempt + 1,
           provider: currentProvider,
           status: 'success',
           statusCode: response.status,
-          duration: Date.now() - attemptStartedAt
+          duration: attemptDuration,
+          firstTokenMs: attemptDuration
         });
         setImmediate(() => {
           logApiRequest({
@@ -7129,7 +7500,8 @@ app.post('/v1/responses', verifyProxyApiKey, async (req, res) => {
               totalAttempts: providerAttempts.length,
               totalDuration: perfTracker.getTotalDuration(),
               tokenUsage: jsonData?.usage || null,
-              estimatedCost: null
+              estimatedCost: null,
+              firstTokenMs: attemptDuration
             },
             metadata: { failoverOccurred: attempt > 0, isStreaming: stream }
           });
@@ -7777,11 +8149,11 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
         console.log(`[流式] 开始流式请求...`);
         try {
           // 透传模式：直接使用客户端请求体，只替换 model 和 stream
-          const requestBody = {
+          const requestBody = ensureStreamUsageOption({
             ...req.body,
             model: providerModelId,
             stream: true
-          };
+          }, apiType);
 
           const headers = {
             ...buildProviderAuthHeaders(selectedProvider, keyInfo, req),
@@ -7852,7 +8224,8 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
 
           // Use simplified streaming response handler
           // 透传模式：跳过格式转换器，直接透传数据
-          const streamResult = await handleStreamingResponse(response, res, stream, selectedProvider, pureModelName, userSettings, pollingConfig, sessionIdentifier, apiType, messages, true, keyInfo, req.apiKeyInfo, stickPolicy);
+          const streamResult = await handleStreamingResponse(response, res, stream, selectedProvider, pureModelName, userSettings, pollingConfig, sessionIdentifier, apiType, messages, true, keyInfo, req.apiKeyInfo, stickPolicy, attemptStartedAt);
+          const attemptDuration = Date.now() - attemptStartedAt;
 
           // Stream request successfully initiated, exit loop
           console.log(`[流式] 流式响应处理完成`);
@@ -7864,7 +8237,8 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
             provider: selectedProvider,
             status: 'success',
             statusCode: response.status,
-            duration: Date.now() - attemptStartedAt
+            duration: attemptDuration,
+            firstTokenMs: streamResult?.firstTokenMs
           });
           setImmediate(() => {
             logApiRequest({
@@ -7883,7 +8257,8 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
                 totalAttempts: providerAttempts.length,
                 totalDuration: perfTracker.getTotalDuration(),
                 tokenUsage: streamResult?.tokenUsage || null,
-                estimatedCost: null
+                estimatedCost: null,
+                firstTokenMs: streamResult?.firstTokenMs
               },
               metadata: { failoverOccurred: attempt > 0, isStreaming: true }
             });
@@ -7982,12 +8357,14 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
 
           // 记录API请求日志（非阻塞）
           perfTracker.checkpoint('request_complete');
+          const attemptDuration = Date.now() - attemptStartedAt;
           recordProviderAttempt(providerAttempts, {
             attempt: attempt + 1,
             provider: selectedProvider,
             status: 'success',
             statusCode: response.status,
-            duration: Date.now() - attemptStartedAt
+            duration: attemptDuration,
+            firstTokenMs: attemptDuration
           });
           setImmediate(() => {
             logApiRequest({
@@ -8006,7 +8383,8 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
                 totalAttempts: providerAttempts.length,
                 totalDuration: perfTracker.getTotalDuration(),
                 tokenUsage: response.data?.usage || null,
-                estimatedCost: null  // TODO: 添加成本计算
+                firstTokenMs: attemptDuration,
+                estimatedCost: null,  // TODO: 添加成本计算
               },
               metadata: { failoverOccurred: attempt > 0 }
             });
@@ -8457,8 +8835,12 @@ app.get('/api/logs', async (req, res) => {
       return res.status(400).json({ error: `无效的日志级别，可选值: ${validLevels.join(', ')}` });
     }
 
-    if (type && !validTypes.includes(type)) {
-      return res.status(400).json({ error: `无效的日志类型，可选值: ${validTypes.join(', ')}` });
+    if (type) {
+      const types = String(type).split(',').map(item => item.trim()).filter(Boolean);
+      const invalidType = types.find(item => !validTypes.includes(item));
+      if (invalidType) {
+        return res.status(400).json({ error: `无效的日志类型，可选值: ${validTypes.join(', ')}` });
+      }
     }
 
     // 搜索日志
@@ -8553,8 +8935,12 @@ app.get('/api/logs/stream', async (req, res) => {
       return res.status(400).json({ error: `无效的日志级别，可选值: ${validLevels.join(', ')}` });
     }
 
-    if (type && !validTypes.includes(type)) {
-      return res.status(400).json({ error: `无效的日志类型，可选值: ${validTypes.join(', ')}` });
+    if (type) {
+      const types = String(type).split(',').map(item => item.trim()).filter(Boolean);
+      const invalidType = types.find(item => !validTypes.includes(item));
+      if (invalidType) {
+        return res.status(400).json({ error: `无效的日志类型，可选值: ${validTypes.join(', ')}` });
+      }
     }
 
     res.setHeader('Content-Type', 'text/event-stream');
@@ -8565,7 +8951,10 @@ app.get('/api/logs/stream', async (req, res) => {
     const removeListener = addLogListener((logEntry) => {
       // 根据过滤条件决定是否发送
       if (level && logEntry.level !== level) return;
-      if (type && logEntry.type !== type) return;
+      if (type) {
+        const types = String(type).split(',').map(item => item.trim()).filter(Boolean);
+        if (types.length && !types.includes(logEntry.type)) return;
+      }
 
       res.write(`data: ${JSON.stringify(logEntry)}\n\n`);
     });
@@ -8685,10 +9074,14 @@ initDataDir().then(async () => {
   cleanupExpiredSessions();
   setInterval(cleanupExpiredSessions, 60 * 60 * 1000);
 
-  app.listen(PORT, () => {
+  const server = app.listen(PORT, () => {
     console.log(`Server running on http://localhost:${PORT}`);
     console.log(`OpenAI compatible API available at http://localhost:${PORT}/v1`);
   });
+  server.timeout = 0;
+  server.keepAliveTimeout = 65000;
+  server.headersTimeout = 66000;
+  server.requestTimeout = 0;
 }).catch((error) => {
   console.error('Failed to start server:', error);
   process.exit(1);

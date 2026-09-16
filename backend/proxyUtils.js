@@ -1,22 +1,38 @@
 function normalizeTokenUsage(usage, apiType = 'openai') {
-  if (!usage) return null;
+  if (!usage || typeof usage !== 'object') return null;
 
-  if (apiType === 'anthropic') {
-    const promptTokens = usage.input_tokens || 0;
-    const completionTokens = usage.output_tokens || 0;
-    return {
-      promptTokens,
-      completionTokens,
-      totalTokens: promptTokens + completionTokens,
-      raw: usage
-    };
+  const promptTokens = Number(
+    usage.promptTokens ?? usage.prompt_tokens ?? usage.input_tokens ?? 0
+  ) || 0;
+  const completionTokens = Number(
+    usage.completionTokens ?? usage.completion_tokens ?? usage.output_tokens ?? 0
+  ) || 0;
+  const cachedTokens = Number(
+    usage.cachedTokens ??
+    usage.cached_tokens ??
+    usage.prompt_tokens_details?.cached_tokens ??
+    usage.cache_read_input_tokens ??
+    0
+  ) || 0;
+  const cacheWriteTokens = Number(
+    usage.cacheWriteTokens ??
+    usage.cache_creation_input_tokens ??
+    0
+  ) || 0;
+  let totalTokens = Number(usage.totalTokens ?? usage.total_tokens ?? 0) || 0;
+  if (!totalTokens) totalTokens = promptTokens + completionTokens;
+  if (apiType === 'anthropic' && !totalTokens) {
+    totalTokens = promptTokens + completionTokens;
   }
-
+  if (!promptTokens && !completionTokens && !totalTokens && !cachedTokens && !cacheWriteTokens) {
+    return null;
+  }
   return {
-    promptTokens: usage.prompt_tokens || usage.promptTokens || 0,
-    completionTokens: usage.completion_tokens || usage.completionTokens || 0,
-    totalTokens: usage.total_tokens || usage.totalTokens || 0,
-    raw: usage
+    promptTokens,
+    completionTokens,
+    totalTokens,
+    cachedTokens,
+    cacheWriteTokens
   };
 }
 
