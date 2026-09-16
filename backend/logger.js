@@ -71,6 +71,16 @@ function formatTimestamp(date = new Date()) {
   return date.toISOString();
 }
 
+function isHttpLikeObject(value) {
+  if (!value || typeof value !== 'object') return false;
+  if (typeof value.pipe === 'function' && typeof value.on === 'function') return true;
+  if (typeof value.setHeader === 'function' && typeof value.end === 'function') return true;
+  const hasHeaders = !!value.headers;
+  const hasNetworkHandle = !!(value.socket || value.connection || value.client || value._httpMessage);
+  if (hasHeaders && hasNetworkHandle) return true;
+  return false;
+}
+
 // 安全序列化：避免循环引用、复杂原生对象、超深层对象导致日志写入失败
 function sanitizeForJson(value, seen = new WeakSet(), depth = 0) {
   if (value === null || value === undefined) return value;
@@ -123,11 +133,13 @@ function sanitizeForJson(value, seen = new WeakSet(), depth = 0) {
         key === 'socket' ||
         key === 'connection' ||
         key === 'agent' ||
-        key === 'req' ||
-        key === 'res' ||
-        key === 'request' ||
-        key === 'response' ||
         key === '_httpMessage'
+      ) {
+        continue;
+      }
+      if (
+        (key === 'req' || key === 'res' || key === 'request' || key === 'response') &&
+        isHttpLikeObject(value[key])
       ) {
         continue;
       }
@@ -342,24 +354,27 @@ async function logApiRequest({
   result,
   metadata = {}
 }) {
+  const providersList = Array.isArray(providers) ? providers : [];
+  const requestInfo = {
+    clientIp,
+    userAgent,
+    apiKeyName,
+    sessionId,
+    isPolling: !!isPolling,
+    isNewConversation: !!isNewConversation,
+    model: request?.model || null,
+    stream: !!request?.stream,
+    messageCount: request?.messageCount ?? request?.messages?.length ?? 0
+  };
   const logEntry = createLogEntry({
     level: result.status === 'failed' ? LogLevel.ERROR : LogLevel.INFO,
     type: LogType.API_REQUEST,
-    message: `API请求: ${request.model} - ${result.status}`,
+    message: `API请求: ${requestInfo.model || 'unknown'} - ${result.status}`,
     traceId,
     data: {
-      request: {
-        clientIp,
-        userAgent,
-        apiKeyName,
-        sessionId,
-        isPolling,
-        isNewConversation,
-        model: request.model,
-        stream: request.stream,
-        messageCount: request.messages?.length || 0
-      },
-      providers: providers.map(p => {
+      model: requestInfo.model,
+      request: requestInfo,
+      providers: providersList.map(p => {
         const providerEntry = {
           attempt: p.attempt,
           providerId: p.providerId,
@@ -369,6 +384,7 @@ async function logApiRequest({
           duration: p.duration,
           error: p.error
         };
+        if (p.providerModelId) providerEntry.providerModelId = p.providerModelId;
         if (p.firstTokenMs !== null && p.firstTokenMs !== undefined && p.firstTokenMs !== '') {
           const providerFirstTokenMs = Number(p.firstTokenMs);
           if (Number.isFinite(providerFirstTokenMs) && providerFirstTokenMs >= 0) {
@@ -389,7 +405,15 @@ async function logApiRequest({
           : {})
       }
     },
-    metadata
+    metadata: {
+      ...metadata,
+      model: metadata.model || requestInfo.model || null,
+      apiKeyName: metadata.apiKeyName || apiKeyName || null,
+      isPolling: metadata.isPolling ?? requestInfo.isPolling,
+      stream: metadata.stream ?? requestInfo.stream,
+      source: metadata.source || (metadata.endpoint === '/api/chat' ? 'ui' : 'proxy'),
+      endpoint: metadata.endpoint || (metadata.source === 'ui' ? '/api/chat' : '/v1/chat/completions')
+    }
   });
 
   // 异步写入日志，不阻塞请求处理
@@ -917,8 +941,10 @@ function compactTokenUsage(usage) {
 
 function extractRequestModel(entry) {
   const data = entry && entry.data ? entry.data : {};
+  const metadata = entry && entry.metadata ? entry.metadata : {};
   if (data.request && data.request.model) return data.request.model;
   if (data.model) return data.model;
+  if (metadata.model) return metadata.model;
   const message = String((entry && entry.message) || '');
   const matched = message.match(/^API[^:]*:\s*(.+)$/);
   if (matched && matched[1]) {
@@ -1621,5 +1647,8 @@ module.exports = {
 
   // 工具函数
   generateTraceId,
-  formatTimestamp
+  formatTimestamp,
+  sanitizeForJson,
+  extractRequestModel,
+  isHttpLikeObject
 };

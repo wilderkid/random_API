@@ -43,4 +43,29 @@ export function pickTokenUsage(usage) {
   return { prompt, completion, total, cached, cacheWrite }
 }
 
+function parseModelFromLogMessage(message) {
+  const matched = String(message || '').match(/^API[^:]*:\s*(.+)$/)
+  if (!matched || !matched[1]) return ''
+  return matched[1].trim().replace(/\s+-\s+(success|failed)\s*$/i, '')
+}
+
+export function extractLogModel(log) {
+  return log?.data?.request?.model
+    || log?.data?.model
+    || log?.metadata?.model
+    || parseModelFromLogMessage(log?.message)
+    || '-'
+}
+
+export function extractLogApiKey(log) {
+  return log?.data?.request?.apiKeyName
+    || log?.metadata?.apiKeyName
+    || '-'
+}
+
+export function extractLogPolling(log) {
+  if (log?.data?.request?.isPolling === true || log?.metadata?.isPolling === true) return true
+  return false
+}
+
 export const USAGE_COLORS = ['#39845b', '#fd9891', '#4c8dad', '#e0b25c', '#7a6ccf', '#3aa8a0', '#d9784a', '#6b8f7a']

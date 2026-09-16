@@ -89,9 +89,16 @@
                 <td>{{ row.time }}</td>
                 <td>{{ row.apiKeyName }}</td>
                 <td class="strong">{{ row.model }}</td>
-                <td><span class="provider-chip">{{ row.providerName }}</span></td>
                 <td>
-                  <span :class="['type-chip', row.stream ? 'stream' : 'json']">{{ row.stream ? '流式' : '非流式' }}</span>
+                  <span class="provider-chip">{{ row.providerName }}</span>
+                  <div v-if="row.attempts > 1" class="chain-hint">{{ row.chain }}</div>
+                </td>
+                <td>
+                  <div class="type-stack">
+                    <span :class="['type-chip', row.stream ? 'stream' : 'json']">{{ row.stream ? '流式' : '非流式' }}</span>
+                    <span v-if="row.polling" class="type-chip poll">轮询</span>
+                    <span v-else-if="row.attempts > 1" class="type-chip json">切换</span>
+                  </div>
                 </td>
                 <td>
                   <div class="token-stack">
@@ -120,6 +127,8 @@
                     <div><strong>IP</strong>{{ row.ip }}</div>
                     <div><strong>尝试</strong>{{ row.attempts }}</div>
                     <div><strong>链路</strong>{{ row.chain }}</div>
+                    <div><strong>模式</strong>{{ row.polling ? '轮询' : (row.attempts > 1 ? '故障转移' : '直连') }}</div>
+                    <div v-if="row.providerModelId"><strong>上游模型</strong>{{ row.providerModelId }}</div>
                     <div v-if="row.error"><strong>错误</strong>{{ row.error }}</div>
                   </div>
                   <pre class="detail-json">{{ formatJson(row.raw.data || {}) }}</pre>
@@ -194,7 +203,7 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import axios from 'axios'
 import SearchableSelect from '../components/SearchableSelect.vue'
-import { formatCompact, formatDateTime, formatDuration, formatNumber, pickTokenUsage } from '../utils/usageFormat.js'
+import { extractLogApiKey, extractLogModel, extractLogPolling, formatCompact, formatDateTime, formatDuration, formatNumber, pickTokenUsage } from '../utils/usageFormat.js'
 
 const API_BASE = window.location.origin
 const logLevels = [
@@ -343,10 +352,12 @@ function mapUsageRow(log) {
     id: `${log.timestamp}-${log.traceId || Math.random()}`,
     raw: log,
     time: formatDateTime(log.timestamp),
-    apiKeyName: request.apiKeyName || log.metadata?.apiKeyName || '-',
-    model: request.model || log.data?.model || '-',
+    apiKeyName: extractLogApiKey(log),
+    model: extractLogModel(log),
     providerName: successProvider?.providerName || log.data?.provider || '-',
-    stream: request.stream === true || log.metadata?.isStreaming === true,
+    stream: request.stream === true || log.metadata?.isStreaming === true || log.metadata?.stream === true,
+    polling: extractLogPolling(log),
+    providerModelId: successProvider?.providerModelId || log.metadata?.providerModelId || '',
     promptTokens: tokens.prompt,
     completionTokens: tokens.completion,
     totalTokens: tokens.total,
@@ -657,6 +668,29 @@ input[type="date"],
 .type-chip.stream {
   background: var(--pink-soft);
   color: var(--pink-strong);
+}
+
+.type-chip.poll {
+  background: #e8f4ee;
+  color: var(--accent-strong);
+}
+
+.type-stack,
+.chain-hint {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.type-stack {
+  align-items: flex-start;
+}
+
+.chain-hint {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  margin-top: 4px;
 }
 
 .type-chip.json,

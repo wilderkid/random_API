@@ -256,7 +256,7 @@ import { computed, onMounted, ref } from 'vue'
 import axios from 'axios'
 import { PhArrowClockwise, PhChartBar, PhClock, PhLightning, PhStack } from '@phosphor-icons/vue'
 import DonutChart from '../components/DonutChart.vue'
-import { USAGE_COLORS, formatCompact, formatDateTime, formatDuration, formatNumber, pickTokenUsage } from '../utils/usageFormat.js'
+import { USAGE_COLORS, extractLogApiKey, extractLogModel, formatCompact, formatDateTime, formatDuration, formatNumber, pickTokenUsage } from '../utils/usageFormat.js'
 
 const API_BASE = window.location.origin
 const timeRanges = [
@@ -453,9 +453,9 @@ function mapRecentCall(log) {
   return {
     id: `${log.timestamp}-${log.traceId || Math.random()}`,
     time: formatDateTime(log.timestamp),
-    model: request.model || log.data?.model || '-',
+    model: extractLogModel(log),
     providerName: successProvider?.providerName || log.data?.provider || '-',
-    apiKeyName: request.apiKeyName || log.metadata?.apiKeyName || '-',
+    apiKeyName: extractLogApiKey(log),
     promptTokens: tokens.prompt,
     completionTokens: tokens.completion,
     firstTokenMs: result.firstTokenMs ?? successProvider?.firstTokenMs ?? log.data?.firstTokenMs ?? null,

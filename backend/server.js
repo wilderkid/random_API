@@ -2125,13 +2125,18 @@ app.post('/api/chat', async (req, res) => {
     const errors = [];
     let successfulProvider = null;
     let sseStarted = false;
+    const providerAttempts = [];
+    const pollingStartedAt = Date.now();
+    let pollingTokenUsage = null;
+    let pollingFirstTokenMs = null;
+    let pollingKeyInfo = null;
 
     // 按照轮询顺序尝试每个提供商
     for (const [attempt, provider] of pollingProviders.entries()) {
       const attemptStartedAt = Date.now();
       const attemptPrepared = await prepareStickyProviderAttempt(provider, {
         errors,
-        providerAttempts: null,
+        providerAttempts,
         attempt,
         attemptStartedAt,
         waitForRpm: false,
@@ -2144,6 +2149,7 @@ app.post('/api/chat', async (req, res) => {
         continue;
       }
       const { keyInfo } = attemptPrepared;
+      pollingKeyInfo = keyInfo;
       if (!sseStarted) {
         beginChatSse(res);
         sseStarted = true;
@@ -2157,6 +2163,13 @@ app.post('/api/chat', async (req, res) => {
           console.log(`Model ${modelName} not found in provider ${provider.name}`);
           errors.push({
             provider: provider.name,
+            error: `模型 ${modelName} 在提供商中不存在`
+          });
+          recordProviderAttempt(providerAttempts, {
+            attempt: attempt + 1,
+            provider,
+            status: 'failed',
+            duration: Date.now() - attemptStartedAt,
             error: `模型 ${modelName} 在提供商中不存在`
           });
           await incrementModelFailCount(provider.id, modelName, userSettings);
@@ -2210,7 +2223,12 @@ app.post('/api/chat', async (req, res) => {
           await generateImage(provider, prompt, params, res, modelId, keyInfo, images, userSettings);
         } else {
           // 文本模型，使用原有的streamChat
-          await streamChat(provider, messages, params, res, modelId, images, processedSystemPrompt, keyInfo);
+          const streamed = await streamChat(provider, messages, params, res, modelId, images, processedSystemPrompt, keyInfo, {
+            skipRequestLog: true,
+            isPolling: true
+          });
+          pollingTokenUsage = streamed?.tokenUsage || null;
+          pollingFirstTokenMs = streamed?.firstTokenMs ?? null;
         }
 
         // 如果成功，重置模型失败计数并保存轮询状态
@@ -2222,6 +2240,14 @@ app.post('/api/chat', async (req, res) => {
 
         console.log(`Successfully used provider ${provider.name} for model ${modelName}`);
         successfulProvider = provider;
+        recordProviderAttempt(providerAttempts, {
+          attempt: attempt + 1,
+          provider,
+          status: 'success',
+          duration: Date.now() - attemptStartedAt,
+          firstTokenMs: pollingFirstTokenMs,
+          providerModelId: modelId
+        });
         break; // 成功，退出循环
 
       } catch (error) {
@@ -2230,6 +2256,13 @@ app.post('/api/chat', async (req, res) => {
         // 记录错误信息
         errors.push({
           provider: provider.name,
+          error: error.message || 'Unknown error'
+        });
+        recordProviderAttempt(providerAttempts, {
+          attempt: attempt + 1,
+          provider,
+          status: 'failed',
+          duration: Date.now() - attemptStartedAt,
           error: error.message || 'Unknown error'
         });
 
@@ -2266,6 +2299,23 @@ app.post('/api/chat', async (req, res) => {
         res.end();
       }
     }
+
+    logChatUiRequest({
+      res,
+      provider: successfulProvider || pollingProviders[0],
+      model: modelName,
+      success: !!successfulProvider,
+      duration: Date.now() - pollingStartedAt,
+      firstTokenMs: pollingFirstTokenMs,
+      tokenUsage: pollingTokenUsage,
+      errorMessage: successfulProvider ? null : errors.map(item => `${item.provider}: ${item.error}`).join('; '),
+      keyInfo: pollingKeyInfo,
+      stream: true,
+      endpoint: '/api/chat',
+      isPolling: true,
+      messageCount: Array.isArray(messages) ? messages.length : 0,
+      providers: providerAttempts
+    });
 
     return;
   } else {
@@ -4482,7 +4532,10 @@ function logChatUiRequest({
   errorMessage = null,
   keyInfo = null,
   stream = true,
-  endpoint = '/api/chat'
+  endpoint = '/api/chat',
+  isPolling = false,
+  messageCount = 0,
+  providers = null
 }) {
   const req = res && res.req;
   const resolvedFirstTokenMs = finiteNonNegativeMs(firstTokenMs);
@@ -4495,6 +4548,7 @@ function logChatUiRequest({
   };
   if (resolvedFirstTokenMs != null) providerEntry.firstTokenMs = resolvedFirstTokenMs;
   if (errorMessage) providerEntry.error = errorMessage;
+  const providerList = Array.isArray(providers) && providers.length > 0 ? providers : [providerEntry];
 
   setImmediate(() => {
     logApiRequest({
@@ -4503,14 +4557,14 @@ function logChatUiRequest({
       userAgent: req?.headers?.['user-agent'] || null,
       apiKeyName: keyInfo?.key?.name || 'Chat UI',
       sessionId: null,
-      isPolling: false,
+      isPolling: !!isPolling,
       isNewConversation: false,
-      request: { model, stream, messageCount: 0 },
-      providers: [providerEntry],
+      request: { model, stream, messageCount },
+      providers: providerList,
       result: {
         status: success ? 'success' : 'failed',
         successfulProvider: success ? (provider && provider.id) : null,
-        totalAttempts: 1,
+        totalAttempts: providerList.length,
         totalDuration: duration,
         tokenUsage: tokenUsage || null,
         estimatedCost: null,
@@ -4520,7 +4574,10 @@ function logChatUiRequest({
         endpoint,
         isStreaming: !!stream,
         source: 'ui',
-        apiKeyId: keyInfo?.key?.id || null
+        apiKeyId: keyInfo?.key?.id || null,
+        apiKeyName: keyInfo?.key?.name || 'Chat UI',
+        model,
+        isPolling: !!isPolling
       }
     });
   });
@@ -4704,8 +4761,10 @@ function recordProviderAttempt(providerAttempts, {
   statusCode = null,
   duration = null,
   error = null,
-  firstTokenMs = null
+  firstTokenMs = null,
+  providerModelId = null
 }) {
+  if (!Array.isArray(providerAttempts)) return null;
   const entry = {
     attempt,
     providerId: provider?.id || null,
@@ -4714,6 +4773,7 @@ function recordProviderAttempt(providerAttempts, {
     statusCode,
     duration
   };
+  if (providerModelId) entry.providerModelId = providerModelId;
 
   const resolvedFirstTokenMs = finiteNonNegativeMs(firstTokenMs);
   if (resolvedFirstTokenMs != null) {
@@ -6099,15 +6159,17 @@ async function generateImage(provider, prompt, params, res, modelId, keyInfo = n
   }
 }
 
-async function streamChat(provider, messages, params, res, modelId, images, systemPrompt, keyInfo = null) {
+async function streamChat(provider, messages, params, res, modelId, images, systemPrompt, keyInfo = null, options = {}) {
   const apiType = getProviderChatApiType(provider);
   const url = buildApiUrl(provider.baseUrl, 'chat/completions', apiType, provider.customEndpoints);
   const startedAt = Date.now();
   const resolvedModel = modelId || provider.defaultModel;
   let logged = false;
+  const skipRequestLog = options.skipRequestLog === true;
+  const isPolling = options.isPolling === true;
 
   const logResult = (success, extras = {}) => {
-    if (logged) return;
+    if (logged || skipRequestLog) return;
     logged = true;
     logChatUiRequest({
       res,
@@ -6120,7 +6182,9 @@ async function streamChat(provider, messages, params, res, modelId, images, syst
       errorMessage: extras.errorMessage || null,
       keyInfo,
       stream: true,
-      endpoint: '/api/chat'
+      endpoint: '/api/chat',
+      isPolling,
+      messageCount: Array.isArray(messages) ? messages.length : 0
     });
   };
 
@@ -6235,6 +6299,12 @@ async function streamChat(provider, messages, params, res, modelId, images, syst
       firstTokenMs: firstTokenProbe.firstTokenMs,
       tokenUsage
     });
+    return {
+      tokenUsage,
+      firstTokenMs: firstTokenProbe.firstTokenMs,
+      duration: Date.now() - startedAt,
+      modelId: resolvedModel
+    };
   } catch (error) {
     const errorDetails = parseErrorResponse(error);
     const errorMessage = formatErrorForLog(errorDetails);
@@ -8238,7 +8308,8 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
             status: 'success',
             statusCode: response.status,
             duration: attemptDuration,
-            firstTokenMs: streamResult?.firstTokenMs
+            firstTokenMs: streamResult?.firstTokenMs,
+            providerModelId
           });
           setImmediate(() => {
             logApiRequest({
@@ -8260,7 +8331,13 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
                 estimatedCost: null,
                 firstTokenMs: streamResult?.firstTokenMs
               },
-              metadata: { failoverOccurred: attempt > 0, isStreaming: true }
+              metadata: {
+                endpoint: '/v1/chat/completions',
+                source: 'proxy',
+                failoverOccurred: attempt > 0,
+                isStreaming: true,
+                providerModelId
+              }
             });
           });
 
@@ -8364,7 +8441,8 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
             status: 'success',
             statusCode: response.status,
             duration: attemptDuration,
-            firstTokenMs: attemptDuration
+            firstTokenMs: attemptDuration,
+            providerModelId
           });
           setImmediate(() => {
             logApiRequest({
@@ -8386,7 +8464,12 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
                 firstTokenMs: attemptDuration,
                 estimatedCost: null,  // TODO: 添加成本计算
               },
-              metadata: { failoverOccurred: attempt > 0 }
+              metadata: {
+                endpoint: '/v1/chat/completions',
+                source: 'proxy',
+                failoverOccurred: attempt > 0,
+                providerModelId
+              }
             });
           });
 
