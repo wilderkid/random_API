@@ -2269,7 +2269,10 @@ app.post('/api/chat', async (req, res) => {
 
     return;
   } else {
-    const [providerId, modelId] = model.split('::');
+    const providerSeparator = typeof model === 'string' ? model.indexOf('::') : -1;
+    const providerKey = providerSeparator > 0 ? model.slice(0, providerSeparator) : '';
+    const modelId = providerSeparator >= 0 ? model.slice(providerSeparator + 2) : model;
+    const providerId = getRequestedProviderId(model, settings.providers) || providerKey;
     console.log(`[NonPolling] Received model parameter: ${model}`);
     console.log(`[NonPolling] Extracted providerId: ${providerId}, modelId: ${modelId}`);
 
@@ -3255,19 +3258,43 @@ async function streamChatCompletionAsResponses(upstream, res, req, { requestMess
 
 function extractModelName(modelId) {
   if (!modelId || typeof modelId !== 'string') return '';
-  if (modelId.includes('::')) {
-    const [, actualModelId] = modelId.split('::');
-    return normalizeModelName(actualModelId);
+  const separator = modelId.indexOf('::');
+  if (separator >= 0) {
+    return normalizeModelName(modelId.slice(separator + 2));
   }
   return normalizeModelName(modelId);
 }
 
+function getProviderDisplayName(provider) {
+  const name = String(provider?.name || '').trim();
+  return name || provider?.id || 'unknown';
+}
 
+function getExposedProviderPrefix(provider, providers = []) {
+  const name = String(provider?.name || '').trim();
+  if (!name) return provider.id;
+  const collisions = (providers || []).filter(item => String(item?.name || '').trim() === name);
+  return collisions.length > 1 ? provider.id : name;
+}
 
-function getRequestedProviderId(requestedModel) {
-  if (typeof requestedModel !== 'string' || !requestedModel.includes('::')) return null;
-  const providerId = requestedModel.split('::')[0];
-  return providerId || null;
+function buildExposedModelId(provider, modelId, providers = []) {
+  return `${getExposedProviderPrefix(provider, providers)}::${modelId}`;
+}
+
+function getRequestedProviderId(requestedModel, providers) {
+  if (typeof requestedModel !== 'string') return null;
+  const separator = requestedModel.indexOf('::');
+  if (separator <= 0) return null;
+  const providerKey = requestedModel.slice(0, separator);
+  if (!providerKey) return null;
+  if (!Array.isArray(providers) || providers.length === 0) return providerKey;
+
+  const byId = providers.find(provider => provider.id === providerKey);
+  if (byId) return byId.id;
+
+  const name = providerKey.trim();
+  const matches = providers.filter(provider => String(provider?.name || '').trim() === name);
+  return matches.length === 1 ? matches[0].id : null;
 }
 
 function getPollingExcludedProviderIds(modelName, pollingConfig) {
@@ -3335,7 +3362,7 @@ function getScopedPollingProviderIds(modelName, providers, pollingConfig, apiKey
 }
 
 function nonPollingModelAvailable(requestedModel, pureModelName, providers, apiKeyInfo, userSettings = null, options = {}) {
-  const requestedProviderId = getRequestedProviderId(requestedModel);
+  const requestedProviderId = getRequestedProviderId(requestedModel, providers);
   return (providers || []).some(provider => {
     if (requestedProviderId && provider.id !== requestedProviderId) return false;
     return isProviderEligibleForModel(provider, pureModelName, userSettings, apiKeyInfo, {
@@ -3345,7 +3372,7 @@ function nonPollingModelAvailable(requestedModel, pureModelName, providers, apiK
   });
 }
 
-function isModelAllowedByApiKey(requestedModel, pureModelName, apiKeyInfo, usePolling) {
+function isModelAllowedByApiKey(requestedModel, pureModelName, apiKeyInfo, usePolling, providers = []) {
   const allowedModels = apiKeyInfo?.allowedModels || [];
   if (!Array.isArray(allowedModels) || allowedModels.length === 0) return true;
   if (allowedModels.includes(requestedModel) || allowedModels.includes(pureModelName)) return true;
@@ -3355,15 +3382,20 @@ function isModelAllowedByApiKey(requestedModel, pureModelName, apiKeyInfo, usePo
     return normalizedAllowed.includes(pureModelName);
   }
 
-  const normalizedAllowed = allowedModels
-    .filter(name => typeof name === 'string' && !name.includes('::'))
-    .map(name => normalizeModelName(name));
-  return normalizedAllowed.includes(pureModelName);
+  const requestedProviderId = getRequestedProviderId(requestedModel, providers);
+  return allowedModels.some(allowed => {
+    if (typeof allowed !== 'string') return false;
+    if (extractModelName(allowed) !== pureModelName) return false;
+    if (!allowed.includes('::')) return true;
+    const allowedProviderId = getRequestedProviderId(allowed, providers);
+    if (!requestedProviderId || !allowedProviderId) return true;
+    return requestedProviderId === allowedProviderId;
+  });
 }
 
 function getProxyModelAccessDenial(requestedModel, pureModelName, providers, pollingConfig, apiKeyInfo, userSettings = null, options = {}) {
   const usePolling = apiKeyInfo?.usePolling !== false;
-  if (!isModelAllowedByApiKey(requestedModel, pureModelName, apiKeyInfo, usePolling)) {
+  if (!isModelAllowedByApiKey(requestedModel, pureModelName, apiKeyInfo, usePolling, providers)) {
     const allowedModels = apiKeyInfo?.allowedModels || [];
     return {
       status: 403,
@@ -3985,7 +4017,7 @@ function getFailoverProviders(providers, modelName, config, userSettings, exclud
   const usePolling = apiKeyInfo?.usePolling !== false;
   const providerFilter = typeof options.providerFilter === 'function' ? options.providerFilter : null;
   const reservePolling = options.reservePolling !== false;
-  const requestedProviderId = getRequestedProviderId(options.requestedModel);
+  const requestedProviderId = getRequestedProviderId(options.requestedModel, providers);
   const excludeSet = new Set(excludeProviderIds || []);
   let candidateProviders = [];
 
@@ -6027,7 +6059,7 @@ async function getVisibleProxyModelIds(apiKeyInfo = null, options = {}) {
           providerFilter
         })) return;
         availableModelsWithProvider.push({
-          id: `${provider.id}::${model.id}`,
+          id: buildExposedModelId(provider, model.id, settings.providers),
           providerId: provider.id,
           modelId: model.id,
           normalizedName
@@ -6043,20 +6075,11 @@ async function getVisibleProxyModelIds(apiKeyInfo = null, options = {}) {
   if (allowedModels.length > 0) {
     if (usePolling) {
       filteredModels = availableModelNames.filter(modelName =>
-        isModelAllowedByApiKey(modelName, extractModelName(modelName), apiKeyInfo, true)
+        isModelAllowedByApiKey(modelName, extractModelName(modelName), apiKeyInfo, true, settings.providers)
       );
     } else {
-      const allowedSet = new Set(allowedModels);
-      const normalizedAllowed = allowedModels
-        .filter(modelName => typeof modelName === 'string' && !modelName.includes('::'))
-        .map(modelName => normalizeModelName(modelName));
-
       filteredModels = availableModelsWithProvider
-        .filter(modelInfo => {
-          if (allowedSet.has(modelInfo.id)) return true;
-          if (normalizedAllowed.length > 0 && normalizedAllowed.includes(modelInfo.normalizedName)) return true;
-          return false;
-        })
+        .filter(modelInfo => isModelAllowedByApiKey(modelInfo.id, modelInfo.normalizedName, apiKeyInfo, false, settings.providers))
         .map(modelInfo => modelInfo.id);
     }
   }
@@ -6127,9 +6150,15 @@ async function handleModelDetail(req, res) {
       useAnthropicFormat ? { providerFilter: providerSupportsAnthropicProtocol } : {}
     );
     const requestedModel = req.params.modelId;
-    const matchedModel = models.find(modelName =>
-      modelName === requestedModel || normalizeModelName(modelName) === normalizeModelName(requestedModel)
-    );
+    const settings = await getApiSettings();
+    const matchedModel = models.find(modelName => {
+      if (modelName === requestedModel) return true;
+      if (extractModelName(modelName) !== extractModelName(requestedModel)) return false;
+      const listedProvider = getRequestedProviderId(modelName, settings.providers);
+      const requestedProvider = getRequestedProviderId(requestedModel, settings.providers);
+      if (listedProvider && requestedProvider) return listedProvider === requestedProvider;
+      return !String(requestedModel).includes('::') && !String(modelName).includes('::');
+    });
 
     if (!matchedModel) {
       return res.status(404).json({

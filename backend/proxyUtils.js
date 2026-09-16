@@ -37,11 +37,13 @@ function buildAnthropicProxyHeaders(provider, keyInfo, req) {
 }
 
 function formatOpenAIModel(modelName) {
+  const prefixIndex = typeof modelName === 'string' ? modelName.indexOf('::') : -1;
+  const ownedBy = prefixIndex > 0 ? modelName.slice(0, prefixIndex) : 'equal-ask-proxy';
   return {
     id: modelName,
     object: 'model',
     created: Date.now(),
-    owned_by: 'equal-ask-proxy',
+    owned_by: ownedBy,
     permission: [],
     root: modelName,
     parent: null

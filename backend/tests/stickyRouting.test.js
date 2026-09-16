@@ -54,6 +54,9 @@ vm.runInContext(
     extractConst(serverSrc, 'VALID_CLIENT_TAGS'),
     extractFunction(serverSrc, 'normalizeModelName'),
     extractFunction(serverSrc, 'extractModelName'),
+    extractFunction(serverSrc, 'getProviderDisplayName'),
+    extractFunction(serverSrc, 'getExposedProviderPrefix'),
+    extractFunction(serverSrc, 'buildExposedModelId'),
     extractFunction(serverSrc, 'getRequestedProviderId'),
     extractFunction(serverSrc, 'getPollingExcludedProviderIds'),
     extractFunction(serverSrc, 'providerHasVisibleModel'),
@@ -98,6 +101,8 @@ const {
   hasToolArtifacts,
   selectProviderKey,
   getRequestedProviderId,
+  buildExposedModelId,
+  isModelAllowedByApiKey,
   isProviderEligibleForModel,
   getScopedPollingProviderIds,
   getFailoverProviders,
@@ -225,6 +230,20 @@ assert.strictEqual(getProviderChatApiType({ apiType: 'openai', customEndpoints: 
 
 assert.strictEqual(getRequestedProviderId('p2::gpt-4'), 'p2');
 assert.strictEqual(getRequestedProviderId('gpt-4'), null);
+
+const namedProviders = [
+  { id: 'abc-id', name: 'OpenAI' },
+  { id: 'dup-1', name: 'Twin' },
+  { id: 'dup-2', name: 'Twin' }
+];
+assert.strictEqual(getRequestedProviderId('OpenAI::gpt-4', namedProviders), 'abc-id');
+assert.strictEqual(getRequestedProviderId('abc-id::gpt-4', namedProviders), 'abc-id');
+assert.strictEqual(buildExposedModelId(namedProviders[0], 'gpt-4', namedProviders), 'OpenAI::gpt-4');
+assert.strictEqual(buildExposedModelId(namedProviders[1], 'gpt-4', namedProviders), 'dup-1::gpt-4');
+assert.strictEqual(
+  isModelAllowedByApiKey('OpenAI::gpt-4', 'gpt-4', { allowedModels: ['abc-id::gpt-4'] }, false, namedProviders),
+  true
+);
 
 const poolProvider = {
   id: 'pool-1',
