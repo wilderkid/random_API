@@ -77,6 +77,7 @@ vm.runInContext(
     extractFunction(serverSrc, 'getProviderChatApiType'),
     extractFunction(serverSrc, 'nonPollingModelAvailable'),
     extractFunction(serverSrc, 'isModelAllowedByApiKey'),
+    extractFunction(serverSrc, 'modelHasPollingPool'),
     extractFunction(serverSrc, 'getProxyModelAccessDenial'),
     extractFunction(serverSrc, 'convertImageUrlToAnthropic'),
     extractFunction(serverSrc, 'convertContentPartToAnthropic'),
@@ -118,6 +119,7 @@ const {
   getProviderChatApiType,
   getPollingExcludedProviderIds,
   getProxyModelAccessDenial,
+  modelHasPollingPool,
   convertOpenAIMessagesToAnthropic,
   convertOpenAIToolsToAnthropic,
   collectToolCallDelta,
@@ -339,6 +341,29 @@ const agentNamed = getFailoverProviders(
 assert.strictEqual(agentNamed.length, 1);
 assert.strictEqual(agentNamed[0].id, 'codex-b');
 
+const agentIgnoresPool = getFailoverProviders(
+  agentProviders,
+  'gpt-5',
+  { available: { 'gpt-5': ['codex-b'] }, excluded: [] },
+  routingSettings,
+  [],
+  agentKey,
+  { reservePolling: false }
+);
+assert.strictEqual(agentIgnoresPool.length, 1);
+assert.strictEqual(agentIgnoresPool[0].id, 'codex-a');
+
+const pinnedIgnoresPool = getFailoverProviders(
+  providers,
+  'gpt-4',
+  pollingConfig,
+  routingSettings,
+  [],
+  apiKeyInfo,
+  { reservePolling: false, requestedModel: 'out-1::gpt-4' }
+);
+assert.strictEqual(pinnedIgnoresPool[0].id, 'out-1');
+
 const pollingFailSettings = { disabledModels: {}, modelFailCounts: {} };
 incrementModelFailCount('pool-1', 'gpt-4', pollingFailSettings, { clientTag: 'normal', usePolling: true });
 incrementModelFailCount('pool-1', 'gpt-4', pollingFailSettings, { clientTag: 'normal', usePolling: true });
@@ -480,6 +505,26 @@ const deniedChat = getProxyModelAccessDenial('claude-3', 'claude-3', mixedProvid
 assert.strictEqual(deniedChat.code, 'all_providers_excluded');
 const allowedMessages = getProxyModelAccessDenial('claude-3', 'claude-3', mixedProviders, mixedPolling, mixedKey, routingSettings, { providerFilter: providerSupportsAnthropicProtocol });
 assert.strictEqual(allowedMessages, null);
+
+const emptyPool = { available: {}, excluded: [] };
+assert.strictEqual(modelHasPollingPool('gpt-4', emptyPool), false);
+assert.strictEqual(modelHasPollingPool('gpt-4', pollingConfig), true);
+assert.strictEqual(
+  getProxyModelAccessDenial('gpt-4', 'gpt-4', providers, emptyPool, apiKeyInfo, routingSettings),
+  null
+);
+assert.strictEqual(
+  getProxyModelAccessDenial('out-1::gpt-4', 'gpt-4', providers, emptyPool, apiKeyInfo, routingSettings),
+  null
+);
+const emptyPoolFailover = getFailoverProviders(providers, 'gpt-4', emptyPool, routingSettings, [], apiKeyInfo, {
+  reservePolling: false,
+  requestedModel: 'out-1::gpt-4'
+});
+assert.strictEqual(emptyPoolFailover[0].id, 'out-1');
+assert.ok(emptyPoolFailover.some(provider => provider.id === 'pool-1'));
+const pooledStill = getFailoverProviders(providers, 'gpt-4', pollingConfig, routingSettings, [], apiKeyInfo, { reservePolling: false });
+assert.strictEqual(pooledStill.map(provider => provider.id).join(','), 'pool-1');
 
 const anthropicJson = convertAnthropicJsonToOpenAI({
   type: 'message',

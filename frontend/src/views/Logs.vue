@@ -369,7 +369,7 @@ function mapUsageRow(log) {
     ip: request.clientIp || log.data?.request?.clientIp || '-',
     attempts: result.totalAttempts || providers.length || 1,
     chain: providers.map(item => item.providerName).filter(Boolean).join(' -> ') || (log.data?.provider || '-'),
-    error: log.data?.errorMessage || providers.find(item => item.error)?.error || ''
+    error: log.data?.errorMessage || log.metadata?.errorMessage || providers.find(item => item.error)?.error || ''
   }
 }
 

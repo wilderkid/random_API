@@ -465,6 +465,10 @@ async function buildPollingConfig() {
       console.log(`Skipping disabled provider: ${provider.name}`)
       continue
     }
+    if (normalizeClientTags(provider.clientTags).normal !== true) {
+      console.log(`Skipping non-chat provider for polling pool: ${provider.name}`)
+      continue
+    }
 
     console.log(`Processing provider: ${provider.name}`)
     console.log(`Provider models:`, provider.models)

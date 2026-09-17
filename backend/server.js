@@ -2108,7 +2108,11 @@ app.post('/api/chat', async (req, res) => {
     const pollingProviders = limitFailoverProvidersForRequest(
       getFailoverProviders(settings.providers, modelName, userSettings.pollingConfig, userSettings, [], req.apiKeyInfo, { requestedModel: model }),
       userSettings,
-      req.apiKeyInfo
+      req.apiKeyInfo,
+      modelName,
+      userSettings.pollingConfig,
+      model,
+      settings.providers
     );
 
     if (pollingProviders.length === 0) {
@@ -3450,9 +3454,28 @@ function isModelAllowedByApiKey(requestedModel, pureModelName, apiKeyInfo, usePo
   });
 }
 
+function modelHasPollingPool(modelName, pollingConfig) {
+  const available = pollingConfig?.available?.[modelName];
+  return Array.isArray(available) && available.length > 0;
+}
+
+function shouldPollModel(apiKeyInfo, modelName, pollingConfig, requestedModel = null, providers = []) {
+  if (!shouldUsePolling(apiKeyInfo)) return false;
+  if (getRequestedProviderId(requestedModel || modelName, providers)) return false;
+  return modelHasPollingPool(modelName, pollingConfig);
+}
+
+function asStableRelayKey(apiKeyInfo = null) {
+  if (!apiKeyInfo) return { usePolling: false };
+  if (apiKeyInfo.usePolling === false) return apiKeyInfo;
+  return { ...apiKeyInfo, usePolling: false };
+}
+
 function getProxyModelAccessDenial(requestedModel, pureModelName, providers, pollingConfig, apiKeyInfo, userSettings = null, options = {}) {
   const usePolling = shouldUsePolling(apiKeyInfo);
-  if (!isModelAllowedByApiKey(requestedModel, pureModelName, apiKeyInfo, usePolling, providers)) {
+  const pinnedProvider = !!getRequestedProviderId(requestedModel, providers);
+  const stableRelay = isAgentClientKey(apiKeyInfo) || pinnedProvider || !usePolling;
+  if (!isModelAllowedByApiKey(requestedModel, pureModelName, apiKeyInfo, usePolling && !stableRelay, providers)) {
     const allowedModels = apiKeyInfo?.allowedModels || [];
     return {
       status: 403,
@@ -3463,7 +3486,18 @@ function getProxyModelAccessDenial(requestedModel, pureModelName, providers, pol
         : `Model '${requestedModel}' is not allowed for this API key.`
     };
   }
-  if (usePolling) {
+  if (stableRelay) {
+    if (!nonPollingModelAvailable(requestedModel, pureModelName, providers, apiKeyInfo, userSettings, options)) {
+      return {
+        status: 400,
+        code: 'model_not_available',
+        type: 'invalid_request_error',
+        message: `Model '${pureModelName}' is not available in the allowed provider scope.`
+      };
+    }
+    return null;
+  }
+  if (modelHasPollingPool(pureModelName, pollingConfig)) {
     if (getScopedPollingProviderIds(pureModelName, providers, pollingConfig, apiKeyInfo, userSettings, options).length === 0) {
       return {
         status: 400,
@@ -3472,7 +3506,9 @@ function getProxyModelAccessDenial(requestedModel, pureModelName, providers, pol
         message: `Model '${pureModelName}' has no available providers within API key polling scope.`
       };
     }
-  } else if (!nonPollingModelAvailable(requestedModel, pureModelName, providers, apiKeyInfo, userSettings, options)) {
+    return null;
+  }
+  if (!nonPollingModelAvailable(requestedModel, pureModelName, providers, apiKeyInfo, userSettings, options)) {
     return {
       status: 400,
       code: 'model_not_available',
@@ -3625,7 +3661,7 @@ function clearConversationBinding(sessionIdentifier, modelName, userSettings, ap
 }
 
 function resolveConversationStickState(req, messages, modelName, userSettings, providers, pollingConfig) {
-  const usePolling = shouldUsePolling(req.apiKeyInfo);
+  const usePolling = shouldPollModel(req.apiKeyInfo, modelName, pollingConfig, req?.body?.model, providers);
   const waitForRpm = isAgentClientKey(req.apiKeyInfo) || isToolCallingRequest(req) || !!req?.body?.previous_response_id;
   const stickConversation = waitForRpm || !usePolling;
   const sessionIdentifier = getRequestSessionIdentifier(req, messages, modelName, waitForRpm);
@@ -3699,7 +3735,15 @@ function buildStickyFailoverProviders({
     return others.slice(0, 1);
   }
   const list = bound ? [bound, ...others] : others;
-  return limitFailoverProvidersForRequest(list, userSettings, apiKeyInfo);
+  return limitFailoverProvidersForRequest(
+    list,
+    userSettings,
+    apiKeyInfo,
+    modelName,
+    pollingConfig,
+    failoverOptions?.requestedModel,
+    providers
+  );
 }
 
 const VALID_CLIENT_TAGS = ['normal', 'codex', 'claude', 'openclaw'];
@@ -4066,12 +4110,14 @@ function getPollingMaxRounds(userSettings) {
   return Math.max(1, Math.min(20, Math.floor(rounds)));
 }
 
-function limitFailoverProvidersForRequest(failoverProviders, userSettings, apiKeyInfo = null) {
+function limitFailoverProvidersForRequest(failoverProviders, userSettings, apiKeyInfo = null, modelName = null, pollingConfig = null, requestedModel = null, providers = []) {
   if (!Array.isArray(failoverProviders) || failoverProviders.length === 0) {
     return [];
   }
 
-  const usePolling = shouldUsePolling(apiKeyInfo);
+  const usePolling = modelName
+    ? shouldPollModel(apiKeyInfo, modelName, pollingConfig, requestedModel || modelName, providers)
+    : shouldUsePolling(apiKeyInfo);
   if (!usePolling) {
     return failoverProviders;
   }
@@ -4101,8 +4147,11 @@ function getFailoverProviders(providers, modelName, config, userSettings, exclud
     console.log(`[Failover] Excluding providers: ${Array.from(excludeSet).join(', ')}`);
   }
 
-  if (usePolling) {
-    const available = config?.available?.[modelName] || [];
+  // Chat polling only: unprefixed duplicate models in the pool.
+  // Codex/Claude keys, prefixed Provider::model, and unique models are stable relay.
+  const stableRelay = isAgentClientKey(apiKeyInfo) || !!requestedProviderId || !usePolling;
+  const available = (!stableRelay && usePolling) ? (config?.available?.[modelName] || []) : [];
+  if (available.length > 0) {
     const pollingState = userSettings.pollingState || {};
     if (!pollingState[modelName]) {
       pollingState[modelName] = {
@@ -4146,7 +4195,7 @@ function getFailoverProviders(providers, modelName, config, userSettings, exclud
     }
   }
 
-  if (usePolling && reservePolling && candidateProviders.length > 0) {
+  if (!stableRelay && usePolling && reservePolling && candidateProviders.length > 0) {
     const selectedProviderId = candidateProviders[0].id;
     const available = config?.available?.[modelName] || [];
     const selectedIndex = available.indexOf(selectedProviderId);
@@ -4602,6 +4651,60 @@ function logChatUiRequest({
         apiKeyName: keyInfo?.key?.name || 'Chat UI',
         model,
         isPolling: !!isPolling
+      }
+    });
+  });
+}
+
+function logProxyEarlyFailure({
+  req,
+  traceId,
+  perfTracker,
+  apiKeyName,
+  sessionId = null,
+  isPolling = false,
+  isNewConversation = false,
+  model,
+  stream = false,
+  messages = [],
+  error,
+  metadata = {}
+}) {
+  const clientIp = req?.ip || req?.connection?.remoteAddress ||
+    (typeof req?.headers?.['x-forwarded-for'] === 'string' ? req.headers['x-forwarded-for'].split(',')[0].trim() : null) ||
+    'unknown';
+  const userAgent = req?.headers?.['user-agent'] || 'unknown';
+  const errorMessage = error?.message || String(error || 'Unknown error');
+  setImmediate(() => {
+    logApiRequest({
+      traceId,
+      clientIp,
+      userAgent,
+      apiKeyName,
+      sessionId,
+      isPolling: !!isPolling,
+      isNewConversation: !!isNewConversation,
+      request: { model, stream, messages },
+      providers: [{
+        attempt: 1,
+        providerId: null,
+        providerName: '-',
+        status: 'failed',
+        error: errorMessage
+      }],
+      result: {
+        status: 'failed',
+        successfulProvider: null,
+        totalAttempts: 0,
+        totalDuration: perfTracker ? perfTracker.getTotalDuration() : 0,
+        tokenUsage: null,
+        estimatedCost: null
+      },
+      metadata: {
+        source: 'proxy',
+        errorType: error?.code || error?.type || 'early_failure',
+        errorMessage,
+        ...metadata
       }
     });
   });
@@ -6463,17 +6566,10 @@ async function getVisibleProxyModelIds(apiKeyInfo = null, options = {}) {
 
   let availableModelNames = [];
   let availableModelsWithProvider = [];
-  const usePolling = shouldUsePolling(apiKeyInfo);
+  const agentKey = isAgentClientKey(apiKeyInfo);
+  const usePolling = !agentKey && shouldUsePolling(apiKeyInfo);
 
-  if (usePolling) {
-    const availableModels = pollingConfig.available || {};
-    for (const modelName of Object.keys(availableModels)) {
-      if (getScopedPollingProviderIds(modelName, settings.providers, pollingConfig, apiKeyInfo, userSettings, options).length >= 1) {
-        availableModelNames.push(modelName);
-      }
-    }
-    availableModelNames = Array.from(new Set(availableModelNames));
-  } else {
+  if (agentKey) {
     (settings.providers || []).forEach(provider => {
       (provider.models || []).forEach(model => {
         if (model.visible === false) return;
@@ -6491,21 +6587,54 @@ async function getVisibleProxyModelIds(apiKeyInfo = null, options = {}) {
       });
     });
     availableModelNames = availableModelsWithProvider.map(item => item.id);
+  } else {
+    if (usePolling) {
+      const availableModels = pollingConfig.available || {};
+      for (const modelName of Object.keys(availableModels)) {
+        if (getScopedPollingProviderIds(modelName, settings.providers, pollingConfig, apiKeyInfo, userSettings, options).length >= 1) {
+          availableModelNames.push(modelName);
+        }
+      }
+      availableModelNames = Array.from(new Set(availableModelNames));
+    }
+
+    (settings.providers || []).forEach(provider => {
+      const tags = normalizeProviderClientTags(provider?.clientTags);
+      if (usePolling && tags.normal !== true) return;
+      (provider.models || []).forEach(model => {
+        if (model.visible === false) return;
+        const normalizedName = normalizeModelName(model.id);
+        if (usePolling && modelHasPollingPool(normalizedName, pollingConfig)) return;
+        if (!isProviderEligibleForModel(provider, normalizedName, userSettings, apiKeyInfo, {
+          usePolling: false,
+          providerFilter
+        })) return;
+        availableModelsWithProvider.push({
+          id: buildExposedModelId(provider, model.id, settings.providers),
+          providerId: provider.id,
+          modelId: model.id,
+          normalizedName
+        });
+      });
+    });
+    availableModelNames = Array.from(new Set(
+      availableModelNames.concat(availableModelsWithProvider.map(item => item.id))
+    ));
   }
 
   const allowedModels = apiKeyInfo?.allowedModels || [];
   let filteredModels = availableModelNames;
 
   if (allowedModels.length > 0) {
-    if (usePolling) {
-      filteredModels = availableModelNames.filter(modelName =>
-        isModelAllowedByApiKey(modelName, extractModelName(modelName), apiKeyInfo, true, settings.providers)
-      );
-    } else {
-      filteredModels = availableModelsWithProvider
-        .filter(modelInfo => isModelAllowedByApiKey(modelInfo.id, modelInfo.normalizedName, apiKeyInfo, false, settings.providers))
-        .map(modelInfo => modelInfo.id);
-    }
+    filteredModels = availableModelNames.filter(modelName =>
+      isModelAllowedByApiKey(
+        modelName,
+        extractModelName(modelName),
+        apiKeyInfo,
+        usePolling && !String(modelName).includes('::'),
+        settings.providers
+      )
+    );
   }
 
   return {
@@ -6620,6 +6749,7 @@ app.get('/models/*', verifyProxyApiKey, (req, res) => {
 
 // Anthropic 兼容 - Messages（透传到 Anthropic 协议 Provider）
 app.post('/v1/messages', verifyProxyApiKey, async (req, res) => {
+  req.apiKeyInfo = asStableRelayKey(req.apiKeyInfo);
   const traceId = generateTraceId();
   const perfTracker = new PerformanceTracker(traceId);
   perfTracker.checkpoint('request_start');
@@ -6657,9 +6787,21 @@ app.post('/v1/messages', verifyProxyApiKey, async (req, res) => {
     const userSettings = await getUserSettings();
     const pollingConfig = userSettings.pollingConfig || { available: {}, excluded: {} };
     const pureModelName = extractModelName(model);
-    const usePolling = shouldUsePolling(req.apiKeyInfo);
+    const usePolling = shouldPollModel(req.apiKeyInfo, pureModelName, pollingConfig, req.body?.model, settings.providers);
     const accessDenial = getProxyModelAccessDenial(model, pureModelName, settings.providers, pollingConfig, req.apiKeyInfo, userSettings, { providerFilter: providerSupportsAnthropicProtocol });
     if (accessDenial) {
+      logProxyEarlyFailure({
+        req,
+        traceId,
+        perfTracker,
+        apiKeyName,
+        isPolling: usePolling,
+        model: pureModelName,
+        stream: req.body?.stream === true,
+        messages: req.body?.messages || [],
+        error: accessDenial,
+        metadata: { endpoint: req.path }
+      });
       return res.status(accessDenial.status).json({
         type: 'error',
         error: {
@@ -6706,11 +6848,28 @@ app.post('/v1/messages', verifyProxyApiKey, async (req, res) => {
     });
 
     if (failoverProviders.length === 0) {
+      const emptyError = {
+        message: `No available Anthropic protocol providers for model '${pureModelName}'`,
+        type: 'api_error',
+        code: 'no_providers_available'
+      };
+      logProxyEarlyFailure({
+        req,
+        traceId,
+        perfTracker,
+        apiKeyName,
+        isPolling: usePolling,
+        model: pureModelName,
+        stream: req.body?.stream === true,
+        messages: req.body?.messages || [],
+        error: emptyError,
+        metadata: { endpoint: req.path }
+      });
       return res.status(503).json({
         type: 'error',
         error: {
-          type: 'api_error',
-          message: `No available Anthropic protocol providers for model '${pureModelName}'`
+          type: emptyError.type,
+          message: emptyError.message
         }
       });
     }
@@ -6996,6 +7155,7 @@ app.post('/v1/messages', verifyProxyApiKey, async (req, res) => {
 
 // Anthropic 兼容 - Token 计数（不消耗轮询位置）
 app.post('/v1/messages/count_tokens', verifyProxyApiKey, async (req, res) => {
+  req.apiKeyInfo = asStableRelayKey(req.apiKeyInfo);
   const traceId = generateTraceId();
   const perfTracker = new PerformanceTracker(traceId);
   perfTracker.checkpoint('request_start');
@@ -7019,9 +7179,21 @@ app.post('/v1/messages/count_tokens', verifyProxyApiKey, async (req, res) => {
     const userSettings = await getUserSettings();
     const pollingConfig = userSettings.pollingConfig || { available: {}, excluded: {} };
     const pureModelName = extractModelName(model);
-    const usePolling = shouldUsePolling(req.apiKeyInfo);
+    const usePolling = shouldPollModel(req.apiKeyInfo, pureModelName, pollingConfig, req.body?.model, settings.providers);
     const accessDenial = getProxyModelAccessDenial(model, pureModelName, settings.providers, pollingConfig, req.apiKeyInfo, userSettings, { providerFilter: providerSupportsAnthropicProtocol });
     if (accessDenial) {
+      logProxyEarlyFailure({
+        req,
+        traceId,
+        perfTracker,
+        apiKeyName,
+        isPolling: usePolling,
+        model: pureModelName,
+        stream: req.body?.stream === true,
+        messages: req.body?.messages || [],
+        error: accessDenial,
+        metadata: { endpoint: req.path }
+      });
       return res.status(accessDenial.status).json({
         type: 'error',
         error: {
@@ -7041,14 +7213,31 @@ app.post('/v1/messages/count_tokens', verifyProxyApiKey, async (req, res) => {
       [],
       req.apiKeyInfo,
       { providerFilter: providerSupportsAnthropicProtocol, reservePolling: false, requestedModel: model }
-    ), userSettings, req.apiKeyInfo);
+    ), userSettings, req.apiKeyInfo, pureModelName, pollingConfig, model, settings.providers);
 
     if (failoverProviders.length === 0) {
+      const emptyError = {
+        message: `No available Anthropic protocol providers for model '${pureModelName}'`,
+        type: 'api_error',
+        code: 'no_providers_available'
+      };
+      logProxyEarlyFailure({
+        req,
+        traceId,
+        perfTracker,
+        apiKeyName,
+        isPolling: usePolling,
+        model: pureModelName,
+        stream: req.body?.stream === true,
+        messages: req.body?.messages || [],
+        error: emptyError,
+        metadata: { endpoint: req.path }
+      });
       return res.status(503).json({
         type: 'error',
         error: {
-          type: 'api_error',
-          message: `No available Anthropic protocol providers for model '${pureModelName}'`
+          type: emptyError.type,
+          message: emptyError.message
         }
       });
     }
@@ -7197,6 +7386,7 @@ app.post('/v1/messages/count_tokens', verifyProxyApiKey, async (req, res) => {
 
 // OpenAI 兼容 - Responses（支持自动故障转移）
 app.post('/v1/responses', verifyProxyApiKey, async (req, res) => {
+  req.apiKeyInfo = asStableRelayKey(req.apiKeyInfo);
   // ==================== 日志追踪初始化 ====================
   const traceId = generateTraceId();
   const perfTracker = new PerformanceTracker(traceId);
@@ -7299,10 +7489,22 @@ app.post('/v1/responses', verifyProxyApiKey, async (req, res) => {
     const pureModelName = extractModelName(modelName);
     console.log(`[模型] 标准化模型名称: ${pureModelName}`);
 
-    const usePolling = shouldUsePolling(req.apiKeyInfo);
+    const usePolling = shouldPollModel(req.apiKeyInfo, pureModelName, pollingConfig, req.body?.model, settings.providers);
 
     const accessDenial = getProxyModelAccessDenial(modelName, pureModelName, settings.providers, pollingConfig, req.apiKeyInfo, userSettings);
     if (accessDenial) {
+      logProxyEarlyFailure({
+        req,
+        traceId,
+        perfTracker,
+        apiKeyName,
+        isPolling: usePolling,
+        model: pureModelName,
+        stream,
+        messages: req.body?.messages || req.body?.input || [],
+        error: accessDenial,
+        metadata: { endpoint: req.path }
+      });
       return sendErrorResponse(res, stream, {
         message: accessDenial.message,
         type: accessDenial.type,
@@ -7351,11 +7553,26 @@ app.post('/v1/responses', verifyProxyApiKey, async (req, res) => {
 
     if (failoverProviders.length === 0) {
       console.log(`[错误] 模型 ${pureModelName} 没有可用的提供商`);
-      return sendErrorResponse(res, stream, {
+      const emptyError = {
         message: `No available providers for model '${pureModelName}'`,
         type: 'server_error',
         code: 'no_providers_available'
-      }, 503);
+      };
+      logProxyEarlyFailure({
+        req,
+        traceId,
+        perfTracker,
+        apiKeyName,
+        sessionId: sessionIdentifier,
+        isPolling: usePolling,
+        isNewConversation,
+        model: pureModelName,
+        stream,
+        messages: req.body?.messages || req.body?.input || [],
+        error: emptyError,
+        metadata: { endpoint: req.path }
+      });
+      return sendErrorResponse(res, stream, emptyError, 503);
     }
 
     console.log(`[故障转移] 找到 ${failoverProviders.length} 个可用提供商`);
@@ -7762,9 +7979,20 @@ app.post('/v1/embeddings', verifyProxyApiKey, async (req, res) => {
     const pureModelName = extractModelName(modelName);
     console.log(`[模型] 标准化模型名称: ${pureModelName}`);
 
-    const usePolling = shouldUsePolling(req.apiKeyInfo);
+    const usePolling = shouldPollModel(req.apiKeyInfo, pureModelName, pollingConfig, req.body?.model, settings.providers);
     const accessDenial = getProxyModelAccessDenial(modelName, pureModelName, settings.providers, pollingConfig, req.apiKeyInfo, userSettings, { providerFilter: providerSupportsOpenAIChatProtocol });
     if (accessDenial) {
+      logProxyEarlyFailure({
+        req,
+        traceId,
+        perfTracker,
+        apiKeyName,
+        isPolling: usePolling,
+        model: pureModelName,
+        stream: false,
+        error: accessDenial,
+        metadata: { endpoint: req.path }
+      });
       return sendErrorResponse(res, false, {
         message: accessDenial.message,
         type: accessDenial.type,
@@ -7779,16 +8007,32 @@ app.post('/v1/embeddings', verifyProxyApiKey, async (req, res) => {
     const failoverProviders = limitFailoverProvidersForRequest(
       getFailoverProviders(settings.providers, pureModelName, pollingConfig, userSettings, [], req.apiKeyInfo, { requestedModel: modelName, providerFilter: providerSupportsOpenAIChatProtocol }),
       userSettings,
-      req.apiKeyInfo
+      req.apiKeyInfo,
+      pureModelName,
+      pollingConfig,
+      modelName,
+      settings.providers
     );
 
     if (failoverProviders.length === 0) {
       console.log(`[错误] 模型 ${pureModelName} 没有可用的提供商`);
-      return sendErrorResponse(res, false, {
+      const emptyError = {
         message: `No available providers for model '${pureModelName}'`,
         type: 'server_error',
         code: 'no_providers_available'
-      }, 503);
+      };
+      logProxyEarlyFailure({
+        req,
+        traceId,
+        perfTracker,
+        apiKeyName,
+        isPolling: usePolling,
+        model: pureModelName,
+        stream: false,
+        error: emptyError,
+        metadata: { endpoint: req.path }
+      });
+      return sendErrorResponse(res, false, emptyError, 503);
     }
 
     console.log(`[故障转移] 找到 ${failoverProviders.length} 个可用提供商`);
@@ -8097,10 +8341,22 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
     console.log(`[模型] 标准化模型名称: ${pureModelName}`);
 
     // 判断是否使用轮询模式
-    const usePolling = shouldUsePolling(req.apiKeyInfo);
+    const usePolling = shouldPollModel(req.apiKeyInfo, pureModelName, pollingConfig, req.body?.model, settings.providers);
 
     const accessDenial = getProxyModelAccessDenial(modelName, pureModelName, settings.providers, pollingConfig, req.apiKeyInfo, userSettings, { providerFilter: providerSupportsOpenAIChatProtocol });
     if (accessDenial) {
+      logProxyEarlyFailure({
+        req,
+        traceId,
+        perfTracker,
+        apiKeyName,
+        isPolling: usePolling,
+        model: pureModelName,
+        stream,
+        messages: req.body?.messages || req.body?.input || [],
+        error: accessDenial,
+        metadata: { endpoint: req.path }
+      });
       return sendErrorResponse(res, stream, {
         message: accessDenial.message,
         type: accessDenial.type,
@@ -8156,11 +8412,26 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
     
     if (failoverProviders.length === 0) {
       console.log(`[错误] 模型 ${pureModelName} 没有可用的提供商`);
-      return sendErrorResponse(res, stream, {
+      const emptyError = {
         message: `No available providers for model '${pureModelName}'`,
         type: 'server_error',
         code: 'no_providers_available'
-      }, 503);
+      };
+      logProxyEarlyFailure({
+        req,
+        traceId,
+        perfTracker,
+        apiKeyName,
+        sessionId: sessionIdentifier,
+        isPolling: usePolling,
+        isNewConversation,
+        model: pureModelName,
+        stream,
+        messages: req.body?.messages || req.body?.input || [],
+        error: emptyError,
+        metadata: { endpoint: req.path }
+      });
+      return sendErrorResponse(res, stream, emptyError, 503);
     }
 
     console.log(`[故障转移] 找到 ${failoverProviders.length} 个可用提供商`);
