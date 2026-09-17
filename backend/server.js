@@ -2574,6 +2574,18 @@ function buildApiUrl(baseUrl, endpoint, apiType = 'openai', customEndpoints = nu
       log.verbose(`[DEBUG] Using custom models endpoint, final URL: ${finalUrl}`);
       return finalUrl;
     }
+    if (endpoint === 'responses') {
+      if (customEndpoints.responses) {
+        const finalUrl = `${baseUrl}${customEndpoints.responses}`;
+        log.verbose(`[DEBUG] Using custom responses endpoint, final URL: ${finalUrl}`);
+        return finalUrl;
+      }
+      if (customEndpoints.chat && String(customEndpoints.chat).toLowerCase().includes('responses')) {
+        const finalUrl = `${baseUrl}${customEndpoints.chat}`;
+        log.verbose(`[DEBUG] Using custom chat endpoint as responses, final URL: ${finalUrl}`);
+        return finalUrl;
+      }
+    }
   }
 
   // If baseUrl already contains version, directly append endpoint
@@ -2622,12 +2634,30 @@ function extractModelsFromRemoteResponse(payload) {
     .filter(Boolean);
 }
 
+function buildOpenAIProxyHeaders(provider, keyInfo, req = null) {
+  const apiKey = keyInfo?.key?.apiKey || provider.apiKey;
+  const headers = {
+    Authorization: `Bearer ${apiKey}`,
+    'Content-Type': 'application/json'
+  };
+  const incoming = req?.headers || {};
+  if (incoming['openai-beta']) {
+    headers['OpenAI-Beta'] = incoming['openai-beta'];
+  }
+  if (incoming['openai-organization']) {
+    headers['OpenAI-Organization'] = incoming['openai-organization'];
+  }
+  if (incoming['openai-project']) {
+    headers['OpenAI-Project'] = incoming['openai-project'];
+  }
+  return headers;
+}
+
 function buildProviderAuthHeaders(provider, keyInfo, req = null) {
   if (getProviderChatApiType(provider) === 'anthropic') {
     return buildAnthropicProxyHeaders(provider, keyInfo, req || { headers: {} });
   }
-  const apiKey = keyInfo?.key?.apiKey || provider.apiKey;
-  return { Authorization: `Bearer ${apiKey}` };
+  return buildOpenAIProxyHeaders(provider, keyInfo, req);
 }
 
 function estimateTokenCount(text) {
@@ -3340,6 +3370,22 @@ function getExposedProviderPrefix(provider, providers = []) {
 
 function buildExposedModelId(provider, modelId, providers = []) {
   return `${getExposedProviderPrefix(provider, providers)}::${modelId}`;
+}
+
+function chooseExposedModelIds(availableModelsWithProvider, apiKeyInfo = null) {
+  if (!Array.isArray(availableModelsWithProvider) || availableModelsWithProvider.length === 0) {
+    return [];
+  }
+  if (!isAgentClientKey(apiKeyInfo)) {
+    return availableModelsWithProvider.map(item => item.id);
+  }
+  const counts = new Map();
+  for (const item of availableModelsWithProvider) {
+    counts.set(item.modelId, (counts.get(item.modelId) || 0) + 1);
+  }
+  return Array.from(new Set(availableModelsWithProvider.map(item => (
+    counts.get(item.modelId) > 1 ? item.id : item.modelId
+  ))));
 }
 
 function getRequestedProviderId(requestedModel, providers) {
@@ -4797,6 +4843,7 @@ function ssePayloadLooksLikeFirstToken(payload) {
   const type = payload.type;
   if (type === 'content_block_start' || type === 'content_block_delta') return true;
   if (type === 'response.output_text.delta' || type === 'response.function_call_arguments.delta') return true;
+  if (type === 'response.output_item.added' || type === 'response.content_part.added') return true;
 
   return false;
 }
@@ -6546,6 +6593,19 @@ function providerSupportsAnthropicProtocol(provider) {
   );
 }
 
+function providerSupportsResponsesProtocol(provider) {
+  const chatEndpoint = String(provider?.customEndpoints?.chat || '').toLowerCase();
+  return (
+    (provider?.apiType || '') === 'responses' ||
+    chatEndpoint.includes('/responses')
+  );
+}
+
+function shouldPassthroughResponsesProtocol(apiKeyInfo, provider = null) {
+  if (getApiKeyClientTag(apiKeyInfo) === 'codex') return true;
+  return providerSupportsResponsesProtocol(provider);
+}
+
 function providerSupportsOpenAIChatProtocol(provider) {
   return !providerSupportsAnthropicProtocol(provider);
 }
@@ -6586,7 +6646,7 @@ async function getVisibleProxyModelIds(apiKeyInfo = null, options = {}) {
         });
       });
     });
-    availableModelNames = availableModelsWithProvider.map(item => item.id);
+    availableModelNames = chooseExposedModelIds(availableModelsWithProvider, apiKeyInfo);
   } else {
     if (usePolling) {
       const availableModels = pollingConfig.available || {};
@@ -7384,7 +7444,128 @@ app.post('/v1/messages/count_tokens', verifyProxyApiKey, async (req, res) => {
   }
 });
 
-// OpenAI 兼容 - Responses（支持自动故障转移）
+function extractResponsesIdFromPayload(payload) {
+  if (!payload || typeof payload !== 'object') return null;
+  if (typeof payload.id === 'string' && payload.id) return payload.id;
+  if (payload.response && typeof payload.response.id === 'string' && payload.response.id) {
+    return payload.response.id;
+  }
+  return null;
+}
+
+async function proxyNativeResponsesAttempt({
+  provider,
+  keyInfo,
+  providerModelId,
+  req,
+  res,
+  stream,
+  attemptStartedAt
+}) {
+  const url = buildApiUrl(
+    provider.baseUrl,
+    'responses',
+    provider.apiType || 'openai',
+    provider.customEndpoints
+  );
+  const requestBody = {
+    ...req.body,
+    model: providerModelId
+  };
+  const headers = buildOpenAIProxyHeaders(provider, keyInfo, req);
+  console.log(`[透传] Responses 原生转发: ${url}`);
+
+  if (stream || requestBody.stream === true) {
+    const response = await axios.post(url, requestBody, {
+      headers,
+      responseType: 'stream',
+      timeout: CONFIG.UPSTREAM_STREAM_TIMEOUT,
+      validateStatus: () => true
+    });
+    if (response.status < 200 || response.status >= 300) {
+      let errorData = '';
+      response.data.on('data', chunk => { errorData += chunk.toString(); });
+      await new Promise(resolve => response.data.on('end', resolve));
+      const err = new Error(`HTTP ${response.status}: ${errorData}`);
+      err.response = { status: response.status, statusText: response.statusText, data: errorData };
+      throw err;
+    }
+
+    const firstTokenProbe = createFirstTokenProbe(attemptStartedAt);
+    let tokenUsage = null;
+    let responseId = null;
+    let settleStream = null;
+    const streamFinished = new Promise((resolve) => { settleStream = resolve; });
+    const markStreamFinished = () => {
+      firstTokenProbe.finish();
+      if (settleStream) {
+        const done = settleStream;
+        settleStream = null;
+        done();
+      }
+    };
+
+    res.status(response.status);
+    res.setHeader('Content-Type', response.headers['content-type'] || 'text/event-stream; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    bindClientDisconnect(req, res, () => {
+      if (response.data && !response.data.destroyed) response.data.destroy();
+    });
+    response.data.on('data', (chunk) => {
+      firstTokenProbe.observe(chunk);
+      const lines = String(chunk).split(/\r?\n/);
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed.startsWith('data:')) continue;
+        const payloadText = trimmed.slice(5).trim();
+        if (!payloadText || payloadText === '[DONE]') continue;
+        try {
+          const parsed = JSON.parse(payloadText);
+          const capturedUsage = captureTokenUsageFromPayload(parsed);
+          if (capturedUsage) tokenUsage = mergeCapturedTokenUsage(tokenUsage, capturedUsage);
+          const foundId = extractResponsesIdFromPayload(parsed);
+          if (foundId) responseId = foundId;
+        } catch {}
+      }
+    });
+    response.data.on('end', () => markStreamFinished());
+    response.data.on('error', (streamError) => {
+      markStreamFinished();
+      console.log(`[Responses] Upstream stream error: ${streamError.message}`);
+      if (!res.writableEnded) res.end();
+    });
+    response.data.pipe(res);
+    const firstTokenMs = await firstTokenProbe.ready;
+    await streamFinished;
+    return {
+      streamed: true,
+      response,
+      tokenUsage,
+      firstTokenMs,
+      responseId
+    };
+  }
+
+  const response = await axios.post(url, requestBody, {
+    headers,
+    timeout: CONFIG.STREAM_TIMEOUT,
+    validateStatus: () => true
+  });
+  if (response.status < 200 || response.status >= 300) {
+    const err = new Error(`HTTP ${response.status}`);
+    err.response = response;
+    throw err;
+  }
+  return {
+    streamed: false,
+    response,
+    jsonData: response.data,
+    responseId: extractResponsesIdFromPayload(response.data)
+  };
+}
+
+// OpenAI 兼容 - Responses（Codex 原生透传；其余可回退为 chat 转换）
 app.post('/v1/responses', verifyProxyApiKey, async (req, res) => {
   req.apiKeyInfo = asStableRelayKey(req.apiKeyInfo);
   // ==================== 日志追踪初始化 ====================
@@ -7452,6 +7633,7 @@ app.post('/v1/responses', verifyProxyApiKey, async (req, res) => {
       ? messages
       : responsesInputToMessages(input);
 
+    const nativeResponsesClient = getApiKeyClientTag(req.apiKeyInfo) === 'codex';
     const previousResponseId = typeof req.body?.previous_response_id === 'string'
       ? req.body.previous_response_id.trim()
       : '';
@@ -7459,7 +7641,8 @@ app.post('/v1/responses', verifyProxyApiKey, async (req, res) => {
       requestMessages = mergeResponseContinuation(previousResponseId, requestMessages);
     }
 
-    if (!requestMessages || !Array.isArray(requestMessages) || requestMessages.length === 0) {
+    const hasRequestMessages = Array.isArray(requestMessages) && requestMessages.length > 0;
+    if (!hasRequestMessages && !nativeResponsesClient && !previousResponseId) {
       console.log(`[错误] input/messages 参数无效`);
       return sendErrorResponse(res, stream, {
         message: 'input or messages is required and must be a valid array',
@@ -7467,6 +7650,9 @@ app.post('/v1/responses', verifyProxyApiKey, async (req, res) => {
         code: 'invalid_input'
       }, 400);
     }
+    const sessionMessages = hasRequestMessages
+      ? requestMessages
+      : [{ role: 'user', content: previousResponseId || 'responses' }];
 
     const settings = await getApiSettings();
     const userSettings = await getUserSettings();
@@ -7491,7 +7677,11 @@ app.post('/v1/responses', verifyProxyApiKey, async (req, res) => {
 
     const usePolling = shouldPollModel(req.apiKeyInfo, pureModelName, pollingConfig, req.body?.model, settings.providers);
 
-    const accessDenial = getProxyModelAccessDenial(modelName, pureModelName, settings.providers, pollingConfig, req.apiKeyInfo, userSettings);
+    const responsesProviderFilter = nativeResponsesClient
+      ? (provider) => !providerSupportsAnthropicProtocol(provider)
+      : null;
+
+    const accessDenial = getProxyModelAccessDenial(modelName, pureModelName, settings.providers, pollingConfig, req.apiKeyInfo, userSettings, { providerFilter: responsesProviderFilter });
     if (accessDenial) {
       logProxyEarlyFailure({
         req,
@@ -7512,8 +7702,7 @@ app.post('/v1/responses', verifyProxyApiKey, async (req, res) => {
       }, accessDenial.status);
     }
     console.log(`[轮询] 轮询模式: ${usePolling ? '启用' : '禁用'}`);
-
-    console.log(`[透传] Responses 请求将转换为 chat/completions 请求体`);
+    console.log(`[透传] Codex/Responses 将优先原生转发 /v1/responses，其余回退 chat 转换`);
 
     ({
       waitForRpm,
@@ -7522,7 +7711,7 @@ app.post('/v1/responses', verifyProxyApiKey, async (req, res) => {
       isNewConversation,
       boundProvider,
       boundKeyId
-    } = resolveConversationStickState(req, requestMessages, pureModelName, userSettings, settings.providers, pollingConfig));
+    } = resolveConversationStickState(req, sessionMessages, pureModelName, userSettings, settings.providers, pollingConfig));
 
     if (boundProvider) {
       setImmediate(() => {
@@ -7548,7 +7737,7 @@ app.post('/v1/responses', verifyProxyApiKey, async (req, res) => {
       userSettings,
       apiKeyInfo: req.apiKeyInfo,
       waitForRpm,
-      failoverOptions: { requestedModel: modelName }
+      failoverOptions: { requestedModel: modelName, providerFilter: responsesProviderFilter }
     });
 
     if (failoverProviders.length === 0) {
@@ -7654,6 +7843,98 @@ app.post('/v1/responses', verifyProxyApiKey, async (req, res) => {
       }
 
       console.log(`[请求] 使用模型ID: ${providerModelId}`);
+
+      const passthrough = shouldPassthroughResponsesProtocol(req.apiKeyInfo, currentProvider);
+      if (passthrough) {
+        try {
+          const native = await proxyNativeResponsesAttempt({
+            provider: currentProvider,
+            keyInfo,
+            providerModelId,
+            req,
+            res,
+            stream,
+            attemptStartedAt
+          });
+          backgroundProcessor.handleSuccess(currentProvider, pureModelName, userSettings, pollingConfig, sessionIdentifier, keyInfo, req.apiKeyInfo, stickPolicy);
+          if (stickConversation && native.responseId) {
+            saveConversationProvider(`resp:${native.responseId}`, pureModelName, currentProvider.id, userSettings, req.apiKeyInfo, {
+              keyId: keyInfo?.key?.id || null
+            });
+          }
+          perfTracker.checkpoint('request_complete');
+          const attemptDuration = Date.now() - attemptStartedAt;
+          recordProviderAttempt(providerAttempts, {
+            attempt: attempt + 1,
+            provider: currentProvider,
+            status: 'success',
+            statusCode: native.response.status,
+            duration: attemptDuration,
+            firstTokenMs: native.streamed ? native.firstTokenMs : attemptDuration
+          });
+          setImmediate(() => {
+            logApiRequest({
+              traceId,
+              clientIp,
+              userAgent,
+              apiKeyName,
+              sessionId: sessionIdentifier,
+              isPolling: usePolling,
+              isNewConversation,
+              request: { model: pureModelName, stream, messages: sessionMessages },
+              providers: providerAttempts,
+              result: {
+                status: 'success',
+                successfulProvider: currentProvider.id,
+                totalAttempts: providerAttempts.length,
+                totalDuration: perfTracker.getTotalDuration(),
+                tokenUsage: native.tokenUsage || native.jsonData?.usage || null,
+                estimatedCost: null,
+                firstTokenMs: native.streamed ? native.firstTokenMs : attemptDuration
+              },
+              metadata: { endpoint: req.path, protocol: 'responses', failoverOccurred: attempt > 0, isStreaming: !!native.streamed }
+            });
+          });
+          if (native.streamed) return;
+          return res.status(200).json(native.jsonData);
+        } catch (error) {
+          console.log(`[错误] 提供商 ${currentProvider.name} Responses 透传失败: ${error.message}`);
+          if (res.headersSent) {
+            if (!res.writableEnded) res.end();
+            return;
+          }
+          const errorDetails = parseErrorResponse(error);
+          const errorMessage = formatErrorForLog(errorDetails);
+          backgroundProcessor.handleFailure(currentProvider, pureModelName, userSettings, errorMessage, keyInfo, req.apiKeyInfo);
+          recordProviderAttempt(providerAttempts, {
+            attempt: attempt + 1,
+            provider: currentProvider,
+            status: 'failed',
+            statusCode: errorDetails.status,
+            duration: Date.now() - attemptStartedAt,
+            error: errorMessage
+          });
+          errors.push({
+            provider: currentProvider.name,
+            error: errorMessage,
+            status: error.response?.status
+          });
+          continue;
+        }
+      }
+
+      if (!hasRequestMessages) {
+        const errorMessage = 'input or messages is required for chat conversion fallback';
+        recordProviderAttempt(providerAttempts, {
+          attempt: attempt + 1,
+          provider: currentProvider,
+          status: 'failed',
+          duration: Date.now() - attemptStartedAt,
+          error: errorMessage
+        });
+        errors.push({ provider: currentProvider.name, error: errorMessage });
+        continue;
+      }
 
       const apiType = getProviderChatApiType(currentProvider);
       console.log(`[请求] API 类型: ${apiType}`);

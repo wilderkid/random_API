@@ -58,6 +58,7 @@ vm.runInContext(
     extractFunction(serverSrc, 'getProviderDisplayName'),
     extractFunction(serverSrc, 'getExposedProviderPrefix'),
     extractFunction(serverSrc, 'buildExposedModelId'),
+    extractFunction(serverSrc, 'chooseExposedModelIds'),
     extractFunction(serverSrc, 'getRequestedProviderId'),
     extractFunction(serverSrc, 'getPollingExcludedProviderIds'),
     extractFunction(serverSrc, 'providerHasVisibleModel'),
@@ -73,6 +74,8 @@ vm.runInContext(
     extractFunction(serverSrc, 'getScopedPollingProviderIds'),
     extractFunction(serverSrc, 'getFailoverProviders'),
     extractFunction(serverSrc, 'providerSupportsAnthropicProtocol'),
+    extractFunction(serverSrc, 'providerSupportsResponsesProtocol'),
+    extractFunction(serverSrc, 'shouldPassthroughResponsesProtocol'),
     extractFunction(serverSrc, 'providerSupportsOpenAIChatProtocol'),
     extractFunction(serverSrc, 'getProviderChatApiType'),
     extractFunction(serverSrc, 'nonPollingModelAvailable'),
@@ -115,8 +118,11 @@ const {
   shouldUsePolling,
   incrementModelFailCount,
   providerSupportsAnthropicProtocol,
+  providerSupportsResponsesProtocol,
+  shouldPassthroughResponsesProtocol,
   providerSupportsOpenAIChatProtocol,
   getProviderChatApiType,
+  chooseExposedModelIds,
   getPollingExcludedProviderIds,
   getProxyModelAccessDenial,
   modelHasPollingPool,
@@ -236,6 +242,25 @@ assert.strictEqual(providerSupportsOpenAIChatProtocol({ apiType: 'anthropic' }),
 assert.strictEqual(getProviderChatApiType({ apiType: 'openai' }), 'openai');
 assert.strictEqual(getProviderChatApiType({ apiType: 'anthropic' }), 'anthropic');
 assert.strictEqual(getProviderChatApiType({ apiType: 'openai', customEndpoints: { chat: '/v1/messages' } }), 'anthropic');
+
+assert.strictEqual(providerSupportsResponsesProtocol({ apiType: 'responses' }), true);
+assert.strictEqual(providerSupportsResponsesProtocol({ apiType: 'openai', customEndpoints: { chat: '/v1/responses' } }), true);
+assert.strictEqual(providerSupportsResponsesProtocol({ apiType: 'openai' }), false);
+assert.strictEqual(shouldPassthroughResponsesProtocol({ clientTag: 'codex' }, { apiType: 'openai' }), true);
+assert.strictEqual(shouldPassthroughResponsesProtocol({ clientTag: 'normal' }, { apiType: 'openai' }), false);
+assert.strictEqual(shouldPassthroughResponsesProtocol({ clientTag: 'normal' }, { apiType: 'responses' }), true);
+assert.strictEqual(shouldPassthroughResponsesProtocol({ clientTag: 'claude' }, { apiType: 'openai' }), false);
+
+const exposedOnce = chooseExposedModelIds([
+  { id: 'CodexA::gpt-5-codex', modelId: 'gpt-5-codex' },
+  { id: 'CodexB::gpt-5', modelId: 'gpt-5' }
+], { clientTag: 'codex' });
+assert.strictEqual(exposedOnce.join(','), 'gpt-5-codex,gpt-5');
+const exposedDup = chooseExposedModelIds([
+  { id: 'CodexA::gpt-5-codex', modelId: 'gpt-5-codex' },
+  { id: 'CodexB::gpt-5-codex', modelId: 'gpt-5-codex' }
+], { clientTag: 'codex' });
+assert.strictEqual(exposedDup.join(','), 'CodexA::gpt-5-codex,CodexB::gpt-5-codex');
 
 assert.strictEqual(getRequestedProviderId('p2::gpt-4'), 'p2');
 assert.strictEqual(getRequestedProviderId('gpt-4'), null);
