@@ -3338,22 +3338,6 @@ function buildExposedModelId(provider, modelId, providers = []) {
   return `${getExposedProviderPrefix(provider, providers)}::${modelId}`;
 }
 
-function chooseExposedModelIds(availableModelsWithProvider, apiKeyInfo = null) {
-  if (!Array.isArray(availableModelsWithProvider) || availableModelsWithProvider.length === 0) {
-    return [];
-  }
-  if (!isAgentClientKey(apiKeyInfo)) {
-    return availableModelsWithProvider.map(item => item.id);
-  }
-  const counts = new Map();
-  for (const item of availableModelsWithProvider) {
-    counts.set(item.modelId, (counts.get(item.modelId) || 0) + 1);
-  }
-  return Array.from(new Set(availableModelsWithProvider.map(item => (
-    counts.get(item.modelId) > 1 ? item.id : item.modelId
-  ))));
-}
-
 function getRequestedProviderId(requestedModel, providers) {
   if (typeof requestedModel !== 'string') return null;
   const separator = requestedModel.indexOf('::');
@@ -6503,7 +6487,7 @@ async function getVisibleProxyModelIds(apiKeyInfo = null, options = {}) {
         });
       });
     });
-    availableModelNames = chooseExposedModelIds(availableModelsWithProvider, apiKeyInfo);
+    availableModelNames = availableModelsWithProvider.map(item => item.id);
   }
 
   const allowedModels = apiKeyInfo?.allowedModels || [];
@@ -6515,12 +6499,9 @@ async function getVisibleProxyModelIds(apiKeyInfo = null, options = {}) {
         isModelAllowedByApiKey(modelName, extractModelName(modelName), apiKeyInfo, true, settings.providers)
       );
     } else {
-      filteredModels = chooseExposedModelIds(
-        availableModelsWithProvider.filter(modelInfo =>
-          isModelAllowedByApiKey(modelInfo.id, modelInfo.normalizedName, apiKeyInfo, false, settings.providers)
-        ),
-        apiKeyInfo
-      );
+      filteredModels = availableModelsWithProvider
+        .filter(modelInfo => isModelAllowedByApiKey(modelInfo.id, modelInfo.normalizedName, apiKeyInfo, false, settings.providers))
+        .map(modelInfo => modelInfo.id);
     }
   }
 

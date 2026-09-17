@@ -58,7 +58,6 @@ vm.runInContext(
     extractFunction(serverSrc, 'getProviderDisplayName'),
     extractFunction(serverSrc, 'getExposedProviderPrefix'),
     extractFunction(serverSrc, 'buildExposedModelId'),
-    extractFunction(serverSrc, 'chooseExposedModelIds'),
     extractFunction(serverSrc, 'getRequestedProviderId'),
     extractFunction(serverSrc, 'getPollingExcludedProviderIds'),
     extractFunction(serverSrc, 'providerHasVisibleModel'),
@@ -106,7 +105,6 @@ const {
   selectProviderKey,
   getRequestedProviderId,
   buildExposedModelId,
-  chooseExposedModelIds,
   isModelAllowedByApiKey,
   isProviderEligibleForModel,
   getScopedPollingProviderIds,
@@ -339,19 +337,6 @@ const agentNamed = getFailoverProviders(
 assert.strictEqual(agentNamed.length, 1);
 assert.strictEqual(agentNamed[0].id, 'codex-b');
 
-assert.strictEqual(
-  chooseExposedModelIds([
-    { id: 'CodexA::gpt-5', modelId: 'gpt-5' },
-    { id: 'CodexB::gpt-5', modelId: 'gpt-5' }
-  ], agentKey).join(','),
-  'CodexA::gpt-5,CodexB::gpt-5'
-);
-assert.strictEqual(
-  chooseExposedModelIds([
-    { id: 'CodexA::gpt-5', modelId: 'gpt-5' }
-  ], agentKey).join(','),
-  'gpt-5'
-);
 
 const converted = responsesInputToMessages([
   { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'run ls' }] },
