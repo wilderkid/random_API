@@ -52,11 +52,13 @@ vm.runInContext(
     extractFunction(serverSrc, 'normalizeProviderKeysForRuntime'),
     extractFunction(serverSrc, 'selectProviderKey'),
     extractConst(serverSrc, 'VALID_CLIENT_TAGS'),
+    extractConst(serverSrc, 'AGENT_CLIENT_TAGS'),
     extractFunction(serverSrc, 'normalizeModelName'),
     extractFunction(serverSrc, 'extractModelName'),
     extractFunction(serverSrc, 'getProviderDisplayName'),
     extractFunction(serverSrc, 'getExposedProviderPrefix'),
     extractFunction(serverSrc, 'buildExposedModelId'),
+    extractFunction(serverSrc, 'chooseExposedModelIds'),
     extractFunction(serverSrc, 'getRequestedProviderId'),
     extractFunction(serverSrc, 'getPollingExcludedProviderIds'),
     extractFunction(serverSrc, 'providerHasVisibleModel'),
@@ -64,6 +66,8 @@ vm.runInContext(
     extractFunction(serverSrc, 'isModelDisabledForProvider'),
     extractFunction(serverSrc, 'normalizeProviderClientTags'),
     extractFunction(serverSrc, 'getApiKeyClientTag'),
+    extractFunction(serverSrc, 'isAgentClientKey'),
+    extractFunction(serverSrc, 'shouldUsePolling'),
     extractFunction(serverSrc, 'providerMatchesClientTag'),
     extractFunction(serverSrc, 'isProviderEligibleForModel'),
     extractFunction(serverSrc, 'getScopedPollingProviderIds'),
@@ -102,10 +106,13 @@ const {
   selectProviderKey,
   getRequestedProviderId,
   buildExposedModelId,
+  chooseExposedModelIds,
   isModelAllowedByApiKey,
   isProviderEligibleForModel,
   getScopedPollingProviderIds,
   getFailoverProviders,
+  isAgentClientKey,
+  shouldUsePolling,
   providerSupportsAnthropicProtocol,
   providerSupportsOpenAIChatProtocol,
   getProviderChatApiType,
@@ -296,6 +303,55 @@ const nonPolling = getFailoverProviders(
 );
 assert.strictEqual(nonPolling[0].id, 'out-1');
 
+assert.strictEqual(isAgentClientKey({ clientTag: 'codex', usePolling: true }), true);
+assert.strictEqual(shouldUsePolling({ clientTag: 'codex', usePolling: true }), false);
+assert.strictEqual(shouldUsePolling({ clientTag: 'claude' }), false);
+assert.strictEqual(shouldUsePolling({ clientTag: 'openclaw', usePolling: true }), false);
+assert.strictEqual(shouldUsePolling({ clientTag: 'normal', usePolling: true }), true);
+assert.strictEqual(shouldUsePolling({ clientTag: 'normal' }), true);
+
+const agentProviders = [
+  { id: 'codex-a', name: 'CodexA', disabled: false, groupId: 'default', clientTags: { codex: true }, models: [{ id: 'gpt-5', visible: true }] },
+  { id: 'codex-b', name: 'CodexB', disabled: false, groupId: 'default', clientTags: { codex: true }, models: [{ id: 'gpt-5', visible: true }] }
+];
+const agentKey = { usePolling: true, clientTag: 'codex' };
+const agentFailover = getFailoverProviders(
+  agentProviders,
+  'gpt-5',
+  { available: { 'gpt-5': ['codex-a', 'codex-b'] }, excluded: [] },
+  routingSettings,
+  [],
+  agentKey,
+  { reservePolling: false }
+);
+assert.strictEqual(agentFailover.length, 1);
+assert.strictEqual(agentFailover[0].id, 'codex-a');
+
+const agentNamed = getFailoverProviders(
+  agentProviders,
+  'gpt-5',
+  { available: { 'gpt-5': ['codex-a', 'codex-b'] }, excluded: [] },
+  routingSettings,
+  [],
+  agentKey,
+  { requestedModel: 'CodexB::gpt-5', reservePolling: false }
+);
+assert.strictEqual(agentNamed.length, 1);
+assert.strictEqual(agentNamed[0].id, 'codex-b');
+
+assert.strictEqual(
+  chooseExposedModelIds([
+    { id: 'CodexA::gpt-5', modelId: 'gpt-5' },
+    { id: 'CodexB::gpt-5', modelId: 'gpt-5' }
+  ], agentKey).join(','),
+  'CodexA::gpt-5,CodexB::gpt-5'
+);
+assert.strictEqual(
+  chooseExposedModelIds([
+    { id: 'CodexA::gpt-5', modelId: 'gpt-5' }
+  ], agentKey).join(','),
+  'gpt-5'
+);
 
 const converted = responsesInputToMessages([
   { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'run ls' }] },

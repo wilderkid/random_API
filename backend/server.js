@@ -3338,6 +3338,22 @@ function buildExposedModelId(provider, modelId, providers = []) {
   return `${getExposedProviderPrefix(provider, providers)}::${modelId}`;
 }
 
+function chooseExposedModelIds(availableModelsWithProvider, apiKeyInfo = null) {
+  if (!Array.isArray(availableModelsWithProvider) || availableModelsWithProvider.length === 0) {
+    return [];
+  }
+  if (!isAgentClientKey(apiKeyInfo)) {
+    return availableModelsWithProvider.map(item => item.id);
+  }
+  const counts = new Map();
+  for (const item of availableModelsWithProvider) {
+    counts.set(item.modelId, (counts.get(item.modelId) || 0) + 1);
+  }
+  return Array.from(new Set(availableModelsWithProvider.map(item => (
+    counts.get(item.modelId) > 1 ? item.id : item.modelId
+  ))));
+}
+
 function getRequestedProviderId(requestedModel, providers) {
   if (typeof requestedModel !== 'string') return null;
   const separator = requestedModel.indexOf('::');
@@ -3399,7 +3415,7 @@ function isProviderEligibleForModel(provider, modelName, userSettings, apiKeyInf
   if (typeof options.providerFilter === 'function' && !options.providerFilter(provider)) return false;
   if (isModelDisabledForProvider(modelName, provider.id, userSettings)) return false;
   if (!providerHasVisibleModel(provider, modelName)) return false;
-  const usePolling = options.usePolling !== undefined ? options.usePolling : apiKeyInfo?.usePolling !== false;
+  const usePolling = options.usePolling !== undefined ? options.usePolling : shouldUsePolling(apiKeyInfo);
   return providerAllowedByScope(provider, apiKeyInfo, usePolling);
 }
 
@@ -3451,7 +3467,7 @@ function isModelAllowedByApiKey(requestedModel, pureModelName, apiKeyInfo, usePo
 }
 
 function getProxyModelAccessDenial(requestedModel, pureModelName, providers, pollingConfig, apiKeyInfo, userSettings = null, options = {}) {
-  const usePolling = apiKeyInfo?.usePolling !== false;
+  const usePolling = shouldUsePolling(apiKeyInfo);
   if (!isModelAllowedByApiKey(requestedModel, pureModelName, apiKeyInfo, usePolling, providers)) {
     const allowedModels = apiKeyInfo?.allowedModels || [];
     return {
@@ -3570,7 +3586,7 @@ function getConversationProvider(sessionIdentifier, modelName, userSettings, pro
     userSettings.conversationProviderMap = {};
   }
 
-  const usePolling = apiKeyInfo?.usePolling !== false;
+  const usePolling = shouldUsePolling(apiKeyInfo);
   const key = getConversationMapKey(modelName, sessionIdentifier, apiKeyInfo);
   const mapping = userSettings.conversationProviderMap[key];
   if (!mapping) return null;
@@ -3600,7 +3616,7 @@ function getConversationProvider(sessionIdentifier, modelName, userSettings, pro
 }
 
 function getConversationMapKey(modelName, sessionIdentifier, apiKeyInfo = null) {
-  const usePolling = apiKeyInfo?.usePolling !== false;
+  const usePolling = shouldUsePolling(apiKeyInfo);
   const keyMode = usePolling ? 'polling' : 'single';
   return `${keyMode}:${modelName}:${sessionIdentifier}`;
 }
@@ -3625,8 +3641,9 @@ function clearConversationBinding(sessionIdentifier, modelName, userSettings, ap
 }
 
 function resolveConversationStickState(req, messages, modelName, userSettings, providers, pollingConfig) {
-  const waitForRpm = isToolCallingRequest(req) || !!req?.body?.previous_response_id;
-  const stickConversation = waitForRpm || req.apiKeyInfo?.usePolling === false;
+  const usePolling = shouldUsePolling(req.apiKeyInfo);
+  const waitForRpm = isAgentClientKey(req.apiKeyInfo) || isToolCallingRequest(req) || !!req?.body?.previous_response_id;
+  const stickConversation = waitForRpm || !usePolling;
   const sessionIdentifier = getRequestSessionIdentifier(req, messages, modelName, waitForRpm);
   const isNewConversation = waitForRpm
     ? isStickyNewConversation(messages, req)
@@ -3693,11 +3710,16 @@ function buildStickyFailoverProviders({
       reservePolling: (bound || waitForRpm) ? false : failoverOptions?.reservePolling
     }
   );
+  if (isAgentClientKey(apiKeyInfo)) {
+    if (bound) return [bound];
+    return others.slice(0, 1);
+  }
   const list = bound ? [bound, ...others] : others;
   return limitFailoverProvidersForRequest(list, userSettings, apiKeyInfo);
 }
 
 const VALID_CLIENT_TAGS = ['normal', 'codex', 'claude', 'openclaw'];
+const AGENT_CLIENT_TAGS = ['codex', 'claude', 'openclaw'];
 
 function normalizeProviderClientTags(tags) {
   const source = tags && typeof tags === 'object' ? tags : {};
@@ -3718,6 +3740,15 @@ function normalizeProviderClientTags(tags) {
 function getApiKeyClientTag(apiKeyInfo = null) {
   if (!apiKeyInfo) return null;
   return VALID_CLIENT_TAGS.includes(apiKeyInfo.clientTag) ? apiKeyInfo.clientTag : 'normal';
+}
+
+function isAgentClientKey(apiKeyInfo = null) {
+  return AGENT_CLIENT_TAGS.includes(getApiKeyClientTag(apiKeyInfo));
+}
+
+function shouldUsePolling(apiKeyInfo = null) {
+  if (isAgentClientKey(apiKeyInfo)) return false;
+  return apiKeyInfo?.usePolling !== false;
 }
 
 function providerMatchesClientTag(provider, apiKeyInfo = null) {
@@ -3801,7 +3832,7 @@ function saveConversationProvider(sessionIdentifier, modelName, providerId, user
   }
   
   const key = getConversationMapKey(modelName, sessionIdentifier, apiKeyInfo);
-  const keyMode = apiKeyInfo?.usePolling === false ? 'single' : 'polling';
+  const keyMode = shouldUsePolling(apiKeyInfo) ? 'polling' : 'single';
   const existing = userSettings.conversationProviderMap[key];
   userSettings.conversationProviderMap[key] = {
     providerId: providerId,
@@ -4053,7 +4084,7 @@ function limitFailoverProvidersForRequest(failoverProviders, userSettings, apiKe
     return [];
   }
 
-  const usePolling = apiKeyInfo?.usePolling !== false;
+  const usePolling = shouldUsePolling(apiKeyInfo);
   if (!usePolling) {
     return failoverProviders;
   }
@@ -4071,7 +4102,7 @@ function isModelDisabledForProvider(modelName, providerId, userSettings) {
 
 // 获取所有可用于故障转移的提供商列表（不使用 usedInCurrentRound 机制）
 function getFailoverProviders(providers, modelName, config, userSettings, excludeProviderIds = [], apiKeyInfo = null, options = {}) {
-  const usePolling = apiKeyInfo?.usePolling !== false;
+  const usePolling = shouldUsePolling(apiKeyInfo);
   const providerFilter = typeof options.providerFilter === 'function' ? options.providerFilter : null;
   const reservePolling = options.reservePolling !== false;
   const requestedProviderId = getRequestedProviderId(options.requestedModel, providers);
@@ -4119,6 +4150,12 @@ function getFailoverProviders(providers, modelName, config, userSettings, exclud
     }
     if (requestedProviderId) {
       candidateProviders.sort((a, b) => Number(b.id === requestedProviderId) - Number(a.id === requestedProviderId));
+    }
+    if (isAgentClientKey(apiKeyInfo) && candidateProviders.length > 1) {
+      const requested = requestedProviderId
+        ? candidateProviders.find(provider => provider.id === requestedProviderId)
+        : null;
+      candidateProviders = requested ? [requested] : candidateProviders.slice(0, 1);
     }
   }
 
@@ -4325,7 +4362,7 @@ class BackgroundTaskProcessor {
 
   // Handle success logging and state updates
   handleSuccess(selectedProvider, pureModelName, userSettings, pollingConfig, sessionIdentifier, keyInfo = null, apiKeyInfo = null, stickPolicy = null) {
-    const usePolling = apiKeyInfo?.usePolling !== false;
+    const usePolling = shouldUsePolling(apiKeyInfo);
     const stickConversation = stickPolicy?.enabled === true || !usePolling;
     const usedBoundProvider = stickPolicy?.usedBoundProvider === true;
 
@@ -6439,7 +6476,7 @@ async function getVisibleProxyModelIds(apiKeyInfo = null, options = {}) {
 
   let availableModelNames = [];
   let availableModelsWithProvider = [];
-  const usePolling = apiKeyInfo?.usePolling !== false;
+  const usePolling = shouldUsePolling(apiKeyInfo);
 
   if (usePolling) {
     const availableModels = pollingConfig.available || {};
@@ -6466,7 +6503,7 @@ async function getVisibleProxyModelIds(apiKeyInfo = null, options = {}) {
         });
       });
     });
-    availableModelNames = availableModelsWithProvider.map(item => item.id);
+    availableModelNames = chooseExposedModelIds(availableModelsWithProvider, apiKeyInfo);
   }
 
   const allowedModels = apiKeyInfo?.allowedModels || [];
@@ -6478,9 +6515,12 @@ async function getVisibleProxyModelIds(apiKeyInfo = null, options = {}) {
         isModelAllowedByApiKey(modelName, extractModelName(modelName), apiKeyInfo, true, settings.providers)
       );
     } else {
-      filteredModels = availableModelsWithProvider
-        .filter(modelInfo => isModelAllowedByApiKey(modelInfo.id, modelInfo.normalizedName, apiKeyInfo, false, settings.providers))
-        .map(modelInfo => modelInfo.id);
+      filteredModels = chooseExposedModelIds(
+        availableModelsWithProvider.filter(modelInfo =>
+          isModelAllowedByApiKey(modelInfo.id, modelInfo.normalizedName, apiKeyInfo, false, settings.providers)
+        ),
+        apiKeyInfo
+      );
     }
   }
 
@@ -6633,7 +6673,7 @@ app.post('/v1/messages', verifyProxyApiKey, async (req, res) => {
     const userSettings = await getUserSettings();
     const pollingConfig = userSettings.pollingConfig || { available: {}, excluded: {} };
     const pureModelName = extractModelName(model);
-    const usePolling = req.apiKeyInfo?.usePolling !== false;
+    const usePolling = shouldUsePolling(req.apiKeyInfo);
     const accessDenial = getProxyModelAccessDenial(model, pureModelName, settings.providers, pollingConfig, req.apiKeyInfo, userSettings, { providerFilter: providerSupportsAnthropicProtocol });
     if (accessDenial) {
       return res.status(accessDenial.status).json({
@@ -6995,7 +7035,7 @@ app.post('/v1/messages/count_tokens', verifyProxyApiKey, async (req, res) => {
     const userSettings = await getUserSettings();
     const pollingConfig = userSettings.pollingConfig || { available: {}, excluded: {} };
     const pureModelName = extractModelName(model);
-    const usePolling = req.apiKeyInfo?.usePolling !== false;
+    const usePolling = shouldUsePolling(req.apiKeyInfo);
     const accessDenial = getProxyModelAccessDenial(model, pureModelName, settings.providers, pollingConfig, req.apiKeyInfo, userSettings, { providerFilter: providerSupportsAnthropicProtocol });
     if (accessDenial) {
       return res.status(accessDenial.status).json({
@@ -7275,7 +7315,7 @@ app.post('/v1/responses', verifyProxyApiKey, async (req, res) => {
     const pureModelName = extractModelName(modelName);
     console.log(`[模型] 标准化模型名称: ${pureModelName}`);
 
-    const usePolling = req.apiKeyInfo?.usePolling !== false; // 默认为true
+    const usePolling = shouldUsePolling(req.apiKeyInfo);
 
     const accessDenial = getProxyModelAccessDenial(modelName, pureModelName, settings.providers, pollingConfig, req.apiKeyInfo, userSettings);
     if (accessDenial) {
@@ -7738,7 +7778,7 @@ app.post('/v1/embeddings', verifyProxyApiKey, async (req, res) => {
     const pureModelName = extractModelName(modelName);
     console.log(`[模型] 标准化模型名称: ${pureModelName}`);
 
-    const usePolling = req.apiKeyInfo?.usePolling !== false;
+    const usePolling = shouldUsePolling(req.apiKeyInfo);
     const accessDenial = getProxyModelAccessDenial(modelName, pureModelName, settings.providers, pollingConfig, req.apiKeyInfo, userSettings, { providerFilter: providerSupportsOpenAIChatProtocol });
     if (accessDenial) {
       return sendErrorResponse(res, false, {
@@ -8073,7 +8113,7 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
     console.log(`[模型] 标准化模型名称: ${pureModelName}`);
 
     // 判断是否使用轮询模式
-    const usePolling = req.apiKeyInfo?.usePolling !== false; // 默认为true
+    const usePolling = shouldUsePolling(req.apiKeyInfo);
 
     const accessDenial = getProxyModelAccessDenial(modelName, pureModelName, settings.providers, pollingConfig, req.apiKeyInfo, userSettings, { providerFilter: providerSupportsOpenAIChatProtocol });
     if (accessDenial) {
@@ -8557,7 +8597,7 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
         userAgent,
         apiKeyName,
         sessionId: null,
-        isPolling: req.apiKeyInfo?.usePolling !== false,
+        isPolling: shouldUsePolling(req.apiKeyInfo),
         isNewConversation: false,
         request: { model: req.body?.model || 'unknown', stream: req.body?.stream === true, messages: req.body?.messages || [] },
         providers: [],
@@ -8636,6 +8676,7 @@ app.post('/api/proxy-keys', async (req, res) => {
     
     const keyId = createEntityId();
     const apiKey = generateApiKey();
+    const resolvedClientTag = VALID_CLIENT_TAGS.includes(clientTag) ? clientTag : 'normal';
     
     const newKey = {
       name: name.trim(),
@@ -8651,8 +8692,8 @@ app.post('/api/proxy-keys', async (req, res) => {
       allowedProviders: [],
       allowedPollingGroups: [],
       allowedPollingProviders: [],
-      usePolling: true,
-      clientTag: ['normal', 'codex', 'claude', 'openclaw'].includes(clientTag) ? clientTag : 'normal',
+      usePolling: !AGENT_CLIENT_TAGS.includes(resolvedClientTag),
+      clientTag: resolvedClientTag,
       rateLimit: {
         requestsPerMinute: 60,
         requestsPerHour: 1000
@@ -8695,11 +8736,14 @@ app.put('/api/proxy-keys/:id', async (req, res) => {
     if (updates.enabled !== undefined) {
       allowedUpdates.enabled = updates.enabled !== false && updates.enabled !== 'false';
     }
-    if (updates.usePolling !== undefined) {
-      allowedUpdates.usePolling = updates.usePolling !== false && updates.usePolling !== 'false';
-    }
     if (updates.clientTag !== undefined) {
       allowedUpdates.clientTag = VALID_CLIENT_TAGS.includes(updates.clientTag) ? updates.clientTag : 'normal';
+    }
+    const nextTag = allowedUpdates.clientTag ?? userSettings.proxyApiKeys[keyId].clientTag;
+    if (AGENT_CLIENT_TAGS.includes(nextTag)) {
+      allowedUpdates.usePolling = false;
+    } else if (updates.usePolling !== undefined) {
+      allowedUpdates.usePolling = updates.usePolling !== false && updates.usePolling !== 'false';
     }
     ['allowedModels', 'allowedGroups', 'allowedProviders', 'allowedPollingGroups', 'allowedPollingProviders'].forEach((field) => {
       if (updates[field] === undefined) return;

@@ -75,15 +75,15 @@
                     {{ tag.label }}
                   </option>
                 </select>
-                <small class="hint">后续路由会按此用途筛选 provider 标签。</small>
+                <small class="hint">按用途筛选供应商。Codex / Claude / OpenClaw 走稳定中转，不轮询。</small>
               </div>
               <div class="form-group">
                 <label>轮询模式</label>
                 <label class="toggle">
-                  <input type="checkbox" v-model="selectedKey.usePolling">
+                  <input type="checkbox" v-model="selectedKey.usePolling" :disabled="isAgentKey">
                   <span>启用轮询模式（自动负载均衡）</span>
                 </label>
-                <small class="hint">启用后将使用轮询池中的模型，关闭后可选择特定分组的所有模型</small>
+                <small class="hint">{{ isAgentKey ? '代码向密钥只做稳定中转，会话会粘在同一家供应商上。' : '启用后将使用轮询池中的模型，关闭后可选择特定分组的所有模型' }}</small>
               </div>
             </div>
             
@@ -305,6 +305,7 @@
                 {{ tag.label }}
               </option>
             </select>
+            <small class="hint">Codex / Claude / OpenClaw 创建后默认关闭轮询，只做稳定中转。</small>
           </div>
         </div>
         <div class="modal-footer">
@@ -344,6 +345,14 @@ const clientTagOptions = [
 function normalizeClientTag(tag) {
   return clientTagOptions.some(option => option.value === tag) ? tag : 'normal'
 }
+
+const AGENT_CLIENT_TAGS = ['codex', 'claude', 'openclaw']
+
+function isAgentClientTag(tag) {
+  return AGENT_CLIENT_TAGS.includes(normalizeClientTag(tag))
+}
+
+const isAgentKey = computed(() => isAgentClientTag(selectedKey.value?.clientTag))
 
 const proxyOrigin = computed(() => {
   if (typeof window === 'undefined') return 'http://127.0.0.1:3000'
@@ -567,6 +576,13 @@ watch(() => selectedKey.value?.usePolling, (newValue) => {
   }
 })
 
+watch(() => selectedKey.value?.clientTag, (tag) => {
+  if (!selectedKey.value) return
+  if (isAgentClientTag(tag)) {
+    selectedKey.value.usePolling = false
+  }
+})
+
 // 监听轮询分组变更：同步筛选提供商与模型选择
 watch(() => selectedKey.value?.allowedPollingGroups, () => {
   if (!selectedKey.value || !selectedKey.value.usePolling) return
@@ -665,7 +681,7 @@ function selectKey(key) {
     allowedPollingGroups: key.allowedPollingGroups || [],
     allowedPollingProviders: key.allowedPollingProviders || [],
     clientTag: normalizeClientTag(key.clientTag),
-    usePolling: key.usePolling !== undefined ? key.usePolling : true // 默认启用轮询
+    usePolling: isAgentClientTag(key.clientTag) ? false : (key.usePolling !== undefined ? key.usePolling : true)
   }
   selectedKey.value = JSON.parse(JSON.stringify(keyWithDefaults))
   originalKey.value = JSON.parse(JSON.stringify(keyWithDefaults))
