@@ -1014,6 +1014,9 @@ app.post('/api/providers', async (req, res) => {
 
 // 供应商排序（按分组）
 app.put('/api/providers/reorder', async (req, res) => {
+  if (!req.user || req.user.role !== 'admin') {
+    return res.status(403).json({ error: '权限不足，仅管理员可操作' });
+  }
   const { groupId = 'default', orderedIds } = req.body || {};
   if (!Array.isArray(orderedIds) || orderedIds.length === 0) {
     return res.status(400).json({ error: 'orderedIds 不能为空' });
