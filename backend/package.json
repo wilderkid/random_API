@@ -16,5 +16,19 @@
     "http-proxy-agent": "^7.0.2",
     "https-proxy-agent": "^7.0.6",
     "proxy-agent": "^6.5.0"
+  },
+  "overrides": {
+    "basic-ftp": {
+      "basic-ftp": "5.3.1"
+    },
+    "get-uri": {
+      "basic-ftp": "5.3.1"
+    },
+    "pac-proxy-agent": {
+      "basic-ftp": "5.3.1"
+    },
+    "proxy-agent": {
+      "basic-ftp": "5.3.1"
+    }
   }
 }
