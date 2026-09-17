@@ -67,6 +67,7 @@ vm.runInContext(
     extractFunction(serverSrc, 'getApiKeyClientTag'),
     extractFunction(serverSrc, 'isAgentClientKey'),
     extractFunction(serverSrc, 'shouldUsePolling'),
+    extractFunction(serverSrc, 'incrementModelFailCount'),
     extractFunction(serverSrc, 'providerMatchesClientTag'),
     extractFunction(serverSrc, 'isProviderEligibleForModel'),
     extractFunction(serverSrc, 'getScopedPollingProviderIds'),
@@ -111,6 +112,7 @@ const {
   getFailoverProviders,
   isAgentClientKey,
   shouldUsePolling,
+  incrementModelFailCount,
   providerSupportsAnthropicProtocol,
   providerSupportsOpenAIChatProtocol,
   getProviderChatApiType,
@@ -336,6 +338,37 @@ const agentNamed = getFailoverProviders(
 );
 assert.strictEqual(agentNamed.length, 1);
 assert.strictEqual(agentNamed[0].id, 'codex-b');
+
+const pollingFailSettings = { disabledModels: {}, modelFailCounts: {} };
+incrementModelFailCount('pool-1', 'gpt-4', pollingFailSettings, { clientTag: 'normal', usePolling: true });
+incrementModelFailCount('pool-1', 'gpt-4', pollingFailSettings, { clientTag: 'normal', usePolling: true });
+incrementModelFailCount('pool-1', 'gpt-4', pollingFailSettings, { clientTag: 'normal', usePolling: true });
+assert.strictEqual(pollingFailSettings.disabledModels['pool-1'].includes('gpt-4'), true);
+assert.strictEqual(isProviderEligibleForModel(poolProvider, 'gpt-4', pollingFailSettings, apiKeyInfo, { usePolling: true }), false);
+
+const agentFailSettings = { disabledModels: {}, modelFailCounts: {} };
+incrementModelFailCount('codex-a', 'gpt-5', agentFailSettings, { clientTag: 'codex', usePolling: true });
+incrementModelFailCount('codex-a', 'gpt-5', agentFailSettings, { clientTag: 'codex', usePolling: true });
+incrementModelFailCount('codex-a', 'gpt-5', agentFailSettings, { clientTag: 'codex', usePolling: true });
+assert.deepStrictEqual(agentFailSettings.disabledModels, {});
+assert.strictEqual(agentFailSettings.modelFailCounts['codex-a:gpt-5'] || 0, 0);
+
+const alreadyDisabled = {
+  disabledModels: { 'codex-a': ['gpt-5'] },
+  pollingState: {}
+};
+assert.strictEqual(isProviderEligibleForModel(agentProviders[0], 'gpt-5', alreadyDisabled, agentKey, { usePolling: false }), true);
+const agentStillAvailable = getFailoverProviders(
+  agentProviders,
+  'gpt-5',
+  { available: { 'gpt-5': ['codex-a', 'codex-b'] }, excluded: [] },
+  alreadyDisabled,
+  [],
+  agentKey,
+  { reservePolling: false }
+);
+assert.strictEqual(agentStillAvailable.length, 1);
+assert.strictEqual(agentStillAvailable[0].id, 'codex-a');
 
 
 const converted = responsesInputToMessages([

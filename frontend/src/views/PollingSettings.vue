@@ -158,6 +158,7 @@
           <h3>禁用状态栏 ({{ disabledItems.length }})</h3>
         </div>
         <div class="column-content">
+          <p class="disabled-hint">仅 chat 轮询会在连续 3 次失败后自动禁用；Codex / Claude / OpenClaw 中转不会进入禁用池。</p>
           <div v-if="disabledItems.length === 0" class="empty-state">
             <p>暂无禁用的提供商</p>
           </div>
@@ -1195,5 +1196,12 @@ onMounted(loadData)
   gap: 2px;
   flex: 1;
   min-width: 0;
+}
+
+.disabled-hint {
+  margin: 0 12px 12px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted);
 }
 </style>

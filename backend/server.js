@@ -207,7 +207,7 @@ const CONFIG = {
   SESSION_EXPIRATION_TIME: 24 * 60 * 60 * 1000, // 短会话过期时间（24小时）
   EXTENDED_SESSION_EXPIRATION: 7 * 24 * 60 * 60 * 1000, // 长会话过期时间（7天）
   MIN_MESSAGE_COUNT_FOR_EXTENDED: 3, // 保留更久的最小消息数
-  MODEL_FAIL_THRESHOLD: 3, // 模型失败阈值
+  MODEL_FAIL_THRESHOLD: 3, // chat 轮询连续失败后禁用该模型-供应商；代码中转不走禁用池
   POLLING_MAX_ROUNDS: 2, // 轮询失败后最多完整遍历供应商列表的轮数
   STREAM_TIMEOUT: 1800000, // 流式空闲超时（30分钟无数据才断开），有数据会续命
   UPSTREAM_STREAM_TIMEOUT: 0, // 0 表示不限制仍在传输的上游流
@@ -2172,7 +2172,7 @@ app.post('/api/chat', async (req, res) => {
             duration: Date.now() - attemptStartedAt,
             error: `模型 ${modelName} 在提供商中不存在`
           });
-          await incrementModelFailCount(provider.id, modelName, userSettings);
+          await incrementModelFailCount(provider.id, modelName, userSettings, req.apiKeyInfo);
           await incrementKeyFailCount(keyInfo?.key?.id, userSettings);
           continue; // 尝试下一个提供商
         }
@@ -2267,7 +2267,7 @@ app.post('/api/chat', async (req, res) => {
         });
 
         // 增加模型失败计数
-        await incrementModelFailCount(provider.id, modelName, userSettings);
+        await incrementModelFailCount(provider.id, modelName, userSettings, req.apiKeyInfo);
         await incrementKeyFailCount(keyInfo?.key?.id, userSettings);
         await savePollingState(userSettings);
 
@@ -3397,9 +3397,9 @@ function isProviderEligibleForModel(provider, modelName, userSettings, apiKeyInf
   if (!provider || provider.disabled) return false;
   if (!providerMatchesClientTag(provider, apiKeyInfo)) return false;
   if (typeof options.providerFilter === 'function' && !options.providerFilter(provider)) return false;
-  if (isModelDisabledForProvider(modelName, provider.id, userSettings)) return false;
   if (!providerHasVisibleModel(provider, modelName)) return false;
   const usePolling = options.usePolling !== undefined ? options.usePolling : shouldUsePolling(apiKeyInfo);
+  if (usePolling && isModelDisabledForProvider(modelName, provider.id, userSettings)) return false;
   return providerAllowedByScope(provider, apiKeyInfo, usePolling);
 }
 
@@ -4013,7 +4013,10 @@ async function savePollingState(userSettings) {
 }
 
 // 增加模型失败计数
-function incrementModelFailCount(providerId, modelName, userSettings) {
+function incrementModelFailCount(providerId, modelName, userSettings, apiKeyInfo = null) {
+  if (!shouldUsePolling(apiKeyInfo)) {
+    return;
+  }
   if (!userSettings.modelFailCounts) {
     userSettings.modelFailCounts = {};
   }
@@ -4377,11 +4380,11 @@ class BackgroundTaskProcessor {
   }
 
   // Handle failure logging
-  handleFailure(selectedProvider, pureModelName, userSettings, errorMessage, keyInfo = null) {
+  handleFailure(selectedProvider, pureModelName, userSettings, errorMessage, keyInfo = null, apiKeyInfo = null) {
     this.addTask(async () => {
       try {
         await Promise.all([
-          incrementModelFailCount(selectedProvider.id, pureModelName, userSettings),
+          incrementModelFailCount(selectedProvider.id, pureModelName, userSettings, apiKeyInfo),
           incrementKeyFailCount(keyInfo?.key?.id, userSettings)
         ]);
         await savePollingState(userSettings);
@@ -5391,7 +5394,7 @@ async function handleStreamingResponse(response, res, stream, selectedProvider, 
   const recordFailure = (errorMessage) => {
     if (terminal) return;
     terminal = true;
-    backgroundProcessor.handleFailure(selectedProvider, pureModelName, userSettings, errorMessage, keyInfo);
+    backgroundProcessor.handleFailure(selectedProvider, pureModelName, userSettings, errorMessage, keyInfo, apiKeyInfo);
     if (res.writableEnded) return;
     if (stream) {
       res.write(`data: ${JSON.stringify({ error: { message: errorMessage } })}\n\n`);
@@ -6762,7 +6765,7 @@ app.post('/v1/messages', verifyProxyApiKey, async (req, res) => {
           error: errorMessage
         });
         errors.push({ provider: selectedProvider.name, error: errorMessage });
-        await incrementModelFailCount(selectedProvider.id, pureModelName, userSettings);
+        await incrementModelFailCount(selectedProvider.id, pureModelName, userSettings, req.apiKeyInfo);
         await incrementKeyFailCount(keyInfo?.key?.id, userSettings);
         continue;
       }
@@ -6930,7 +6933,7 @@ app.post('/v1/messages', verifyProxyApiKey, async (req, res) => {
         }
         const errorDetails = parseErrorResponse(error);
         const errorMessage = formatErrorForLog(errorDetails);
-        backgroundProcessor.handleFailure(selectedProvider, pureModelName, userSettings, errorMessage, keyInfo);
+        backgroundProcessor.handleFailure(selectedProvider, pureModelName, userSettings, errorMessage, keyInfo, req.apiKeyInfo);
         recordProviderAttempt(providerAttempts, {
           attempt: attempt + 1,
           provider: selectedProvider,
@@ -7428,7 +7431,7 @@ app.post('/v1/responses', verifyProxyApiKey, async (req, res) => {
           provider: currentProvider.name,
           error: `Model not found in provider`
         });
-        await incrementModelFailCount(currentProvider.id, pureModelName, userSettings);
+        await incrementModelFailCount(currentProvider.id, pureModelName, userSettings, req.apiKeyInfo);
         await incrementKeyFailCount(keyInfo?.key?.id, userSettings);
         continue;
       }
@@ -7611,7 +7614,7 @@ app.post('/v1/responses', verifyProxyApiKey, async (req, res) => {
         const errorDetails = parseErrorResponse(error);
         const errorMessage = formatErrorForLog(errorDetails);
 
-        backgroundProcessor.handleFailure(currentProvider, pureModelName, userSettings, errorMessage, keyInfo);
+        backgroundProcessor.handleFailure(currentProvider, pureModelName, userSettings, errorMessage, keyInfo, req.apiKeyInfo);
         recordProviderAttempt(providerAttempts, {
           attempt: attempt + 1,
           provider: currentProvider,
@@ -7840,7 +7843,7 @@ app.post('/v1/embeddings', verifyProxyApiKey, async (req, res) => {
           provider: selectedProvider.name,
           error: 'Model not found in provider'
         });
-        await incrementModelFailCount(selectedProvider.id, pureModelName, userSettings);
+        await incrementModelFailCount(selectedProvider.id, pureModelName, userSettings, req.apiKeyInfo);
         await incrementKeyFailCount(keyInfo?.key?.id, userSettings);
         continue;
       }
@@ -7916,7 +7919,7 @@ app.post('/v1/embeddings', verifyProxyApiKey, async (req, res) => {
         const errorDetails = parseErrorResponse(error);
         const errorMessage = formatErrorForLog(errorDetails);
 
-        backgroundProcessor.handleFailure(selectedProvider, pureModelName, userSettings, errorMessage, keyInfo);
+        backgroundProcessor.handleFailure(selectedProvider, pureModelName, userSettings, errorMessage, keyInfo, req.apiKeyInfo);
         recordProviderAttempt(providerAttempts, {
           attempt: attempt + 1,
           provider: selectedProvider,
@@ -8223,7 +8226,7 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
           provider: selectedProvider.name,
           error: `Model not found in provider`
         });
-        await incrementModelFailCount(selectedProvider.id, pureModelName, userSettings);
+        await incrementModelFailCount(selectedProvider.id, pureModelName, userSettings, req.apiKeyInfo);
         await incrementKeyFailCount(keyInfo?.key?.id, userSettings);
         continue;
       }
@@ -8380,7 +8383,7 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
           const errorMessage = formatErrorForLog(errorDetails);
 
           // Handle failure in background (non-blocking)
-          backgroundProcessor.handleFailure(selectedProvider, pureModelName, userSettings, errorMessage, keyInfo);
+          backgroundProcessor.handleFailure(selectedProvider, pureModelName, userSettings, errorMessage, keyInfo, req.apiKeyInfo);
           recordProviderAttempt(providerAttempts, {
             attempt: attempt + 1,
             provider: selectedProvider,
@@ -8504,7 +8507,7 @@ app.post('/v1/chat/completions', verifyProxyApiKey, async (req, res) => {
           const errorMessage = formatErrorForLog(errorDetails);
 
           // Handle failure in background (non-blocking)
-          backgroundProcessor.handleFailure(selectedProvider, pureModelName, userSettings, errorMessage, keyInfo);
+          backgroundProcessor.handleFailure(selectedProvider, pureModelName, userSettings, errorMessage, keyInfo, req.apiKeyInfo);
           recordProviderAttempt(providerAttempts, {
             attempt: attempt + 1,
             provider: selectedProvider,
