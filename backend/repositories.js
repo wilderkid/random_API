@@ -128,18 +128,20 @@ function normalizeProviderKeys(provider) {
   if (!provider) return [];
 
   const rawKeys = Array.isArray(provider.apiKeys) ? provider.apiKeys : [];
-  if (rawKeys.length > 0) {
-    return rawKeys.map((key, index) => ({
-      id: key.id || `${provider.id}-key-${index + 1}`,
-      name: key.name || `Key ${index + 1}`,
-      apiKey: key.apiKey || key.api_key || '',
-      enabled: key.enabled !== false,
-      weight: Number.isFinite(Number(key.weight)) ? Number(key.weight) : 1,
-      priority: Number.isFinite(Number(key.priority)) ? Number(key.priority) : 0,
-      failCount: key.failCount || 0,
-      lastUsedAt: key.lastUsedAt || key.last_used_at || null,
-      createdAt: key.createdAt || key.created_at || provider.createdAt || provider.created_at || nowIso()
-    }));
+  const mapped = rawKeys.map((key, index) => ({
+    id: key.id || `${provider.id}-key-${index + 1}`,
+    name: key.name || `Key ${index + 1}`,
+    apiKey: key.apiKey || key.api_key || '',
+    enabled: key.enabled !== false,
+    weight: Number.isFinite(Number(key.weight)) ? Number(key.weight) : 1,
+    priority: Number.isFinite(Number(key.priority)) ? Number(key.priority) : 0,
+    failCount: key.failCount || 0,
+    lastUsedAt: key.lastUsedAt || key.last_used_at || null,
+    createdAt: key.createdAt || key.created_at || provider.createdAt || provider.created_at || nowIso()
+  })).filter(key => key.apiKey);
+
+  if (mapped.length > 0) {
+    return mapped;
   }
 
   if (provider.apiKey) {
@@ -453,7 +455,7 @@ function buildApiSettingsFromDb(db) {
   }
 
   const providers = providerRows.map(row => {
-    const apiKeys = keysByProvider.get(row.id) || [];
+    const apiKeys = (keysByProvider.get(row.id) || []).filter(key => key.apiKey);
     const fallbackKeys = apiKeys.length > 0
       ? apiKeys
       : (row.api_key ? [{

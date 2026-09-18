@@ -3982,16 +3982,18 @@ function cleanupExpiredConversations(userSettings) {
 
 function normalizeProviderKeysForRuntime(provider) {
   const rawKeys = Array.isArray(provider.apiKeys) ? provider.apiKeys : [];
-  if (rawKeys.length > 0) {
-    return rawKeys.map((key, index) => ({
-      id: key.id || `${provider.id}-key-${index + 1}`,
-      name: key.name || `Key ${index + 1}`,
-      apiKey: key.apiKey || key.api_key || '',
-      enabled: key.enabled !== false,
-      weight: Number.isFinite(Number(key.weight)) ? Number(key.weight) : 1,
-      priority: Number.isFinite(Number(key.priority)) ? Number(key.priority) : 0,
-      createdAt: key.createdAt || key.created_at || null
-    }));
+  const mapped = rawKeys.map((key, index) => ({
+    id: key.id || `${provider.id}-key-${index + 1}`,
+    name: key.name || `Key ${index + 1}`,
+    apiKey: key.apiKey || key.api_key || '',
+    enabled: key.enabled !== false,
+    weight: Number.isFinite(Number(key.weight)) ? Number(key.weight) : 1,
+    priority: Number.isFinite(Number(key.priority)) ? Number(key.priority) : 0,
+    createdAt: key.createdAt || key.created_at || null
+  })).filter(key => key.apiKey);
+
+  if (mapped.length > 0) {
+    return mapped;
   }
 
   if (provider.apiKey) {
@@ -4019,10 +4021,14 @@ function selectProviderKey(provider, userSettings, options = {}) {
   userSettings.keyFailCounts = keyFailCounts;
 
   const enabledKeys = allKeys.filter(key => key.enabled !== false);
-  const validKeys = enabledKeys.filter(key => (keyFailCounts[key.id] || 0) < CONFIG.MODEL_FAIL_THRESHOLD);
+  let validKeys = enabledKeys.filter(key => (keyFailCounts[key.id] || 0) < CONFIG.MODEL_FAIL_THRESHOLD);
 
+  // Skip over-threshold keys only when another enabled key is still available.
   if (validKeys.length === 0) {
-    return { key: null, keys: enabledKeys };
+    if (enabledKeys.length === 0) {
+      return { key: null, keys: enabledKeys };
+    }
+    validKeys = enabledKeys;
   }
 
   const preferredKeyId = options.preferredKeyId;

@@ -234,6 +234,29 @@ assert.strictEqual(selectProviderKey(allZeroProvider, allZeroSettings).key.id, '
 const preferredPeek = selectProviderKey(provider, { keyFailCounts: {}, keyPollingState: {} }, { preferredKeyId: 'k2', peek: true });
 assert.strictEqual(preferredPeek.key.id, 'k2');
 
+const emptyKeysWithLegacy = {
+  id: 'agnes',
+  apiKey: 'wk-legacy',
+  apiKeys: [{ id: 'empty', apiKey: '', enabled: true }]
+};
+assert.strictEqual(selectProviderKey(emptyKeysWithLegacy, { keyFailCounts: {} }).key.apiKey, 'wk-legacy');
+
+const exhaustedKey = {
+  id: 'agnes-fail',
+  apiKey: 'wk-legacy',
+  apiKeys: [{ id: 'k-fail', apiKey: 'wk-live', enabled: true }]
+};
+const exhaustedSelected = selectProviderKey(exhaustedKey, { keyFailCounts: { 'k-fail': 3 } });
+assert.strictEqual(exhaustedSelected.key.apiKey, 'wk-live');
+assert.strictEqual(exhaustedSelected.key.id, 'k-fail');
+
+const disabledOnly = {
+  id: 'agnes-off',
+  apiKey: 'wk-legacy',
+  apiKeys: [{ id: 'k-off', apiKey: 'wk-live', enabled: false }]
+};
+assert.strictEqual(selectProviderKey(disabledOnly, { keyFailCounts: {} }).key, null);
+
 assert.strictEqual(providerSupportsAnthropicProtocol({ apiType: 'openai', clientTags: { claude: true } }), false);
 assert.strictEqual(providerSupportsAnthropicProtocol({ apiType: 'anthropic' }), true);
 assert.strictEqual(providerSupportsAnthropicProtocol({ apiType: 'openai', customEndpoints: { chat: '/v1/messages' } }), true);
